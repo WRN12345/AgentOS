@@ -1,18 +1,152 @@
+name: agentos
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentos-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentos}
+      POSTGRES_USER: ${POSTGRES_USER:-agentos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentos-dev-password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    # 不发布端口：仅 Compose 内部网络可访问（宿主机 5432 已被系统 postgres 占用，且 19.4 节要求不对外开放）
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentos-redis
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+    volumes:
+      - ./data/redis:/data
+    # 不发布端口：仅 Compose 内部网络可访问（宿主机 6379 已被系统 redis 占用，且 19.4 节要求不对外开放）
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # 国内网络镜像；通用环境可改为 https://pypi.org/simple
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     container_name: agentos-backend
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_DIR: /app/data/logs
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OPENAI_COMPATIBLE_BASE_URL: ${OPENAI_COMPATIBLE_BASE_URL:-}
+      OPENAI_COMPATIBLE_API_KEY: ${OPENAI_COMPATIBLE_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
+      - ./data/logs:/app/data/logs
+      - ./data/uploads:/app/data/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health',timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    container_name: agentos-worker
+    command: ["python", "-m", "app.workers.worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_DIR: /app/data/logs
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    volumes:
+      - ./data/logs:/app/data/logs
+      - ./data/uploads:/app/data/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.healthcheck", "worker"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    container_name: agentos-scheduler
+    command: ["python", "-m", "app.workers.scheduler"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_DIR: /app/data/logs
+      SCHEDULER_EXAMPLE_INTERVAL_SECONDS: ${SCHEDULER_EXAMPLE_INTERVAL_SECONDS:-60}
+    volumes:
+      - ./data/logs:/app/data/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.healthcheck", "scheduler"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # 国内网络镜像；通用环境可改为 https://registry.npmjs.org
+        NPM_REGISTRY: https://registry.npmmirror.com
     container_name: agentos-frontend
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped

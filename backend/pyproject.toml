@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentos-backend"
+version = "0.1.0"
+description = "AgentOS backend: FastAPI modular monolith, worker and scheduler"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "sqlalchemy[asyncio]==2.0.36",
+    "alembic==1.14.0",
+    "asyncpg==0.30.0",
+    "redis==5.2.1",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.2",
+    "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

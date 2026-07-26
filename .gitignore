@@ -16,6 +16,7 @@ coverage/
 data/
 logs/
 backups/
+.docker-cli-plugins/
 
 *.pyc
 *.pyo
