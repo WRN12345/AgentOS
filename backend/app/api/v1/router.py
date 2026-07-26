@@ -1,14 +1,17 @@
-"""API v1 占位路由。
+"""API v1 路由组装。
 
-阶段 1 只提供骨架路由，业务接口在阶段 2 起按领域落地。
+领域接口按 4.1 节放进对应领域包，这里只做挂载；
+501 登录占位已在 T2.2 由 domains/identity 的真实认证替代。
 """
 
-from typing import Annotated
+from fastapi import APIRouter, Depends
 
-from fastapi import APIRouter, Body
-from fastapi.responses import JSONResponse
-
+from app.core.idempotency import idempotency_guard
 from app.core.logging import setup_logging
+from app.domains.audit.router import router as audit_router
+from app.domains.identity.router import router as auth_router
+from app.domains.project.router import router as members_router
+from app.domains.work_items.router import router as work_items_router
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.queue.queue import enqueue
 
@@ -16,36 +19,24 @@ logger = setup_logging("backend")
 
 router = APIRouter()
 
+router.include_router(auth_router)
+router.include_router(audit_router)
+router.include_router(members_router)
+router.include_router(work_items_router)
+
 
 @router.get("/")
 async def v1_root() -> dict[str, str]:
     return {"service": "agentos", "api": "v1", "status": "ok"}
 
 
-@router.post("/auth/login")
-async def login_placeholder(
-    payload: Annotated[dict, Body()],
-) -> JSONResponse:
-    """登录占位路由（T2.1 落地真实认证）。
-
-    日志只记录用户名，绝不记录密码或令牌原文（第 16 章）。
-    """
-    username = str(payload.get("username", "<unknown>"))
-    logger.info("login attempt: username=%s", username)
-    return JSONResponse(
-        status_code=501,
-        content={
-            "code": "NOT_IMPLEMENTED",
-            "message": "认证将在阶段 2 提供",
-            "request_id": "",
-            "details": {},
-        },
-    )
-
-
 @router.post("/tasks/example")
-async def enqueue_example_task() -> dict[str, str]:
-    """投递一个示例后台任务，用于验证 API → 队列 → Worker 链路。"""
+async def enqueue_example_task(_: None = Depends(idempotency_guard)) -> dict[str, str]:
+    """投递一个示例后台任务，用于验证 API → 队列 → Worker 链路。
+
+    同时作为 Idempotency-Key 机制的示例命令接口：
+    携带同一幂等键的重复请求只入队一次，第二次返回首次结果。
+    """
     redis_client = create_redis_client()
     try:
         task = await enqueue(redis_client, "example.ping", {"source": "api"})

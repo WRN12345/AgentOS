@@ -12,10 +12,11 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --index-url "${PIP_INDEX_URL}" .
+RUN pip install --index-url "${PIP_INDEX_URL}" ".[dev]"
 
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY tests ./tests
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# 启动：先迁移到最新版本，再幂等引导初始负责人账号，最后启动 API
+CMD ["sh", "-c", "alembic upgrade head && python -m app.scripts.bootstrap && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

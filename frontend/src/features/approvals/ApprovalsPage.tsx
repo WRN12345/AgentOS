@@ -1,10 +1,11 @@
 import PlaceholderPage from "../../components/PlaceholderPage";
 
+/** 审批中心：转派与 DDL 变更审批在阶段 3 提供。 */
 export default function ApprovalsPage() {
   return (
     <PlaceholderPage
       title="审批中心"
-      description="转派、主任务 DDL 变更和最终审核将在阶段 3/4 实现。"
+      description="转派审批与 DDL 变更审批将在阶段 3（动态协作）提供。"
     />
   );
 }

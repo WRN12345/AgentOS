@@ -16,6 +16,8 @@ dependencies = [
     "redis==5.2.1",
     "pydantic==2.10.4",
     "pydantic-settings==2.7.1",
+    "argon2-cffi==23.1.0",
+    "PyJWT==2.10.1",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +29,6 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

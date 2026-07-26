@@ -20,5 +20,18 @@ class Settings(BaseSettings):
 
     scheduler_example_interval_seconds: float = 60.0
 
+    # 认证（第 16 章）：JWT 密钥与令牌有效期；密钥走环境变量，禁止硬编码真实密钥
+    jwt_secret: str = "dev-jwt-secret-change-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 14
+
+    # 初始负责人账号引导（bootstrap，幂等；开发默认值即可，生产必须经环境变量覆盖）
+    bootstrap_admin_username: str = "admin"
+    bootstrap_admin_password: str = "admin123"
+    # 默认项目（首版唯一项目）与初始账号的负责人成员档案
+    bootstrap_project_name: str = "AgentOS 项目"
+    bootstrap_admin_display_name: str = "项目负责人"
+
 
 settings = Settings()
