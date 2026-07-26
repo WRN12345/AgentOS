@@ -3,13 +3,13 @@ FROM node:20-alpine AS build
 # 默认官方源；国内网络可在 compose build args 中覆盖为镜像站
 ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
 RUN npm config set registry "${NPM_REGISTRY}" \
     && npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set fetch-timeout 600000 \
-    && npm install --no-audit --no-fund
+    && npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
