@@ -24,6 +24,8 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { api } from "../services/api";
 import { useAuthStore } from "../app/store";
+import { useEventStream } from "../services/events";
+import { NotificationBell } from "../features/notifications/NotificationBell";
 
 const navItems = [
   { to: "/", label: "团队看板", icon: LayoutDashboard, end: true },
@@ -38,6 +40,9 @@ const navItems = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const { user, member, refreshToken, clear } = useAuthStore();
+
+  // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
+  useEventStream();
 
   const handleLogout = async () => {
     // 登出即撤销 Refresh Token；失败也照常清空本地登录态
@@ -89,7 +94,9 @@ export default function AppLayout() {
           <span className="text-sm text-muted-foreground">
             Agent 协作工作流平台
           </span>
-          <DropdownMenu>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="gap-2">
                 <span>{member?.display_name ?? user?.username ?? "用户"}</span>
@@ -114,6 +121,7 @@ export default function AppLayout() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </header>
         <main className="flex-1 p-6">
           <Outlet />

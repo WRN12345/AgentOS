@@ -27,6 +27,9 @@ import {
   STATUS_META,
   formatDate,
 } from "../work-items/constants";
+import { useIsLeader } from "../../app/store";
+import { TodoSection } from "./TodoSection";
+import { TimelineSection } from "./TimelineSection";
 
 const STATUS_ORDER: WorkItemStatus[] = [
   "DRAFT",
@@ -46,6 +49,7 @@ function daysUntil(dueAt: string): number {
 
 /** 团队透明看板（13.2 节）：由 GET /members 与 GET /work-items 前端聚合。 */
 export default function DashboardPage() {
+  const isLeader = useIsLeader();
   const { data: members, isLoading: membersLoading } = useQuery({
     queryKey: ["members"],
     queryFn: () => api.get<Member[]>("/members"),
@@ -90,6 +94,9 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4">
+      {/* 待处理中心：需要当前用户动作的事项聚合（13.2 节） */}
+      <TodoSection />
+
       {/* 状态分布 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
         {STATUS_ORDER.map((s) => (
@@ -214,6 +221,9 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* 项目时间线：审计事件流（13.1 节，仅负责人） */}
+      {isLeader && <TimelineSection />}
     </div>
   );
 }

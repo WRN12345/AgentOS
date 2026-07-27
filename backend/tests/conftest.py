@@ -83,6 +83,8 @@ async def _clean_tables() -> None:
             text(
                 "TRUNCATE refresh_tokens, users, audit_events, idempotency_records, "
                 "member_capabilities, work_item_collaborators, work_items, "
+                "collaboration_requests, notifications, "
+                "transfer_requests, deadline_change_requests, "
                 "project_members, projects"
             )
         )

@@ -96,3 +96,185 @@ export interface WorkItem extends WorkItemSummary {
   acceptance_criteria: string | null;
   collaborators: WorkItemMemberRef[];
 }
+
+/* ---------- 阶段 3：动态协作 ---------- */
+
+/** 成员摘要（协作/转派/DDL 接口的 MemberBrief）。 */
+export interface MemberBrief {
+  id: string;
+  display_name: string;
+}
+
+/** 协作请求状态（8.2 节）。 */
+export type CollaborationStatus =
+  | "REQUESTED"
+  | "ACCEPTED"
+  | "DECLINED"
+  | "IN_PROGRESS"
+  | "SUBMITTED"
+  | "REVISION_REQUESTED"
+  | "COMPLETED"
+  | "CANCELLED";
+
+/** 协作请求摘要（列表接口返回；不含 goal/template/result_text 正文）。 */
+export interface CollaborationRequestSummary {
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  requester: MemberBrief;
+  assignee: MemberBrief;
+  title: string;
+  status: CollaborationStatus;
+  due_at: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 协作请求完整字段（命令接口响应）。 */
+export interface CollaborationRequest extends CollaborationRequestSummary {
+  goal: string;
+  template: string | null;
+  result_text: string | null;
+}
+
+/** 转派申请状态（8.3 节）。 */
+export type TransferStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+
+/** 转派申请摘要（列表接口返回；不含 reason/impact_note 正文）。 */
+export interface TransferRequestSummary {
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  from_member: MemberBrief;
+  to_member: MemberBrief;
+  status: TransferStatus;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 转派申请完整字段（详情接口返回）。 */
+export interface TransferRequest extends TransferRequestSummary {
+  reason: string;
+  impact_note: string;
+  agent_suggestion_id: string | null;
+  approved_by: MemberBrief | null;
+  approved_at: string | null;
+}
+
+/** DDL 变更申请状态（8.4 节）。 */
+export type DeadlineChangeStatus =
+  | "PENDING_IMPACT_ANALYSIS"
+  | "PENDING_APPROVAL"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export type DeadlineTargetType = "work_item" | "collaboration_request";
+
+/** DDL 变更申请摘要（列表接口返回；不含 reason 与 impact_analysis 正文）。 */
+export interface DeadlineChangeSummary {
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  target_type: DeadlineTargetType;
+  target_id: string;
+  target_title: string;
+  old_due_at: string | null;
+  new_due_at: string;
+  impact_analysis_status: "generated" | "unavailable";
+  status: DeadlineChangeStatus;
+  requested_by: MemberBrief;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 规则化影响分析内容（7.4、8.4 节，DDL 变更详情接口返回）。 */
+export interface DeadlineImpactAnalysis {
+  target: {
+    type: DeadlineTargetType;
+    id: string;
+    old_due_at: string | null;
+    new_due_at: string | null;
+  };
+  work_item: { id: string; title: string; due_at: string | null };
+  exceeds_work_item_due: boolean;
+  affected_collaboration_requests: {
+    id: string;
+    title: string;
+    status: string;
+    requester_id: string;
+    assignee_id: string;
+    due_at: string | null;
+  }[];
+}
+
+/** DDL 变更申请完整字段（详情接口返回）。 */
+export interface DeadlineChangeRequest extends DeadlineChangeSummary {
+  reason: string;
+  impact_analysis: DeadlineImpactAnalysis | null;
+  approved_by: MemberBrief | null;
+  approved_at: string | null;
+}
+
+/** 负责人待审批聚合项（GET /approvals）：转派与 DDL 变更统一形状。 */
+export interface ApprovalItem {
+  kind: "transfer" | "deadline_change";
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  summary: string;
+  requested_by: MemberBrief;
+  status: string;
+  impact_analysis_status: "generated" | "unavailable" | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  from_member: MemberBrief | null;
+  to_member: MemberBrief | null;
+  target_type: DeadlineTargetType | null;
+  target_id: string | null;
+  old_due_at: string | null;
+  new_due_at: string | null;
+}
+
+/** 站内通知（12.6 节）。 */
+export interface AppNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string | null;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationList {
+  items: AppNotification[];
+  unread_count: number;
+}
+
+/** 审计事件（GET /audit-events，仅负责人）。 */
+export interface AuditEvent {
+  id: string;
+  actor_id: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  request_id: string | null;
+  source_ip: string | null;
+  created_at: string;
+}
+
+/** SSE 事件载荷（/events/stream 帧 data 段）。 */
+export interface RealtimeEvent {
+  id: string;
+  type: string;
+  data: { title: string; body: string; link: string | null };
+  created_at: string;
+}

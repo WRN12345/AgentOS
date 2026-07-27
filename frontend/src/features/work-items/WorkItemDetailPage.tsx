@@ -25,6 +25,9 @@ import { useAuthStore, useIsLeader } from "../../app/store";
 import type { Member, WorkItem, WorkItemStatus } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDateTime } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
+import { CollaborationSection } from "../collaboration/CollaborationSection";
+import { TransferSection } from "../collaboration/TransferSection";
+import { DeadlineChangeSection } from "../collaboration/DeadlineChangeSection";
 
 /** 命令定义：状态机迁移动作（8.1 节）。 */
 interface Command {
@@ -239,6 +242,12 @@ export default function WorkItemDetailPage() {
           </section>
         </CardContent>
       </Card>
+
+      <CollaborationSection workItem={item} members={members ?? []} />
+
+      <TransferSection workItem={item} members={members ?? []} />
+
+      <DeadlineChangeSection workItem={item} />
 
       <WorkItemFormDialog
         open={editOpen}

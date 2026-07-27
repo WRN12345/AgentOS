@@ -121,6 +121,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       LOG_DIR: /app/data/logs
       SCHEDULER_EXAMPLE_INTERVAL_SECONDS: ${SCHEDULER_EXAMPLE_INTERVAL_SECONDS:-60}
+      DUE_SCAN_INTERVAL_SECONDS: ${DUE_SCAN_INTERVAL_SECONDS:-300}
     volumes:
       - ./data/logs:/app/data/logs
     depends_on:

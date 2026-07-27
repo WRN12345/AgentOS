@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     openai_compatible_api_key: str = ""
 
     scheduler_example_interval_seconds: float = 60.0
+    # 到期/逾期提醒扫描（T3.6，4.2 节）：scheduler 触发周期与"临期"判定窗口
+    due_scan_interval_seconds: float = 300.0
+    due_soon_horizon_hours: int = 24
 
     # 认证（第 16 章）：JWT 密钥与令牌有效期；密钥走环境变量，禁止硬编码真实密钥
     jwt_secret: str = "dev-jwt-secret-change-in-production"

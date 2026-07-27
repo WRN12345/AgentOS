@@ -20,6 +20,7 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.project.models import ROLE_LEADER, ProjectMember
+from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import (
     MemberBrief,
@@ -29,6 +30,7 @@ from app.domains.work_items.schemas import (
     WorkItemUpdateIn,
 )
 from app.domains.work_items.state_machine import transition
+from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
 
@@ -50,6 +52,16 @@ _COMMAND_ACTOR = {
     "unblock": "assignee",
     "submit": "assignee",
     "cancel": "leader",
+}
+
+# 命令 → 实时事件标题（4.3 节"任务状态变化"；type 复用审计动作名）
+_COMMAND_EVENT_TITLE = {
+    "publish": "工作项已发布",
+    "start": "工作项已开始",
+    "block": "工作项被阻塞",
+    "unblock": "工作项已解除阻塞",
+    "submit": "工作项已提交审核",
+    "cancel": "工作项已取消",
 }
 
 
@@ -188,6 +200,56 @@ def _require_leader(actor: ProjectMember) -> None:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可执行该操作")
 
 
+async def _build_status_events(
+    session: AsyncSession,
+    actor: ProjectMember,
+    item: WorkItem,
+    command: str,
+    before_status: str,
+) -> list[OutgoingEvent]:
+    """工作项状态变化实时事件（4.3 节，T3.6）。
+
+    接收人按"对端"原则：负责人触发（publish/cancel）→ 主执行人；
+    主执行人触发（start/block/unblock/submit）→ 全体活跃负责人；
+    触发者本人不重复接收（其 REST 响应已确认结果）。
+    只发 SSE 事件、不写站内通知——状态变化在列表/看板可见，不属于待办。
+    """
+    if _COMMAND_ACTOR[command] == "assignee":
+        project = await get_default_project(session)
+        leaders = (
+            (
+                await session.execute(
+                    select(ProjectMember).where(
+                        ProjectMember.project_id == project.id,
+                        ProjectMember.role == ROLE_LEADER,
+                        ProjectMember.is_active.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        recipient_ids = [leader.id for leader in leaders]
+    else:
+        recipient_ids = [item.assignee_id]
+
+    event_type = _COMMAND_AUDIT_ACTION[command]
+    return [
+        OutgoingEvent(
+            recipient_id=recipient_id,
+            type=event_type,
+            title=_COMMAND_EVENT_TITLE[command],
+            body=(
+                f"{actor.display_name} 将工作项「{item.title}」"
+                f"状态从 {before_status} 变更为 {item.status}"
+            ),
+            link=f"/work-items/{item.id}",
+        )
+        for recipient_id in dict.fromkeys(recipient_ids)
+        if recipient_id != actor.id
+    ]
+
+
 # ---------- 用例 ----------
 
 
@@ -316,6 +378,8 @@ async def run_command(
         after={"status": item.status},
     )
     await session.commit()
+    # commit 成功后发布实时事件（4.3 节）：订阅者收到的必为已落库事实
+    await publish_after_commit(await _build_status_events(session, actor, item, command, before_status))
     await session.refresh(item)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
     logger.info("work item %s: id=%s, %s -> %s", command, item.id, before_status, item.status)
     return await work_item_to_out(session, item)
