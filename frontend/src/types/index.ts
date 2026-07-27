@@ -240,6 +240,63 @@ export interface ApprovalItem {
   new_due_at: string | null;
 }
 
+/* ---------- 阶段 4：交付与审核 ---------- */
+
+/** POST /files 响应：服务端落库的文件记录（不含 storage_key，16 节最小暴露）。 */
+export interface StoredFile {
+  id: string;
+  original_filename: string;
+  size_bytes: number;
+  mime_type: string;
+  sha256: string;
+  storage_backend: string;
+  uploaded_by: string;
+  work_item_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DeliverableType = "git_link" | "text" | "file";
+
+/** file 类型交付物内嵌的文件摘要（含 sha256 供完整性追溯）。 */
+export interface FileBrief {
+  id: string;
+  original_filename: string;
+  size_bytes: number;
+  mime_type: string;
+  sha256: string;
+}
+
+/** 交付物版本（7.5 节：每次提交生成新版本，旧版本保留可查）。 */
+export interface Deliverable {
+  id: string;
+  work_item_id: string;
+  type: DeliverableType;
+  content: string | null;
+  file: FileBrief | null;
+  version: number;
+  submitted_by: MemberBrief;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ReviewDecision = "approve" | "request_changes" | "reject";
+
+/** 最终审核记录（7.5 节）：反馈正文仅负责人与主执行人可见（16 节）。 */
+export interface Review {
+  id: string;
+  work_item_id: string;
+  deliverable_id: string;
+  deliverable_version: number;
+  decision: ReviewDecision;
+  feedback: string | null;
+  reviewed_by: MemberBrief;
+  /** 审核生效后的工作项状态。 */
+  work_item_status: WorkItemStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 /** 站内通知（12.6 节）。 */
 export interface AppNotification {
   id: string;

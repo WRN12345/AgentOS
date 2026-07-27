@@ -52,6 +52,15 @@ class ErrorCodes:
     # 同一工作项已存在待审批主 DDL 变更（7.4、17.2 节）
     DEADLINE_CHANGE_PENDING_CONFLICT = "DEADLINE_CHANGE_PENDING_CONFLICT"
 
+    # 文件上传（第 14 章）：超过配置大小上限 / 扩展名或 MIME 不在白名单
+    FILE_TOO_LARGE = "FILE_TOO_LARGE"
+    FILE_TYPE_NOT_ALLOWED = "FILE_TYPE_NOT_ALLOWED"
+
+    # 提交审核前须已存在交付物（7.5 节，T4.4）
+    DELIVERABLE_REQUIRED = "DELIVERABLE_REQUIRED"
+    # 交付物版本号并发冲突（(work_item_id, version) 唯一约束兜底，17.2 节）
+    DELIVERABLE_VERSION_CONFLICT = "DELIVERABLE_VERSION_CONFLICT"
+
 
 class ApiException(Exception):
     """业务异常：按统一错误格式返回。"""

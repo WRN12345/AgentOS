@@ -35,6 +35,11 @@ const EVENT_TYPES = [
   "reminder.overdue",
   "member.created",
   "member.updated",
+  "review.approved",
+  "review.changes_requested",
+  "review.rejected",
+  // 注：deliverable.submitted / file.uploaded / file.downloaded 仅为审计 action，
+  // 后端不发布对应 SSE（以 domains/deliverables、domains/files 代码为准），无需监听。
 ] as const;
 
 /** 按事件类型失效对应 TanStack Query 缓存（queryKey 前缀匹配，覆盖列表与详情）。 */
@@ -70,6 +75,12 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       break;
     case "member":
       queryClient.invalidateQueries({ queryKey: ["members"] });
+      break;
+    case "review":
+      // 审核结论推进工作项状态，并产生新的 reviews 记录与审批中心变化
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      queryClient.invalidateQueries({ queryKey: ["reviews"] });
+      queryClient.invalidateQueries({ queryKey: ["approvals"] });
       break;
   }
 }

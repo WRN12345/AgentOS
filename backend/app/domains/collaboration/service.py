@@ -29,6 +29,7 @@ from app.domains.collaboration.schemas import (
     CollaborationRequestSummaryOut,
 )
 from app.domains.collaboration.state_machine import CollaborationStatus, transition
+from app.domains.deliverables.service import get_deliverable, validate_file_reference
 from app.domains.notifications.service import notify
 from app.domains.project.models import ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
@@ -125,6 +126,8 @@ def _to_out(
         template=request.template,
         due_at=request.due_at,
         result_text=request.result_text,
+        result_deliverable_id=request.result_deliverable_id,
+        result_file_id=request.result_file_id,
         status=request.status,
         version=request.version,
         created_at=request.created_at,
@@ -331,10 +334,13 @@ async def run_command(
     *,
     result_text: str | None = None,
     feedback: str | None = None,
+    deliverable_id: uuid.UUID | None = None,
+    file_id: uuid.UUID | None = None,
 ) -> CollaborationRequestOut:
     """状态命令：权限校验 + 状态机 + 乐观锁 + 审计 + 通知（同一事务）。
 
     绝不触碰 work_items.assignee_id 与工作项状态（7.2 节）。
+    submit 可附带交付物/文件引用（T4.4）：校验存在性与归属（须属本工作项）。
     commit 成功后发布实时事件（与通知同内容）。
     """
     events: list[OutgoingEvent] = []
@@ -342,17 +348,37 @@ async def run_command(
     _check_actor(request, actor, command)
     _check_version(request, version)
 
+    if command == "submit" and deliverable_id is not None:
+        deliverable = await get_deliverable(session, deliverable_id)  # 不存在 → 404
+        if deliverable.work_item_id != request.work_item_id:
+            raise ApiException(
+                422,
+                ErrorCodes.VALIDATION_ERROR,
+                "引用的交付物不属于该协作请求的工作项",
+                {"deliverable_id": str(deliverable_id)},
+            )
+    if command == "submit" and file_id is not None:
+        # 文件存在、归属同一工作项（未关联则同事务建立关联）、上传人与工作项有关
+        await validate_file_reference(session, request.work_item_id, file_id)
+
     new_status = transition(request.status, command)
     before_status = request.status
     request.status = new_status.value
     if command == "submit":
         request.result_text = result_text
+        request.result_deliverable_id = deliverable_id
+        request.result_file_id = file_id
     request.version += 1
     await session.flush()
 
     after: dict[str, Any] = {"status": request.status}
     if command == "request_revision" and feedback:
         after["feedback"] = feedback  # 反馈只进审计留痕，不进通知正文（16 节）
+    if command == "submit":
+        if deliverable_id is not None:
+            after["result_deliverable_id"] = str(deliverable_id)
+        if file_id is not None:
+            after["result_file_id"] = str(file_id)
     await record_event(
         session,
         actor_id=actor.user_id,

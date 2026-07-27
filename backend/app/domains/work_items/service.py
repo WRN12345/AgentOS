@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.deliverables.models import Deliverable
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
@@ -361,6 +362,20 @@ async def run_command(
     elif item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅当前主执行人可执行该操作")
     _check_version(item, version)
+
+    if command == "submit":
+        # 提交审核前必须已存在交付物（7.5 节，T4.4）：无交付物拒绝并提示先提交
+        deliverable_exists = (
+            await session.execute(
+                select(Deliverable.id).where(Deliverable.work_item_id == item.id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if deliverable_exists is None:
+            raise ApiException(
+                422,
+                ErrorCodes.DELIVERABLE_REQUIRED,
+                "提交审核前请先提交交付物",
+            )
 
     new_status = transition(item.status, command)
     before_status = item.status

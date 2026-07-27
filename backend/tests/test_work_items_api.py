@@ -110,7 +110,7 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
     assert started.json()["status"] == "IN_PROGRESS"
     assert started.json()["version"] == 3
 
-    # block / unblock / submit
+    # block / unblock / submit（T4.4 起：submit 前须已存在交付物）
     blocked = await client.post(
         f"/api/v1/work-items/{item_id}/block", json={"version": 3}, headers=alice_headers
     )
@@ -119,6 +119,12 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
         f"/api/v1/work-items/{item_id}/unblock", json={"version": 4}, headers=alice_headers
     )
     assert unblocked.json()["status"] == "IN_PROGRESS"
+    delivered = await client.post(
+        f"/api/v1/work-items/{item_id}/deliverables",
+        json={"type": "text", "content": "交付说明"},
+        headers=alice_headers,
+    )
+    assert delivered.status_code == 201, delivered.text
     submitted = await client.post(
         f"/api/v1/work-items/{item_id}/submit", json={"version": 5}, headers=alice_headers
     )

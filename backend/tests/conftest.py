@@ -81,10 +81,11 @@ async def _clean_tables() -> None:
     async with async_session_factory() as session:
         await session.execute(
             text(
-                "TRUNCATE refresh_tokens, users, audit_events, idempotency_records, "
+                "TRUNCATE reviews, deliverables, refresh_tokens, users, audit_events, "
+                "idempotency_records, "
                 "member_capabilities, work_item_collaborators, work_items, "
                 "collaboration_requests, notifications, "
-                "transfer_requests, deadline_change_requests, "
+                "transfer_requests, deadline_change_requests, stored_files, "
                 "project_members, projects"
             )
         )

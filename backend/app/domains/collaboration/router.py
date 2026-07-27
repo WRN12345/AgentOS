@@ -151,7 +151,14 @@ async def submit_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> CollaborationRequestOut:
     return await run_command(
-        session, actor, request_id, "submit", payload.version, result_text=payload.result_text
+        session,
+        actor,
+        request_id,
+        "submit",
+        payload.version,
+        result_text=payload.result_text,
+        deliverable_id=payload.deliverable_id,
+        file_id=payload.file_id,
     )
 
 

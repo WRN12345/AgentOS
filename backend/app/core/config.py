@@ -36,5 +36,26 @@ class Settings(BaseSettings):
     bootstrap_project_name: str = "AgentOS 项目"
     bootstrap_admin_display_name: str = "项目负责人"
 
+    # 文件存储（第 14 章）：数据库仅存相对 storage_key，上传目录禁止直接暴露
+    storage_backend: str = "local"
+    storage_root: str = "/app/data/uploads"
+    upload_max_bytes: int = 20 * 1024 * 1024
+    # 上传白名单（逗号分隔）：扩展名（小写、带点）与声明的 MIME 类型
+    upload_allowed_extensions: str = ".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip"
+    upload_allowed_mime_types: str = (
+        "text/plain,text/markdown,text/csv,application/json,"
+        "application/pdf,image/png,image/jpeg,application/zip"
+    )
+
+    @property
+    def allowed_upload_extensions(self) -> frozenset[str]:
+        return frozenset(
+            e.strip().lower() for e in self.upload_allowed_extensions.split(",") if e.strip()
+        )
+
+    @property
+    def allowed_upload_mime_types(self) -> frozenset[str]:
+        return frozenset(m.strip() for m in self.upload_allowed_mime_types.split(",") if m.strip())
+
 
 settings = Settings()

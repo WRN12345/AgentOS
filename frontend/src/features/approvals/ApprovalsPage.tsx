@@ -63,6 +63,7 @@ import {
   DEADLINE_CHANGE_STATUS_META,
   TRANSFER_STATUS_META,
 } from "../collaboration/constants";
+import { DeliveryReviewSection } from "./DeliveryReviewSection";
 
 /** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
@@ -72,11 +73,17 @@ export default function ApprovalsPage() {
     <Tabs defaultValue={isLeader ? "pending" : "mine"} className="space-y-4">
       <TabsList>
         {isLeader && <TabsTrigger value="pending">待我审批</TabsTrigger>}
+        {isLeader && <TabsTrigger value="delivery">交付审核</TabsTrigger>}
         <TabsTrigger value="mine">我的申请</TabsTrigger>
       </TabsList>
       {isLeader && (
         <TabsContent value="pending">
           <PendingApprovals />
+        </TabsContent>
+      )}
+      {isLeader && (
+        <TabsContent value="delivery">
+          <DeliveryReviewSection />
         </TabsContent>
       )}
       <TabsContent value="mine">

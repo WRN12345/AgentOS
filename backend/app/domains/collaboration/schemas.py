@@ -30,10 +30,12 @@ class CollaborationCommandIn(BaseModel):
 
 
 class CollaborationSubmitIn(BaseModel):
-    """回传产物（submit）：result_text 为文本产物；文件类产物阶段 4 接入。"""
+    """回传产物（submit）：result_text 为文本产物；T4.4 起可附带交付物/文件引用。"""
 
     version: int = Field(ge=1)
     result_text: str = Field(min_length=1)
+    deliverable_id: uuid.UUID | None = None  # 引用本工作项的交付物版本（可选）
+    file_id: uuid.UUID | None = None  # 引用已上传文件（可选）
 
 
 class CollaborationRevisionIn(BaseModel):
@@ -54,6 +56,8 @@ class CollaborationRequestOut(BaseModel):
     template: str | None
     due_at: datetime | None
     result_text: str | None
+    result_deliverable_id: uuid.UUID | None
+    result_file_id: uuid.UUID | None
     status: str
     version: int
     created_at: datetime

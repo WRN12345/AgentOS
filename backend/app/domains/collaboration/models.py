@@ -40,6 +40,13 @@ class CollaborationRequest(CoreModel, VersionMixin):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 回传产物文本（文件类产物阶段 4 接入）
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 回传产物引用（T4.4）：可引用该工作项的交付物版本或已上传文件，与 result_text 互补
+    result_deliverable_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deliverables.id"), nullable=True
+    )
+    result_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stored_files.id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=CollaborationStatus.REQUESTED.value, index=True
     )

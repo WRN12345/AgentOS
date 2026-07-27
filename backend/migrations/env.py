@@ -13,9 +13,12 @@ from app.core.config import settings
 from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401
 from app.domains.deadlines import models as _deadline_models  # noqa: F401
+from app.domains.deliverables import models as _deliverable_models  # noqa: F401
+from app.domains.files import models as _file_models  # noqa: F401
 from app.domains.identity import models as _identity_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401
 from app.domains.project import models as _project_models  # noqa: F401
+from app.domains.reviews import models as _review_models  # noqa: F401
 from app.domains.transfers import models as _transfer_models  # noqa: F401
 from app.domains.work_items import models as _work_item_models  # noqa: F401
 from app.infrastructure.models import idempotency as _idempotency_model  # noqa: F401

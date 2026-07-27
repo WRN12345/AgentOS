@@ -161,4 +161,150 @@ export const api = {
       { idempotencyKey },
     ),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  /**
+   * multipart 文件上传（阶段 4，POST /files）：body 为 FormData，不设 Content-Type
+   * （浏览器自动生成 boundary）；用 XMLHttpRequest 以支持 onprogress 上传进度；
+   * 401 时刷新令牌重试一次，与 JSON 请求一致。
+   */
+  upload: <T>(
+    path: string,
+    formData: FormData,
+    onProgress?: (percent: number) => void,
+    idempotencyKey?: string,
+  ) => upload<T>(path, formData, onProgress, { idempotencyKey }),
+  /**
+   * 鉴权文件下载（GET /files/{id}/download）：返回 blob 与文件名，
+   * 权限不足/文件不存在时抛 ApiError（供 UI 提示 403）。
+   */
+  downloadFile: (path: string) => downloadFile(path),
 };
+
+/** XHR 上传实现：fetch 不支持上传进度事件。 */
+function upload<T>(
+  path: string,
+  formData: FormData,
+  onProgress: ((percent: number) => void) | undefined,
+  options: RequestOptions,
+  retried = false,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const token = useAuthStore.getState().accessToken;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE_URL}${path}`);
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    if (options.idempotencyKey) {
+      xhr.setRequestHeader("Idempotency-Key", options.idempotencyKey);
+    }
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401 && token && !retried) {
+        // Access Token 过期：刷新后重试一次
+        tryRefreshToken().then((ok) => {
+          if (ok) {
+            upload<T>(path, formData, onProgress, options, true).then(
+              resolve,
+              reject,
+            );
+          } else {
+            reject(
+              new ApiError(401, {
+                code: "UNAUTHORIZED",
+                message: "登录已过期，请重新登录",
+                request_id: "",
+              }),
+            );
+          }
+        });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = undefined;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as T);
+        return;
+      }
+      const errorBody = body as ApiErrorBody | undefined;
+      reject(
+        new ApiError(
+          xhr.status,
+          errorBody && typeof errorBody.code === "string"
+            ? errorBody
+            : {
+                code: `HTTP_${xhr.status}`,
+                message: xhr.statusText || "上传失败",
+                request_id: "",
+              },
+        ),
+      );
+    };
+    xhr.onerror = () => {
+      reject(
+        new ApiError(0, {
+          code: "NETWORK_ERROR",
+          message: "网络错误，上传中断",
+          request_id: "",
+        }),
+      );
+    };
+    xhr.send(formData);
+  });
+}
+
+/** 鉴权下载：复用 401 刷新逻辑，成功后从 Content-Disposition 解析文件名。 */
+async function downloadFile(
+  path: string,
+  retried = false,
+): Promise<{ blob: Blob; filename: string }> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(`${BASE_URL}${path}`, { headers });
+
+  if (response.status === 401 && token && !retried) {
+    if (await tryRefreshToken()) {
+      return downloadFile(path, true);
+    }
+  }
+
+  if (!response.ok) {
+    let body: ApiErrorBody | undefined;
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      body = undefined;
+    }
+    throw new ApiError(
+      response.status,
+      body && typeof body.code === "string"
+        ? body
+        : {
+            code: `HTTP_${response.status}`,
+            message: response.statusText || "下载失败",
+            request_id: "",
+          },
+    );
+  }
+
+  // RFC 5987：优先 filename*（UTF-8 编码名），否则取 ASCII 兜底 filename
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const starMatch = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  const plainMatch = /filename="?([^";]+)"?/i.exec(disposition);
+  const filename = starMatch
+    ? decodeURIComponent(starMatch[1])
+    : (plainMatch?.[1] ?? "download");
+  return { blob: await response.blob(), filename };
+}

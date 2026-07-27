@@ -26,6 +26,7 @@ import type { Member, WorkItem, WorkItemStatus } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDateTime } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
 import { CollaborationSection } from "../collaboration/CollaborationSection";
+import { DeliverableSection } from "../deliverables/DeliverableSection";
 import { TransferSection } from "../collaboration/TransferSection";
 import { DeadlineChangeSection } from "../collaboration/DeadlineChangeSection";
 
@@ -119,6 +120,11 @@ export default function WorkItemDetailPage() {
       if (error instanceof ApiError && error.isVersionConflict) {
         toast.error(VERSION_CONFLICT_MESSAGE);
         queryClient.invalidateQueries({ queryKey: ["work-items"] });
+        return;
+      }
+      // T4.4：无交付物时提交审核被 422 拒绝，引导先提交交付物
+      if (error instanceof ApiError && error.code === "DELIVERABLE_REQUIRED") {
+        toast.error("请先提交交付物，再提交审核");
         return;
       }
       toast.error(errorMessage(error, "操作失败"));
@@ -244,6 +250,8 @@ export default function WorkItemDetailPage() {
       </Card>
 
       <CollaborationSection workItem={item} members={members ?? []} />
+
+      <DeliverableSection workItem={item} />
 
       <TransferSection workItem={item} members={members ?? []} />
 
