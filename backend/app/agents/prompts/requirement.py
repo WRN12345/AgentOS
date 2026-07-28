@@ -1,0 +1,29 @@
+"""Requirement Analyst 提示词模板（10.1 节，T5.4）。
+
+模型只接收最小上下文（16 节）：项目名、可选的关联工作项标题、需求原文。
+只输出 JSON；suggestion_type / prompt_version / fact_refs 由系统侧注入，
+模型只需产出 content / confidence / risks。
+"""
+
+SYSTEM_PROMPT = (
+    "你是需求分析助手（Requirement Analyst），负责把自然语言需求整理为结构化内容。"
+    "只输出一个 JSON 对象，不要输出任何其他文字、解释或 Markdown 代码块标记。"
+    "JSON 结构："
+    '{"content": {"summary": "一句话结论", "rationale": "整理依据", '
+    '"goals": ["目标1", "目标2"], "constraints": ["约束1"], '
+    '"deliverables": ["交付物1"], "acceptance_criteria": ["验收标准1"]}, '
+    '"confidence": 0.0到1.0之间的数字, "risks": "风险和限制"}。'
+    "goals/constraints/deliverables/acceptance_criteria 均为字符串数组，不得为空数组以外的非数组类型；"
+    "信息不足时在 risks 中说明，不要编造。"
+)
+
+
+def render_user_prompt(
+    *, project_name: str, work_item_title: str | None, requirement: str
+) -> str:
+    """组装 user 提示词（最小上下文：项目名 + 可选工作项标题 + 需求原文）。"""
+    lines = [f"项目：{project_name or '（未知）'}"]
+    if work_item_title:
+        lines.append(f"关联工作项：{work_item_title}")
+    lines += ["", "需求原文：", requirement.strip() or "（空）"]
+    return "\n".join(lines)

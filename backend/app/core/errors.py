@@ -61,6 +61,11 @@ class ErrorCodes:
     # 交付物版本号并发冲突（(work_item_id, version) 唯一约束兜底，17.2 节）
     DELIVERABLE_VERSION_CONFLICT = "DELIVERABLE_VERSION_CONFLICT"
 
+    # Agent 运行人工重试（17.3 节，T5.6）：仅 failed 可重试，其余状态 409
+    AGENT_RUN_NOT_FAILED = "AGENT_RUN_NOT_FAILED"
+    # Agent 建议人工反馈（12.5 节，T5.7）：仅 pending 可反馈，重复反馈 409
+    AGENT_SUGGESTION_ALREADY_REVIEWED = "AGENT_SUGGESTION_ALREADY_REVIEWED"
+
 
 class ApiException(Exception):
     """业务异常：按统一错误格式返回。"""

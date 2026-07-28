@@ -17,11 +17,22 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://host.docker.internal:11434"
     openai_compatible_base_url: str = ""
     openai_compatible_api_key: str = ""
+    # 模型调用超时与失败重试（17.3 节；超时/不可达按此次数重试后抛统一封装错误）
+    llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = 2
+
+    # Agent 运行级失败重试（17.3 节，T5.6）：指数退避，间隔 = base * 2^attempt。
+    # 与 provider 层 LLM_MAX_RETRIES（单次调用内的线性重试，应对瞬时抖动）是
+    # 两道不同防线：provider 重试耗尽后错误冒泡到本层，按运行粒度退避重投。
+    agent_run_max_retries: int = 3
+    agent_run_retry_base_seconds: float = 30.0
 
     scheduler_example_interval_seconds: float = 60.0
     # 到期/逾期提醒扫描（T3.6，4.2 节）：scheduler 触发周期与"临期"判定窗口
     due_scan_interval_seconds: float = 300.0
     due_soon_horizon_hours: int = 24
+    # Workflow Risk Agent 周期风险扫描（T5.5，4.2 节逾期风险扫描）触发周期
+    agent_risk_scan_interval_seconds: float = 3600.0
 
     # 认证（第 16 章）：JWT 密钥与令牌有效期；密钥走环境变量，禁止硬编码真实密钥
     jwt_secret: str = "dev-jwt-secret-change-in-production"
@@ -56,6 +67,15 @@ class Settings(BaseSettings):
     @property
     def allowed_upload_mime_types(self) -> frozenset[str]:
         return frozenset(m.strip() for m in self.upload_allowed_mime_types.split(",") if m.strip())
+
+    @property
+    def llm_is_external(self) -> bool:
+        """当前模型 Provider 是否为外部（云端）服务。
+
+        T5.7 前端据此提示"数据将发送至外部服务"（16 节）；
+        与 ModelProvider.is_external 保持一致。
+        """
+        return self.llm_provider == "openai_compatible"
 
 
 settings = Settings()

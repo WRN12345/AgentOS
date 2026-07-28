@@ -18,6 +18,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
+from app.agents.service import request_agent_analysis
+from app.agents.specialists.review import AGENT_TYPE as DELIVERABLE_REVIEW_AGENT_TYPE
 from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
 from app.domains.project.models import ROLE_LEADER, ProjectMember
@@ -31,6 +33,7 @@ from app.domains.work_items.schemas import (
     WorkItemUpdateIn,
 )
 from app.domains.work_items.state_machine import transition
+from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
@@ -395,6 +398,32 @@ async def run_command(
     await session.commit()
     # commit 成功后发布实时事件（4.3 节）：订阅者收到的必为已落库事实
     await publish_after_commit(await _build_status_events(session, actor, item, command, before_status))
+    if command == "submit":
+        # 提交审核后触发交付物初审 Agent（T5.5，event 触发）：业务事务已 commit
+        # 再投递；尽力而为，投递失败不影响已完成的 submit（17.3 节）
+        await _dispatch_deliverable_review(session, item)
     await session.refresh(item)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
     logger.info("work item %s: id=%s, %s -> %s", command, item.id, before_status, item.status)
     return await work_item_to_out(session, item)
+
+
+async def _dispatch_deliverable_review(session: AsyncSession, item: WorkItem) -> None:
+    """投递 deliverable_review 的 agent.run（trigger_source="event"），失败只记日志。"""
+    redis_client = create_redis_client()
+    try:
+        run = await request_agent_analysis(
+            session,
+            redis_client,
+            agent_type=DELIVERABLE_REVIEW_AGENT_TYPE,
+            trigger_source="event",
+            work_item_id=item.id,
+        )
+        logger.info(
+            "deliverable review dispatched: run_id=%s work_item_id=%s", run.id, item.id
+        )
+    except Exception:  # noqa: BLE001 - Agent 投递失败不拖垮已提交的 submit（17.3 节）
+        logger.warning(
+            "deliverable review dispatch failed, submit unaffected: work_item_id=%s", item.id
+        )
+    finally:
+        await redis_client.aclose()

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,9 +31,15 @@ import {
 } from "@/components/ui/table";
 import { api } from "../../services/api";
 import { useIsLeader } from "../../app/store";
-import type { Member, WorkItemStatus, WorkItemSummary } from "../../types";
+import type {
+  AgentConfig,
+  Member,
+  WorkItemStatus,
+  WorkItemSummary,
+} from "../../types";
 import { PRIORITY_META, STATUS_META, formatDate } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
+import { RequirementGuidedCreateDialog } from "../agent-assistant/RequirementGuidedCreateDialog";
 
 const STATUS_OPTIONS: WorkItemStatus[] = [
   "DRAFT",
@@ -49,6 +55,7 @@ const STATUS_OPTIONS: WorkItemStatus[] = [
 export default function WorkItemsPage() {
   const isLeader = useIsLeader();
   const [createOpen, setCreateOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   // 过滤条件（"all"/空串表示不过滤）
   const [assigneeId, setAssigneeId] = useState("all");
@@ -59,6 +66,13 @@ export default function WorkItemsPage() {
   const { data: members } = useQuery({
     queryKey: ["members"],
     queryFn: () => api.get<Member[]>("/members"),
+  });
+
+  // 16 节：外部模型服务时引导对话框内提示"数据将发送至外部服务"
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api.get<AgentConfig>("/config"),
+    enabled: isLeader,
   });
 
   const params = new URLSearchParams();
@@ -86,10 +100,16 @@ export default function WorkItemsPage() {
           </CardDescription>
         </div>
         {isLeader && (
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            创建工作项
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setGuideOpen(true)}>
+              <Sparkles className="size-4" />
+              AI 需求引导
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              创建工作项
+            </Button>
+          </div>
         )}
       </CardHeader>
       <CardContent className="space-y-4">
@@ -208,6 +228,12 @@ export default function WorkItemsPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         members={members ?? []}
+      />
+      <RequirementGuidedCreateDialog
+        open={guideOpen}
+        onOpenChange={setGuideOpen}
+        members={members ?? []}
+        llmIsExternal={config?.llm_is_external ?? false}
       />
     </Card>
   );

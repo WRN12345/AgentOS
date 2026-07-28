@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import settings
 
 # 导入全部领域模型，确保 Base.metadata 完整（供 alembic revision --autogenerate 识别）
+from app.agents import models as _agent_models  # noqa: F401
 from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401
 from app.domains.deadlines import models as _deadline_models  # noqa: F401

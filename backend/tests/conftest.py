@@ -86,7 +86,18 @@ async def _clean_tables() -> None:
                 "member_capabilities, work_item_collaborators, work_items, "
                 "collaboration_requests, notifications, "
                 "transfer_requests, deadline_change_requests, stored_files, "
+                "agent_suggestions, agent_runs, "
                 "project_members, projects"
+            )
+        )
+        # LangGraph 检查点表由 worker 首次运行时才创建（不归 Alembic 管理），
+        # 存在才清空，保证用例间隔离
+        await session.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF to_regclass('checkpoints') IS NOT NULL THEN "
+                "TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes; "
+                "END IF; END $$"
             )
         )
         await session.commit()

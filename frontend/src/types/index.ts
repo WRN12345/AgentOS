@@ -335,3 +335,51 @@ export interface RealtimeEvent {
   data: { title: string; body: string; link: string | null };
   created_at: string;
 }
+
+/* ---------- 阶段 5：多 Agent 辅助 ---------- */
+
+export type AgentSuggestionReviewStatus = "pending" | "accepted" | "ignored";
+
+/**
+ * Agent 建议（GET /agent-suggestions，12.5 节，T5.7）。
+ * content 统一含 summary/rationale，其余字段随 suggestion_type 扩展
+ * （见 features/agent-assistant/SuggestionContent.tsx 的结构化渲染）。
+ */
+export interface AgentSuggestion {
+  id: string;
+  run_id: string;
+  suggestion_type: string;
+  content: Record<string, unknown> & { summary?: string; rationale?: string };
+  confidence: number | null;
+  risks: string | null;
+  fact_refs: Record<string, string[]> | null;
+  review_status: AgentSuggestionReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  prompt_version: string | null;
+  /** 关联工作项（项目级建议为 null，不渲染链接）。 */
+  work_item_id: string | null;
+  model: string | null;
+  created_at: string;
+}
+
+/** Agent 运行记录（GET /agent-runs[/{id}]，T5.7 列表/详情带错误与耗时）。 */
+export interface AgentRun {
+  id: string;
+  agent_type: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  model: string | null;
+  trigger_source: string;
+  work_item_id: string | null;
+  request_id: string | null;
+  created_at: string;
+  error: string | null;
+  duration_ms: number | null;
+  retry_count: number;
+}
+
+/** GET /config 返回的前端可用配置（16 节：外部数据提示）。 */
+export interface AgentConfig {
+  llm_provider: string;
+  llm_is_external: boolean;
+}
