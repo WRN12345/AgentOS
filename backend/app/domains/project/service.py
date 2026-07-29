@@ -80,6 +80,12 @@ def require_leader_or_admin(member: ProjectMember) -> None:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可执行该操作")
 
 
+def require_admin_for_admin_target(actor: ProjectMember, target: ProjectMember) -> None:
+    """管理员账号保护：负责人/成员不能对管理员执行操作（编辑、禁用、维护能力）。"""
+    if target.role == ROLE_ADMIN and actor.role != ROLE_ADMIN:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "负责人和成员不能对管理员进行操作")
+
+
 # ---------- 序列化 ----------
 
 
@@ -242,6 +248,7 @@ async def update_member(
     """负责人/管理员维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
     require_leader_or_admin(actor)
     member = await get_member(session, member_id)
+    require_admin_for_admin_target(actor, member)
 
     if payload.role == ROLE_ADMIN and member.role != ROLE_ADMIN:
         # 管理员不参与工作协作：有在办协作的成员不能直接转为管理员
@@ -288,7 +295,8 @@ async def put_capabilities(
     """整体替换能力集（PUT 语义，6.2 节）。
 
     - 成员本人：只能操作自己的能力，提交后 confirmed 复位为未确认；
-    - 负责人/管理员：可对任意成员操作，confirm=true 时同时确认并留痕。
+    - 负责人/管理员：可对任意成员操作，confirm=true 时同时确认并留痕；
+    - 管理员账号的能力仅管理员本人可维护。
     """
     can_manage = actor.role in (ROLE_LEADER, ROLE_ADMIN)
     if not can_manage and actor.id != member_id:
@@ -297,6 +305,7 @@ async def put_capabilities(
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可确认能力")
 
     member = await get_member(session, member_id)
+    require_admin_for_admin_target(actor, member)
 
     before = sorted(f"{c.tag}:{c.proficiency}" for c in member.capabilities)
     after = sorted(f"{c.tag}:{c.proficiency}" for c in payload.capabilities)

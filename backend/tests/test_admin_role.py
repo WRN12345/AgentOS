@@ -132,7 +132,77 @@ async def test_admin_disable_self_follows_leader_rules(
     assert login.status_code == 403
 
 
-# ---------- 只读访问：admin 可读全部页面数据 ----------
+# ---------- 管理员账号保护：负责人/成员不能对管理员进行操作 ----------
+
+
+async def test_leader_cannot_update_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """leader 编辑/降级/禁用 admin → 403。"""
+    ctx = await _make_ctx(client, project)
+    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    for payload in (
+        {"display_name": "被改名"},
+        {"role": "member"},
+        {"is_active": False},
+    ):
+        resp = await client.patch(
+            f"/api/v1/members/{admin.id}", json=payload, headers=leader_headers
+        )
+        assert resp.status_code == 403, (payload, resp.text)
+        assert "管理员" in resp.json()["message"]
+
+
+async def test_leader_cannot_maintain_admin_capabilities(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """leader 维护/确认 admin 的能力 → 403。"""
+    ctx = await _make_ctx(client, project)
+    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    resp = await client.put(
+        f"/api/v1/members/{admin.id}/capabilities",
+        json={"capabilities": [{"tag": "RAG", "proficiency": 3}], "confirm": True},
+        headers=leader_headers,
+    )
+    assert resp.status_code == 403, resp.text
+    assert "管理员" in resp.json()["message"]
+
+
+async def test_member_cannot_update_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """普通成员对 admin 的任何管理操作 → 403。"""
+    ctx = await _make_ctx(client, project)
+    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
+    alice_headers = ctx["alice_headers"]
+    assert isinstance(alice_headers, dict)
+
+    resp = await client.patch(
+        f"/api/v1/members/{admin.id}", json={"is_active": False}, headers=alice_headers
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_admin_can_operate_other_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """admin 之间可以互相操作（编辑资料 → 200）。"""
+    ctx = await _make_ctx(client, project)
+    _, admin2 = await add_member(project, "admin2", ADMIN_PW, role="admin", display_name="管理员二")
+    admin_headers = ctx["admin_headers"]
+    assert isinstance(admin_headers, dict)
+
+    resp = await client.patch(
+        f"/api/v1/members/{admin2.id}", json={"display_name": "管理员二号"}, headers=admin_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["display_name"] == "管理员二号"
 
 
 async def test_admin_read_access(

@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
-import { useAuthStore, useCanManageMembers } from "../../app/store";
+import { useAuthStore, useCanManageMembers, useIsAdmin } from "../../app/store";
 import { roleBadgeVariant, roleLabel } from "../../lib/roles";
 import type { Member, MemberWithPassword } from "../../types";
 import {
@@ -35,6 +35,7 @@ import {
 export default function MembersPage() {
   const queryClient = useQueryClient();
   const canManage = useCanManageMembers();
+  const isAdmin = useIsAdmin();
   const selfMember = useAuthStore((s) => s.member);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -143,6 +144,8 @@ export default function MembersPage() {
                 const hasUnconfirmed = m.capabilities.some(
                   (c) => !c.confirmed,
                 );
+                // 负责人/成员不能对管理员进行操作：admin 行仅管理员本人可见操作按钮
+                const canOperateRow = canManage && (m.role !== "admin" || isAdmin);
                 return (
                   <TableRow key={m.id}>
                     <TableCell>
@@ -191,6 +194,7 @@ export default function MembersPage() {
                     </TableCell>
                     {canManage && (
                       <TableCell className="text-right">
+                        {canOperateRow && (
                         <div className="flex justify-end gap-1">
                           {hasUnconfirmed && (
                             <Button
@@ -230,6 +234,7 @@ export default function MembersPage() {
                             )}
                           </Button>
                         </div>
+                        )}
                       </TableCell>
                     )}
                   </TableRow>
