@@ -43,12 +43,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 14
 
-    # 初始负责人账号引导（bootstrap，幂等；开发默认值即可，生产必须经环境变量覆盖）
+    # 初始管理员账号引导（bootstrap，幂等；开发默认值即可，生产必须经环境变量覆盖）
     bootstrap_admin_username: str = "admin"
     bootstrap_admin_password: str = "admin123"
-    # 默认项目（首版唯一项目）与初始账号的负责人成员档案
+    # 默认项目（首版唯一项目）与初始账号的管理员成员档案（负责人由管理员另行创建）
     bootstrap_project_name: str = "AgentOS 项目"
-    bootstrap_admin_display_name: str = "项目负责人"
+    bootstrap_admin_display_name: str = "管理员"
 
     # 文件存储（第 14 章）：数据库仅存相对 storage_key，上传目录禁止直接暴露
     storage_backend: str = "local"

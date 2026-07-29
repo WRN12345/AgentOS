@@ -352,3 +352,80 @@ async def test_admin_cannot_be_assigned(
     )
     assert collab.status_code == 422, collab.text
     assert "管理员不参与工作协作" in collab.json()["message"]
+
+
+# ---------- 改角色守卫：有在办协作的成员不能转为管理员 ----------
+
+
+async def test_member_with_active_work_cannot_become_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """成员名下有活跃工作项时，role 改为 admin → 422，提示先办结或转派。"""
+    ctx = await _make_ctx(client, project)
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    item = await _create_work_item(client, leader_headers, alice.id)
+    published = await client.post(
+        f"/api/v1/work-items/{item['id']}/publish",
+        json={"version": item["version"]},
+        headers=leader_headers,
+    )
+    assert published.status_code == 200, published.text
+
+    patched = await client.patch(
+        f"/api/v1/members/{alice.id}", json={"role": "admin"}, headers=leader_headers
+    )
+    assert patched.status_code == 422, patched.text
+    assert "管理员" in patched.json()["message"]
+
+
+async def test_member_without_active_work_can_become_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """无在办协作的成员可正常转为 admin；DRAFT 工作项不算在办（未发布不阻塞）。"""
+    ctx = await _make_ctx(client, project)
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    # alice 只有一个 DRAFT 工作项（未发布，不计入活跃负载）
+    await _create_work_item(client, leader_headers, alice.id)
+
+    for member in (alice, bob):
+        patched = await client.patch(
+            f"/api/v1/members/{member.id}", json={"role": "admin"}, headers=leader_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["role"] == "admin"
+
+
+# ---------- Agent 分配建议数据源：不含 admin ----------
+
+
+async def test_agent_tools_exclude_admin(project: Project) -> None:
+    """list_member_capabilities / get_member_workload 不返回 admin（分配建议不会推荐管理员）。"""
+    from app.agents.tools import get_member_workload, list_member_capabilities
+    from app.domains.project.models import MemberCapability
+    from app.infrastructure.database.engine import async_session_factory
+
+    _, admin = await add_member(project, "admin", ADMIN_PW, role="admin", display_name="管理员")
+    _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
+
+    async with async_session_factory() as session:
+        session.add(MemberCapability(member_id=admin.id, tag="RAG", proficiency=5))
+        session.add(MemberCapability(member_id=alice.id, tag="RAG", proficiency=3))
+        await session.commit()
+
+    async with async_session_factory() as session:
+        caps = await list_member_capabilities(session)
+        workload = await get_member_workload(session)
+
+    admin_id = str(admin.id)
+    alice_id = str(alice.id)
+    assert all(c["member_id"] != admin_id for c in caps)
+    assert any(c["member_id"] == alice_id for c in caps)
+    assert all(w["member_id"] != admin_id for w in workload)
+    assert any(w["member_id"] == alice_id for w in workload)

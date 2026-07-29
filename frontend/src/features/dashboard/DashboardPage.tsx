@@ -132,7 +132,8 @@ export default function DashboardPage() {
               </TableHeader>
               <TableBody>
                 {(members ?? [])
-                  .filter((m) => m.is_active)
+                  // 管理员不参与工作协作，不进入工作量统计
+                  .filter((m) => m.is_active && m.role !== "admin")
                   .map((m) => (
                     <TableRow key={m.id}>
                       <TableCell className="font-medium">

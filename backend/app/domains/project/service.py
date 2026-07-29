@@ -16,6 +16,8 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.collaboration.models import CollaborationRequest
+from app.domains.collaboration.state_machine import CollaborationStatus
 from app.domains.identity.models import User
 from app.domains.identity.service import create_user
 from app.domains.project.models import (
@@ -32,6 +34,8 @@ from app.domains.project.schemas import (
     MemberOut,
     MemberUpdateIn,
 )
+from app.domains.transfers.models import TransferRequest
+from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.state_machine import ACTIVE_STATUSES
 
@@ -181,12 +185,67 @@ async def create_member(
     return member_to_out(member, user.username), payload.password
 
 
+# 协作请求未完结状态（排除 COMPLETED / CANCELLED）：成员仍有协作在身
+_ACTIVE_COLLABORATION_STATUSES = (
+    CollaborationStatus.REQUESTED,
+    CollaborationStatus.ACCEPTED,
+    CollaborationStatus.IN_PROGRESS,
+    CollaborationStatus.SUBMITTED,
+    CollaborationStatus.REVISION_REQUESTED,
+)
+
+
+async def _ensure_no_active_collaboration(session: AsyncSession, member: ProjectMember) -> None:
+    """改角色为管理员前的守卫：管理员不参与工作协作，有在办协作的成员须先办结/转派。"""
+    active_items = (
+        await session.execute(
+            select(func.count(WorkItem.id)).where(
+                WorkItem.assignee_id == member.id, WorkItem.status.in_(ACTIVE_STATUSES)
+            )
+        )
+    ).scalar_one()
+    pending_transfers = (
+        await session.execute(
+            select(func.count(TransferRequest.id)).where(
+                TransferRequest.status == TransferStatus.PENDING,
+                (TransferRequest.from_member_id == member.id)
+                | (TransferRequest.to_member_id == member.id),
+            )
+        )
+    ).scalar_one()
+    active_collaborations = (
+        await session.execute(
+            select(func.count(CollaborationRequest.id)).where(
+                CollaborationRequest.status.in_(_ACTIVE_COLLABORATION_STATUSES),
+                (CollaborationRequest.requester_id == member.id)
+                | (CollaborationRequest.assignee_id == member.id),
+            )
+        )
+    ).scalar_one()
+    if active_items or pending_transfers or active_collaborations:
+        raise ApiException(
+            422,
+            ErrorCodes.VALIDATION_ERROR,
+            "该成员仍有在办任务或未完结协作，请先办结或转派后再设为管理员",
+            {
+                "member_id": str(member.id),
+                "active_work_items": active_items,
+                "pending_transfers": pending_transfers,
+                "active_collaborations": active_collaborations,
+            },
+        )
+
+
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
     """负责人/管理员维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
     require_leader_or_admin(actor)
     member = await get_member(session, member_id)
+
+    if payload.role == ROLE_ADMIN and member.role != ROLE_ADMIN:
+        # 管理员不参与工作协作：有在办协作的成员不能直接转为管理员
+        await _ensure_no_active_collaboration(session, member)
 
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}

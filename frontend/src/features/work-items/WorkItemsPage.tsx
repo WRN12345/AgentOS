@@ -123,11 +123,14 @@ export default function WorkItemsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部</SelectItem>
-                {(members ?? []).map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.display_name}
-                  </SelectItem>
-                ))}
+                {/* 管理员不参与工作协作，不作为主执行人筛选项 */}
+                {(members ?? [])
+                  .filter((m) => m.role !== "admin")
+                  .map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.display_name}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
