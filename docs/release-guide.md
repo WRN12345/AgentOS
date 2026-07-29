@@ -34,6 +34,7 @@ cp .env.example .env   # 然后按下表逐项修改
 | `OLLAMA_BASE_URL` | 容器经 host-gateway 访问宿主机 Ollama：`http://host.docker.internal:11434` | 默认即可 |
 | `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | 外部 OpenAI 兼容服务地址与 Key（16 节：外部模型时前端会提示数据外发） | Key 只进 .env |
 | `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | 单次模型调用超时与线性重试次数（17.3 节） | — |
+| `LLM_MAX_TOKENS` | 单次生成最大 token 数（OpenAI 兼容 Provider 生效；推理模型 thinking 也占额度，默认 4096） | 输出被截断时调大 |
 | `AGENT_RUN_MAX_RETRIES` / `AGENT_RUN_RETRY_BASE_SECONDS` | Agent 运行级指数退避重试：间隔 = base × 2^attempt | — |
 | `LOG_DIR` | 容器内日志目录（挂载 `./data/logs`） | 默认即可 |
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务周期 | 默认即可 |

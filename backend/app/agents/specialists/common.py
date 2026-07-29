@@ -11,15 +11,32 @@
 """
 
 import json
+import re
 from typing import Any
 
 from app.infrastructure.models.provider import get_model_provider
+
+# 推理模型（如 MiniMax M2.x，thinking 无法关闭）即使要求 JSON 输出，
+# content 前部也会带 <think>...</think>；response_format 被部分兼容服务
+# 忽略时还可能包 ```json 围栏。统一在入口处剥离。
+_THINK_RE = re.compile(r"<think>.*?(</think>|$)", re.DOTALL)
+_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def strip_model_noise(raw: str) -> str:
+    """剥离模型输出的 <think> 思考段与 Markdown 代码围栏，返回纯 JSON 文本。"""
+    text = _THINK_RE.sub("", raw).strip()
+    fence = _FENCE_RE.match(text)
+    if fence:
+        text = fence.group(1).strip()
+    return text
 
 
 async def call_model_json(*, system: str, user_prompt: str) -> str:
     """调用模型生成结构化 JSON 文本（提示词里已声明"只输出 JSON"）。"""
     provider = get_model_provider()
-    return await provider.generate(user_prompt, system=system, json_output=True)
+    raw = await provider.generate(user_prompt, system=system, json_output=True)
+    return strip_model_noise(raw)
 
 
 def build_output(

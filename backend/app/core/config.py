@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # 模型调用超时与失败重试（17.3 节；超时/不可达按此次数重试后抛统一封装错误）
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 2
+    # 单次生成的最大 token 数（OpenAI 兼容 Provider 发送 max_tokens）。
+    # 推理模型的 thinking 也占用该额度，默认太小会导致 JSON 输出被截断。
+    llm_max_tokens: int = 4096
 
     # Agent 运行级失败重试（17.3 节，T5.6）：指数退避，间隔 = base * 2^attempt。
     # 与 provider 层 LLM_MAX_RETRIES（单次调用内的线性重试，应对瞬时抖动）是

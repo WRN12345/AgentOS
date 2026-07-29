@@ -68,6 +68,7 @@ def get_model_provider() -> ModelProvider:
                 model=settings.llm_model,
                 timeout=settings.llm_timeout_seconds,
                 max_retries=settings.llm_max_retries,
+                max_tokens=settings.llm_max_tokens,
             )
         else:
             raise RuntimeError(f"不支持的模型 Provider: {settings.llm_provider}")

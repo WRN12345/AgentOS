@@ -27,6 +27,7 @@ class OpenAICompatibleProvider(ModelProvider):
         *,
         timeout: float = 60.0,
         max_retries: int = 2,
+        max_tokens: int = 4096,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not base_url:
@@ -38,6 +39,7 @@ class OpenAICompatibleProvider(ModelProvider):
         self.model = model
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
+        self.max_tokens = max_tokens
         # transport 仅供测试注入 MockTransport；生产为 None（httpx 默认网络传输）
         self._transport = transport
 
@@ -51,7 +53,13 @@ class OpenAICompatibleProvider(ModelProvider):
         messages = ([{"role": "system", "content": system}] if system else []) + [
             {"role": "user", "content": prompt}
         ]
-        payload: dict = {"model": self.model, "messages": messages}
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            # 显式给足生成额度：推理模型的 thinking 也占 token，服务端默认
+            # 额度偏小会把结构化 JSON 输出截断（MiniMax M2.x 实测）
+            "max_tokens": self.max_tokens,
+        }
         if json_output:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}"}
