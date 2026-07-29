@@ -1,7 +1,7 @@
 """项目领域数据模型（第 11 章）：projects、project_members、member_capabilities。
 
 - projects：单项目配置，首版只有一条有效记录（2.2 节不含多项目）。
-- project_members：项目内成员档案——角色（leader/member）、显示名、
+- project_members：项目内成员档案——角色（leader/member/admin）、显示名、
   每周可投入时间、Git 用户名、启用状态（6.1、6.2 节）。
 - member_capabilities：能力标签与熟练度（1-5），由成员填报、负责人确认（6.2 节）。
 """
@@ -25,10 +25,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.models.base import CoreModel
 
-# 项目角色（6.1 节）：首版只保留两个系统角色
+# 项目角色（6.1 节）：leader 负责人全管；member 普通成员；
+# admin 管理员——查看全部数据 + 成员账号管理，不参与业务协作（不可被指派）
 ROLE_LEADER = "leader"
 ROLE_MEMBER = "member"
-ROLES = (ROLE_LEADER, ROLE_MEMBER)
+ROLE_ADMIN = "admin"
+ROLES = (ROLE_LEADER, ROLE_MEMBER, ROLE_ADMIN)
 
 
 class Project(CoreModel):
@@ -42,7 +44,7 @@ class ProjectMember(CoreModel):
     __tablename__ = "project_members"
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", name="uq_project_members_project_user"),
-        CheckConstraint("role IN ('leader', 'member')", name="ck_project_members_role"),
+        CheckConstraint("role IN ('leader', 'member', 'admin')", name="ck_project_members_role"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

@@ -38,7 +38,7 @@ const createSchema = z.object({
   username: z.string().min(1, "请输入用户名"),
   password: z.string().min(8, "密码至少 8 位"),
   display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member"]),
+  role: z.enum(["leader", "member", "admin"]),
   weekly_available_hours: z.string().optional(),
   git_username: z.string().optional(),
 });
@@ -52,7 +52,7 @@ interface CreateMemberDialogProps {
   onCreated: (member: MemberWithPassword) => void;
 }
 
-/** 负责人创建成员对话框：成功后后端返回一次性初始密码。 */
+/** 负责人/管理员创建成员对话框：成功后后端返回一次性初始密码。 */
 export function CreateMemberDialog({
   open,
   onOpenChange,
@@ -171,6 +171,7 @@ export function CreateMemberDialog({
                     <SelectContent>
                       <SelectItem value="member">成员</SelectItem>
                       <SelectItem value="leader">负责人</SelectItem>
+                      <SelectItem value="admin">管理员</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -217,7 +218,7 @@ export function CreateMemberDialog({
 
 const editSchema = z.object({
   display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member"]),
+  role: z.enum(["leader", "member", "admin"]),
   weekly_available_hours: z.string().optional(),
   git_username: z.string().optional(),
 });
@@ -229,7 +230,7 @@ interface EditMemberDialogProps {
   onClose: () => void;
 }
 
-/** 负责人编辑成员对话框：显示名、角色、可投入时间与 Git 用户名。 */
+/** 负责人/管理员编辑成员对话框：显示名、角色、可投入时间与 Git 用户名。 */
 export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
   const queryClient = useQueryClient();
   const form = useForm<EditValues>({
@@ -306,6 +307,7 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
                     <SelectContent>
                       <SelectItem value="member">成员</SelectItem>
                       <SelectItem value="leader">负责人</SelectItem>
+                      <SelectItem value="admin">管理员</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />

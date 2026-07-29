@@ -27,7 +27,7 @@ export interface UserMe {
   created_at: string;
 }
 
-export type MemberRole = "leader" | "member";
+export type MemberRole = "leader" | "member" | "admin";
 
 /** 成员能力标签（6.2 节）：熟练度 1-5，需负责人确认。 */
 export interface MemberCapability {

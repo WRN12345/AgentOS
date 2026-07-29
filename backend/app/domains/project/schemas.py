@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-MemberRole = Literal["leader", "member"]
+MemberRole = Literal["leader", "member", "admin"]
 
 
 class CapabilityIn(BaseModel):
@@ -47,7 +47,7 @@ class MemberOut(BaseModel):
 
 
 class MemberCreateIn(BaseModel):
-    """负责人创建成员：同时生成登录账号（16 节，不开放公开注册）。"""
+    """负责人/管理员创建成员：同时生成登录账号（16 节，不开放公开注册）。"""
 
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=128)

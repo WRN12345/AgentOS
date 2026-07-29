@@ -31,7 +31,7 @@ from app.domains.collaboration.schemas import (
 from app.domains.collaboration.state_machine import CollaborationStatus, transition
 from app.domains.deliverables.service import get_deliverable, validate_file_reference
 from app.domains.notifications.service import notify
-from app.domains.project.models import ProjectMember
+from app.domains.project.models import ROLE_ADMIN, ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import MemberBrief
 from app.domains.work_items.service import get_work_item
@@ -239,6 +239,11 @@ async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> Pro
     if member is None or not member.is_active:
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
+        )
+    if member.role == ROLE_ADMIN:
+        # 管理员不参与工作协作：不能作为协作请求接收人
+        raise ApiException(
+            422, ErrorCodes.VALIDATION_ERROR, "管理员不参与工作协作，不能被指派", {"member_id": str(member_id)}
         )
     return member
 

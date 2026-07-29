@@ -1,8 +1,8 @@
 """负责人待审批聚合服务（12.6 节）。
 
 聚合 PENDING 的转派申请与 PENDING_APPROVAL 的 DDL 变更申请，统一形状、
-按时间倒序返回。权限规则（T3.5 验收）：仅负责人才返回数据，普通成员
-返回空列表（不 403）。
+按时间倒序返回。权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
+普通成员返回空列表（不 403）。
 """
 
 import uuid
@@ -14,7 +14,7 @@ from app.domains.approvals.schemas import ApprovalItemOut
 from app.domains.collaboration.models import CollaborationRequest
 from app.domains.deadlines.models import DeadlineChangeRequest
 from app.domains.deadlines.state_machine import DeadlineChangeStatus, DeadlineTargetType
-from app.domains.project.models import ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
@@ -28,8 +28,8 @@ def _iso_date(value) -> str:
 async def list_pending_approvals(
     session: AsyncSession, actor: ProjectMember
 ) -> list[ApprovalItemOut]:
-    """负责人待审批列表；普通成员返回空列表（T3.5 验收，不 403）。"""
-    if actor.role != ROLE_LEADER:
+    """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
+    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
         return []
 
     transfers = list(

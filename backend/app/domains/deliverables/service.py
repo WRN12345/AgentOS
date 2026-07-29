@@ -23,7 +23,7 @@ from app.domains.deliverables.models import Deliverable
 from app.domains.deliverables.schemas import DeliverableCreateIn, DeliverableOut, FileBrief
 from app.domains.files.models import StoredFile
 from app.domains.files.service import get_stored_file, is_work_item_related
-from app.domains.project.models import ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
 from app.domains.work_items.schemas import MemberBrief
 from app.domains.work_items.service import get_work_item
 from app.domains.work_items.state_machine import WorkItemStatus
@@ -81,8 +81,8 @@ async def _to_out(session: AsyncSession, deliverable: Deliverable) -> Deliverabl
 
 
 async def _check_visible(session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID) -> None:
-    """可见性（16 节）：负责人或工作项相关成员（主执行人/协作者/协作请求双方）。"""
-    if actor.role == ROLE_LEADER:
+    """可见性（16 节）：负责人、管理员（只读）或工作项相关成员（主执行人/协作者/协作请求双方）。"""
+    if actor.role in (ROLE_LEADER, ROLE_ADMIN):
         return
     if not await is_work_item_related(session, item_id, actor.id):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "无权查看该工作项的交付物")

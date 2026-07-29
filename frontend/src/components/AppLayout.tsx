@@ -18,6 +18,7 @@ import {
 } from "@/components/SimpleMenu";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { roleBadgeVariant, roleLabel } from "@/lib/roles";
 import { api } from "../services/api";
 import { useAuthStore } from "../app/store";
 import { useEventStream } from "../services/events";
@@ -99,10 +100,8 @@ export default function AppLayout() {
                 <Button variant="ghost" className="gap-2" onClick={toggle} aria-expanded={open}>
                   <span>{member?.display_name ?? user?.username ?? "用户"}</span>
                   {member && (
-                    <Badge
-                      variant={member.role === "leader" ? "default" : "secondary"}
-                    >
-                      {member.role === "leader" ? "负责人" : "成员"}
+                    <Badge variant={roleBadgeVariant(member.role)}>
+                      {roleLabel(member.role)}
                     </Badge>
                   )}
                   <ChevronsUpDown className="size-4 text-muted-foreground" />

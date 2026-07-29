@@ -23,6 +23,8 @@ const members = [
   makeMember({ id: "member-2", display_name: "鲍勃", username: "bob" }),
   // 停用成员不应出现在主执行人候选中
   makeMember({ id: "member-3", display_name: "已停用", is_active: false }),
+  // 管理员不参与工作协作，不应出现在主执行人/协作者候选中
+  makeMember({ id: "member-4", display_name: "管理员", role: "admin" }),
 ];
 
 /** 打开 Radix Select 并选中指定文案的选项。 */
@@ -42,7 +44,7 @@ describe("WorkItemFormDialog 创建工作项表单", () => {
     vi.clearAllMocks();
   });
 
-  it("渲染标题、优先级、主执行人等字段，停用成员不在候选中", () => {
+  it("渲染标题、优先级、主执行人等字段，停用成员与管理员不在候选中", () => {
     renderWithProviders(
       <WorkItemFormDialog open onOpenChange={() => {}} members={members} />,
     );
@@ -50,6 +52,7 @@ describe("WorkItemFormDialog 创建工作项表单", () => {
     expect(screen.getByLabelText("标题")).toBeInTheDocument();
     expect(screen.getByText("主执行人")).toBeInTheDocument();
     expect(screen.queryByText("已停用")).not.toBeInTheDocument();
+    expect(screen.queryByText("管理员")).not.toBeInTheDocument();
   });
 
   it("必填校验：空标题与未选主执行人时展示错误且不调用接口", async () => {

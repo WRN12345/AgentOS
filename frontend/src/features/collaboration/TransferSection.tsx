@@ -137,8 +137,9 @@ export function TransferSection({ workItem, members }: Props) {
 
   const isAssignee = selfMember?.id === workItem.assignee.id;
   const hasPending = (transfers ?? []).some((t) => t.status === "PENDING");
+  // 管理员不参与工作协作：不能作为转派目标
   const candidates = members.filter(
-    (m) => m.is_active && m.id !== selfMember?.id,
+    (m) => m.is_active && m.role !== "admin" && m.id !== selfMember?.id,
   );
 
   return (

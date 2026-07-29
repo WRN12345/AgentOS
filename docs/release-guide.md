@@ -102,7 +102,19 @@ cd frontend && npm install && npm run dev
 - 端到端验收场景：`pytest tests/test_e2e_rag_serial.py tests/test_e2e_parallel.py`
 - 性能基线复测：见 `docs/perf-baseline-2026-07-28.md` 第 4 节
 
-## 7. 已知限制（2.2 节首版不包含）
+## 7. 角色模型（2026-07-29 起）
+
+三种角色（`project_members.role`）：
+
+| 角色 | 定位 | 能力 |
+| --- | --- | --- |
+| 管理员 admin | 领导/系统管理（初始引导账号即此角色） | 只读全部页面（看板、工作项、审批列表、交付物、审计、Agent 建议）+ 成员账号管理（创建/编辑/禁用/能力）；**不能**创建/分配工作项、审批、审核、参与协作，**不能被指派**（422「管理员不参与工作协作」） |
+| 负责人 leader | 项目日常负责人（由管理员在"成员与能力"页创建） | 创建/分配工作项、审批转派与 DDL、审核交付物、Agent 建议反馈等全部业务操作 |
+| 成员 member | 执行人 | 看板、我的任务、协作、提交交付 |
+
+首次部署后流程：admin 登录 → 创建一名"负责人"角色成员 → 负责人登录开展业务。
+
+## 8. 已知限制（2.2 节首版不包含）
 
 - 单项目、无 SSO、无多项目/跨项目成员。
 - 无 GitProvider/NotificationProvider 集成：Git 链接由成员手工粘贴，飞书同步为系统外
@@ -110,7 +122,7 @@ cd frontend && npm install && npm run dev
 - 无 WebSocket（实时推送用 SSE）、无 MinIO/对象存储（本地文件存储，预留 StorageProvider 抽象）。
 - Agent 只能生成建议，不能改变任何正式业务状态（原则 2，标准 10）。
 
-## 8. 常见问题
+## 9. 常见问题
 
 - **Agent 建议全部 failed**：通常是 `LLM_MODEL` 未配置或宿主机 Ollama 未运行/未拉模型；
   核心工作流不受影响。用 echo 占位能力可无模型自检管道。
@@ -121,7 +133,7 @@ cd frontend && npm install && npm run dev
 - **初始账号**：`BOOTSTRAP_ADMIN_USERNAME/PASSWORD` 仅首次引导时生效（幂等），
   改 .env 不会重置已存在账号的密码。
 
-## 9. 部署验证记录（第 22 章标准 11）
+## 10. 部署验证记录（第 22 章标准 11）
 
 2026-07-29 于开发机执行：`docker compose build` 全部镜像构建成功 →
 `docker compose down && docker compose up -d` → 六服务全部 healthy →

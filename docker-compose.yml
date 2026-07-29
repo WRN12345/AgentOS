@@ -11,6 +11,10 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    # 仅回环映射 5436，供宿主机图形工具（DBeaver/VS Code 插件等）连接；
+    # 不绑 0.0.0.0（19.4 节安全要求）；宿主机 5432-5435 是系统自带 postgres，别连错
+    ports:
+      - "127.0.0.1:5436:5432"
     # 不发布端口：仅 Compose 内部网络可访问（宿主机 5432 已被系统 postgres 占用，且 19.4 节要求不对外开放）
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]

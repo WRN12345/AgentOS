@@ -237,8 +237,9 @@ export function CollaborationSection({ workItem, members }: Props) {
   });
 
   const isWorkItemAssignee = selfMember?.id === workItem.assignee.id;
+  // 管理员不参与工作协作：不能作为协作接收人
   const candidates = members.filter(
-    (m) => m.is_active && m.id !== selfMember?.id,
+    (m) => m.is_active && m.role !== "admin" && m.id !== selfMember?.id,
   );
 
   /** 按当前用户身份（发起人/接收人）与状态计算可见操作（8.2 节状态机）。 */

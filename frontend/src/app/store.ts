@@ -45,3 +45,13 @@ export const useAuthStore = create<AuthState>()(
 /** 便捷选择器：当前用户是否为项目负责人。 */
 export const useIsLeader = () =>
   useAuthStore((s) => s.member?.role === "leader");
+
+/** 便捷选择器：当前用户是否为管理员（查看 + 账号管理，不参与业务协作）。 */
+export const useIsAdmin = () =>
+  useAuthStore((s) => s.member?.role === "admin");
+
+/** 便捷选择器：当前用户是否可管理成员账号（负责人与管理员同权）。 */
+export const useCanManageMembers = () =>
+  useAuthStore(
+    (s) => s.member?.role === "leader" || s.member?.role === "admin",
+  );

@@ -14,9 +14,11 @@
 import uuid
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.agents.models import AgentRun, AgentSuggestion
+from app.core.config import settings
 from app.domains.audit.models import AuditEvent
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
@@ -336,9 +338,11 @@ async def test_list_and_get_agent_runs(
 
 
 async def test_config_exposes_llm_external_flag(
-    client: httpx.AsyncClient, project: Project
+    client: httpx.AsyncClient, project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """GET /config 返回 provider 与是否外部服务（默认 ollama → false）。"""
+    """GET /config 返回 provider 与是否外部服务（ollama → false，与部署环境无关）。"""
+    # 显式固定 provider，避免宿主机 .env（如 openai_compatible）影响断言
+    monkeypatch.setattr(settings, "llm_provider", "ollama")
     ctx = await _setup(client, project)
     resp = await client.get("/api/v1/config", headers=ctx["alice_headers"])  # type: ignore[arg-type]
     assert resp.status_code == 200, resp.text

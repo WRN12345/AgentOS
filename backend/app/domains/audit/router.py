@@ -1,6 +1,7 @@
 """审计只读查询接口（12.6 节 GET /audit-events）。
 
-权限：仅项目负责人可查（6.1 节"查看全部任务、协作和审计记录"，16 节）。
+权限：项目负责人与管理员可查（6.1 节"查看全部任务、协作和审计记录"，16 节；
+管理员为只读管理视图，不做业务写操作）。
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit.models import AuditEvent
 from app.domains.audit.schemas import AuditEventOut
-from app.domains.project.dependencies import get_current_leader
+from app.domains.project.dependencies import get_current_leader_or_admin
 from app.domains.project.models import ProjectMember
 from app.infrastructure.database.engine import get_session
 
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/audit-events", tags=["audit"])
 async def list_audit_events(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: ProjectMember = Depends(get_current_leader),
+    _: ProjectMember = Depends(get_current_leader_or_admin),
     session: AsyncSession = Depends(get_session),
 ) -> list[AuditEvent]:
     """按创建时间倒序返回审计事件（只读）。"""

@@ -186,7 +186,8 @@ export function RequirementGuidedCreateDialog({
     close(false);
   };
 
-  const activeMembers = members.filter((m) => m.is_active);
+  // 管理员不参与工作协作：不出现在主执行人候选中
+  const activeMembers = members.filter((m) => m.is_active && m.role !== "admin");
 
   return (
     <Dialog open={open} onOpenChange={close}>

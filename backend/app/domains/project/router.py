@@ -1,9 +1,9 @@
 """成员接口（12.2 节）。
 
 - GET  /members                      任何项目成员：全员摘要（含能力、负载）
-- POST /members                      仅负责人：创建成员并生成登录账号（初始密码仅返回一次）
-- PATCH /members/{id}                仅负责人：维护资料、禁用/启用
-- PUT  /members/{id}/capabilities    本人填报（复位未确认）/ 负责人维护并可确认
+- POST /members                      负责人/管理员：创建成员并生成登录账号（初始密码仅返回一次）
+- PATCH /members/{id}                负责人/管理员：维护资料、禁用/启用
+- PUT  /members/{id}/capabilities    本人填报（复位未确认）/ 负责人或管理员维护并可确认
 权限策略集中在 domains/project/service.py（4.1、6.1 节）。
 """
 

@@ -50,7 +50,7 @@ import {
   newIdempotencyKey,
   VERSION_CONFLICT_MESSAGE,
 } from "../../services/api";
-import { useAuthStore, useIsLeader } from "../../app/store";
+import { useAuthStore, useIsAdmin, useIsLeader } from "../../app/store";
 import type {
   ApprovalItem,
   DeadlineChangeRequest,
@@ -65,18 +65,21 @@ import {
 } from "../collaboration/constants";
 import { DeliveryReviewSection } from "./DeliveryReviewSection";
 
-/** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更；成员查看并撤销自己的申请。 */
+/** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更；管理员只读待审批列表；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
   const isLeader = useIsLeader();
+  const isAdmin = useIsAdmin();
+  // 管理员可读待审批列表（无审批操作入口），交付审核仍为负责人专属
+  const canSeePending = isLeader || isAdmin;
 
   return (
-    <Tabs defaultValue={isLeader ? "pending" : "mine"} className="space-y-4">
+    <Tabs defaultValue={canSeePending ? "pending" : "mine"} className="space-y-4">
       <TabsList>
-        {isLeader && <TabsTrigger value="pending">待我审批</TabsTrigger>}
+        {canSeePending && <TabsTrigger value="pending">待我审批</TabsTrigger>}
         {isLeader && <TabsTrigger value="delivery">交付审核</TabsTrigger>}
         <TabsTrigger value="mine">我的申请</TabsTrigger>
       </TabsList>
-      {isLeader && (
+      {canSeePending && (
         <TabsContent value="pending">
           <PendingApprovals />
         </TabsContent>
@@ -93,9 +96,10 @@ export default function ApprovalsPage() {
   );
 }
 
-/** 负责人待审批列表（GET /approvals）：转派与 DDL 变更统一卡片。 */
+/** 负责人待审批列表（GET /approvals）：转派与 DDL 变更统一卡片；管理员只读（无审批按钮）。 */
 function PendingApprovals() {
   const queryClient = useQueryClient();
+  const isLeader = useIsLeader();
   const [decision, setDecision] = useState<{
     item: ApprovalItem;
     action: "approve" | "reject";
@@ -264,19 +268,23 @@ function PendingApprovals() {
               >
                 查看详情
               </Button>
-              <Button
-                size="sm"
-                onClick={() => setDecision({ item, action: "approve" })}
-              >
-                通过
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={() => setDecision({ item, action: "reject" })}
-              >
-                驳回
-              </Button>
+              {isLeader && (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => setDecision({ item, action: "approve" })}
+                  >
+                    通过
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setDecision({ item, action: "reject" })}
+                  >
+                    驳回
+                  </Button>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>

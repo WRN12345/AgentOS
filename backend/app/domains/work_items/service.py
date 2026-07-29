@@ -22,7 +22,7 @@ from app.agents.service import request_agent_analysis
 from app.agents.specialists.review import AGENT_TYPE as DELIVERABLE_REVIEW_AGENT_TYPE
 from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
-from app.domains.project.models import ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import (
@@ -186,6 +186,11 @@ async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> Pro
     if member is None or not member.is_active:
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
+        )
+    if member.role == ROLE_ADMIN:
+        # 管理员不参与工作协作：不能被指派为主执行人或协作者
+        raise ApiException(
+            422, ErrorCodes.VALIDATION_ERROR, "管理员不参与工作协作，不能被指派", {"member_id": str(member_id)}
         )
     return member
 

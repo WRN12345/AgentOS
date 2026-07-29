@@ -21,7 +21,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
-import { useAuthStore, useIsLeader } from "../../app/store";
+import { useAuthStore, useCanManageMembers } from "../../app/store";
+import { roleBadgeVariant, roleLabel } from "../../lib/roles";
 import type { Member, MemberWithPassword } from "../../types";
 import {
   CapabilitiesDialog,
@@ -30,10 +31,10 @@ import {
   InitialPasswordDialog,
 } from "./member-dialogs";
 
-/** 成员与能力页：全员摘要列表；负责人可创建/编辑/禁用/确认能力，成员可填报自己的能力。 */
+/** 成员与能力页：全员摘要列表；负责人/管理员可创建/编辑/禁用/确认能力，成员可填报自己的能力。 */
 export default function MembersPage() {
   const queryClient = useQueryClient();
-  const isLeader = useIsLeader();
+  const canManage = useCanManageMembers();
   const selfMember = useAuthStore((s) => s.member);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -46,7 +47,7 @@ export default function MembersPage() {
     queryFn: () => api.get<Member[]>("/members"),
   });
 
-  // 负责人禁用/启用成员
+  // 负责人/管理员禁用/启用成员
   const toggleActive = useMutation({
     mutationFn: (member: Member) =>
       api.patch<Member>(
@@ -65,7 +66,7 @@ export default function MembersPage() {
     onError: (error) => toast.error(errorMessage(error, "操作失败")),
   });
 
-  // 负责人确认某条能力（回填全量能力并携带 confirm）
+  // 负责人/管理员确认某条能力（回填全量能力并携带 confirm）
   const confirmCapability = useMutation({
     mutationFn: (member: Member) =>
       api.put<Member>(
@@ -108,7 +109,7 @@ export default function MembersPage() {
               填报我的能力
             </Button>
           )}
-          {isLeader && (
+          {canManage && (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               新建成员
@@ -134,7 +135,7 @@ export default function MembersPage() {
                 <TableHead className="text-right">每周可投入</TableHead>
                 <TableHead>Git 用户名</TableHead>
                 <TableHead>状态</TableHead>
-                {isLeader && <TableHead className="text-right">操作</TableHead>}
+                {canManage && <TableHead className="text-right">操作</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -151,10 +152,8 @@ export default function MembersPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant={m.role === "leader" ? "default" : "secondary"}
-                      >
-                        {m.role === "leader" ? "负责人" : "成员"}
+                      <Badge variant={roleBadgeVariant(m.role)}>
+                        {roleLabel(m.role)}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -190,7 +189,7 @@ export default function MembersPage() {
                         {m.is_active ? "启用" : "已禁用"}
                       </Badge>
                     </TableCell>
-                    {isLeader && (
+                    {canManage && (
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           {hasUnconfirmed && (

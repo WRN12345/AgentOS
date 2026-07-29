@@ -27,7 +27,8 @@ import {
   STATUS_META,
   formatDate,
 } from "../work-items/constants";
-import { useIsLeader } from "../../app/store";
+import { useIsAdmin, useIsLeader } from "../../app/store";
+import { roleBadgeVariant, roleLabel } from "../../lib/roles";
 import { TodoSection } from "./TodoSection";
 import { TimelineSection } from "./TimelineSection";
 
@@ -50,6 +51,7 @@ function daysUntil(dueAt: string): number {
 /** 团队透明看板（13.2 节）：由 GET /members 与 GET /work-items 前端聚合。 */
 export default function DashboardPage() {
   const isLeader = useIsLeader();
+  const isAdmin = useIsAdmin();
   const { data: members, isLoading: membersLoading } = useQuery({
     queryKey: ["members"],
     queryFn: () => api.get<Member[]>("/members"),
@@ -137,12 +139,8 @@ export default function DashboardPage() {
                         {m.display_name}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            m.role === "leader" ? "default" : "secondary"
-                          }
-                        >
-                          {m.role === "leader" ? "负责人" : "成员"}
+                        <Badge variant={roleBadgeVariant(m.role)}>
+                          {roleLabel(m.role)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -222,8 +220,8 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* 项目时间线：审计事件流（13.1 节，仅负责人） */}
-      {isLeader && <TimelineSection />}
+      {/* 项目时间线：审计事件流（13.1 节，负责人与管理员只读可见） */}
+      {(isLeader || isAdmin) && <TimelineSection />}
     </div>
   );
 }

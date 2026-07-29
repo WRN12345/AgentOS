@@ -19,6 +19,7 @@ from app.domains.audit.service import record_event
 from app.domains.identity.models import User
 from app.domains.identity.service import create_user
 from app.domains.project.models import (
+    ROLE_ADMIN,
     ROLE_LEADER,
     MemberCapability,
     Project,
@@ -69,10 +70,10 @@ async def get_member_by_user(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def require_leader(member: ProjectMember) -> None:
-    """仅项目负责人可执行（6.1 节）。"""
-    if member.role != ROLE_LEADER:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可执行该操作")
+def require_leader_or_admin(member: ProjectMember) -> None:
+    """成员账号管理：负责人与管理员同权（创建/编辑/禁用成员、维护能力）。"""
+    if member.role not in (ROLE_LEADER, ROLE_ADMIN):
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可执行该操作")
 
 
 # ---------- 序列化 ----------
@@ -140,8 +141,8 @@ async def list_members(session: AsyncSession) -> list[MemberOut]:
 async def create_member(
     session: AsyncSession, actor: ProjectMember, payload: MemberCreateIn
 ) -> tuple[MemberOut, str]:
-    """负责人创建成员并同时生成登录账号；初始密码随返回值仅此一次下发。"""
-    require_leader(actor)
+    """负责人/管理员创建成员并同时生成登录账号；初始密码随返回值仅此一次下发。"""
+    require_leader_or_admin(actor)
 
     existing = (
         await session.execute(select(User).where(User.username == payload.username))
@@ -183,8 +184,8 @@ async def create_member(
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
-    """负责人维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
-    require_leader(actor)
+    """负责人/管理员维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
+    require_leader_or_admin(actor)
     member = await get_member(session, member_id)
 
     before: dict[str, Any] = {}
@@ -228,13 +229,13 @@ async def put_capabilities(
     """整体替换能力集（PUT 语义，6.2 节）。
 
     - 成员本人：只能操作自己的能力，提交后 confirmed 复位为未确认；
-    - 负责人：可对任意成员操作，confirm=true 时同时确认并留痕。
+    - 负责人/管理员：可对任意成员操作，confirm=true 时同时确认并留痕。
     """
-    is_leader = actor.role == ROLE_LEADER
-    if not is_leader and actor.id != member_id:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "只能填报自己的能力，或由负责人维护")
-    if payload.confirm and not is_leader:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可确认能力")
+    can_manage = actor.role in (ROLE_LEADER, ROLE_ADMIN)
+    if not can_manage and actor.id != member_id:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "只能填报自己的能力，或由负责人/管理员维护")
+    if payload.confirm and not can_manage:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可确认能力")
 
     member = await get_member(session, member_id)
 
