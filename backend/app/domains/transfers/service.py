@@ -45,8 +45,12 @@ logger = setup_logging("backend")
 # ---------- 查询与序列化 ----------
 
 
-async def get_request(session: AsyncSession, request_id: uuid.UUID) -> TransferRequest:
-    request = await session.get(TransferRequest, request_id)
+async def get_request(
+    session: AsyncSession, request_id: uuid.UUID, *, for_update: bool = False
+) -> TransferRequest:
+    # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
+    # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
+    request = await session.get(TransferRequest, request_id, with_for_update=for_update)
     if request is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "转派申请不存在")
     return request
@@ -359,7 +363,7 @@ async def approve_transfer(
     commit 后向新旧负责人发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     _check_version(request, version)
     new_status = transition(request.status, "approve")
 
@@ -441,7 +445,7 @@ async def reject_transfer(
 ) -> TransferRequestOut:
     """负责人驳回：主任务负责人不变化（7.3 节），同事务审计 + 通知发起人；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     _check_version(request, version)
     new_status = transition(request.status, "reject")
 
@@ -489,7 +493,7 @@ async def cancel_transfer(
     version: int,
 ) -> TransferRequestOut:
     """发起人取消自己的 PENDING 申请，同事务审计。"""
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     if request.from_member_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅转派申请发起人可取消")
     _check_version(request, version)

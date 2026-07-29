@@ -128,8 +128,12 @@ async def generate_impact_analysis(
 # ---------- 查询与序列化 ----------
 
 
-async def get_request(session: AsyncSession, request_id: uuid.UUID) -> DeadlineChangeRequest:
-    request = await session.get(DeadlineChangeRequest, request_id)
+async def get_request(
+    session: AsyncSession, request_id: uuid.UUID, *, for_update: bool = False
+) -> DeadlineChangeRequest:
+    # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
+    # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
+    request = await session.get(DeadlineChangeRequest, request_id, with_for_update=for_update)
     if request is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "DDL 变更申请不存在")
     return request
@@ -559,7 +563,7 @@ async def approve_deadline_change(
 ) -> DeadlineChangeRequestOut:
     """负责人审批通过：同事务更新目标 DDL（version+1）+ 申请状态 + 审计 + 通知；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     _check_version(request, version)
     new_status = transition(request.status, "approve")
 
@@ -611,7 +615,7 @@ async def reject_deadline_change(
 ) -> DeadlineChangeRequestOut:
     """负责人驳回：目标 DDL 不变化，同事务审计 + 通知发起人；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     _check_version(request, version)
     new_status = transition(request.status, "reject")
 
@@ -659,7 +663,7 @@ async def cancel_deadline_change(
     version: int,
 ) -> DeadlineChangeRequestOut:
     """发起人取消自己的待审批申请，同事务审计。"""
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
     if request.requested_by != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅 DDL 变更申请人可取消")
     _check_version(request, version)

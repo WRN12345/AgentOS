@@ -72,12 +72,18 @@ _COMMAND_EVENT_TITLE = {
 # ---------- 查询 ----------
 
 
-async def get_work_item(session: AsyncSession, item_id: uuid.UUID) -> WorkItem:
+async def get_work_item(
+    session: AsyncSession, item_id: uuid.UUID, *, for_update: bool = False
+) -> WorkItem:
     stmt = (
         select(WorkItem)
         .where(WorkItem.id == item_id)
         .options(selectinload(WorkItem.collaborators))  # 预加载，避免异步懒加载
     )
+    if for_update:
+        # 写路径持行锁（17.2 节）：并发请求在锁后重读，版本检查才能挡下
+        # "读取 v1 → 检查通过 → 另一请求已提交" 的交错窗口
+        stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
@@ -304,7 +310,7 @@ async def update_work_item(
 ) -> WorkItemOut:
     """负责人修改内容/主执行人/DDL/协作者（乐观锁）。assignee 变化必留痕。"""
     _require_leader(actor)
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, for_update=True)
     _check_version(item, payload.version)
 
     before: dict[str, Any] = {}
@@ -358,7 +364,7 @@ async def run_command(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, command: str, version: int
 ) -> WorkItemOut:
     """状态命令（publish/start/block/unblock/submit/cancel）：状态机 + 乐观锁 + 审计。"""
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, for_update=True)
 
     if _COMMAND_ACTOR[command] == "leader":
         _require_leader(actor)

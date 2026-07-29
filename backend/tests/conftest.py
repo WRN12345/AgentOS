@@ -23,7 +23,8 @@ if not _parts.path.endswith("_test"):
 
 _redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 _rparts = urlsplit(_redis_url)
-if _rparts.path != "/15":
+# 默认切到 db 15；显式指定了非 0 库（如并行跑多套测试时的 db 13/14）则尊重环境变量
+if _rparts.path in ("", "/0"):
     os.environ["REDIS_URL"] = urlunsplit(_rparts._replace(path="/15"))
 
 import asyncio  # noqa: E402
