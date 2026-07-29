@@ -13,13 +13,9 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  SimpleMenu,
+  simpleMenuItemClass,
+} from "@/components/SimpleMenu";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { api } from "../services/api";
@@ -96,31 +92,43 @@ export default function AppLayout() {
           </span>
           <div className="flex items-center gap-1">
             <NotificationBell />
-            <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="gap-2">
-                <span>{member?.display_name ?? user?.username ?? "用户"}</span>
-                {member && (
-                  <Badge
-                    variant={member.role === "leader" ? "default" : "secondary"}
+            {/* 轻量下拉（不用 Radix）：部分环境下 Radix 触发器无响应，见 SimpleMenu 注释 */}
+            <SimpleMenu
+              contentClassName="w-48"
+              trigger={(toggle, open) => (
+                <Button variant="ghost" className="gap-2" onClick={toggle} aria-expanded={open}>
+                  <span>{member?.display_name ?? user?.username ?? "用户"}</span>
+                  {member && (
+                    <Badge
+                      variant={member.role === "leader" ? "default" : "secondary"}
+                    >
+                      {member.role === "leader" ? "负责人" : "成员"}
+                    </Badge>
+                  )}
+                  <ChevronsUpDown className="size-4 text-muted-foreground" />
+                </Button>
+              )}
+            >
+              {(close) => (
+                <>
+                  <div className="px-1.5 py-1.5 text-sm font-medium">
+                    {user?.username ?? "当前用户"}
+                  </div>
+                  <div className="-mx-1 my-1 h-px bg-border" />
+                  <button
+                    type="button"
+                    className={simpleMenuItemClass}
+                    onClick={() => {
+                      close();
+                      void handleLogout();
+                    }}
                   >
-                    {member.role === "leader" ? "负责人" : "成员"}
-                  </Badge>
-                )}
-                <ChevronsUpDown className="size-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>
-                {user?.username ?? "当前用户"}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout}>
-                <LogOut className="size-4" />
-                登出
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                    <LogOut className="size-4" />
+                    登出
+                  </button>
+                </>
+              )}
+            </SimpleMenu>
           </div>
         </header>
         <main className="flex-1 p-6">

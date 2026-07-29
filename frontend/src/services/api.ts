@@ -31,7 +31,19 @@ export const VERSION_CONFLICT_MESSAGE =
 
 /** 生成幂等键：每次用户点击生成一个，同一操作的自动重试复用同一键。 */
 export function newIdempotencyKey(): string {
-  return crypto.randomUUID();
+  // crypto.randomUUID 仅在安全上下文（HTTPS / localhost）可用；
+  // 内网部署常以 http://<内网IP> 访问（非安全上下文），需回退到 getRandomValues 手拼 v4 UUID
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
+    .slice(6, 8)
+    .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
 /** 从未知错误中提取用户可读文案。 */
