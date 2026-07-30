@@ -7,7 +7,9 @@
   无 Ollama 的环境下端到端验证链路）与 10.1 节六个具体 Agent
   （T5.4：requirement_analyst / assignment_advisor / planning_advisor；
   T5.5：workflow_risk / deliverable_review / summary_agent，
-  实现在 app.agents.specialists，提示词在 app.agents.prompts）；
+  实现在 app.agents.specialists，提示词在 app.agents.prompts），
+  以及组合能力 requirement_pipeline（需求 → 拆解 → 分配一体化流水线，
+  设计文档 2026-07-30，顺序编排三段模型调用）；
 - 所有能力输出统一走 T5.3 的 Schema（app.agents.schemas）与校验节点；
 - 校验失败的诊断信息由 SuggestionValidationError 携带，worker 落入
   agent_runs.error，不保存正式建议、不发通知（17.3 节）；
@@ -26,6 +28,7 @@ from sqlalchemy import select
 
 from app.agents.schemas.suggestion import AgentSuggestionEnvelope, parse_suggestion_output
 from app.agents.specialists.assignment import assignment_advisor_capability
+from app.agents.specialists.pipeline import requirement_pipeline_capability
 from app.agents.specialists.planning import planning_advisor_capability
 from app.agents.specialists.requirement import requirement_analyst_capability
 from app.agents.specialists.review import deliverable_review_capability
@@ -110,6 +113,7 @@ CAPABILITIES = {
     "workflow_risk": workflow_risk_capability,
     "deliverable_review": deliverable_review_capability,
     "summary_agent": summary_agent_capability,
+    "requirement_pipeline": requirement_pipeline_capability,
 }
 
 #: agent_type → 能力名。T5.4/T5.5 六个具体 Agent（10.1 节）挂在同名能力上；
@@ -122,6 +126,7 @@ AGENT_ROUTES: dict[str, str] = {
     "workflow_risk": "workflow_risk",
     "deliverable_review": "deliverable_review",
     "summary_agent": "summary_agent",
+    "requirement_pipeline": "requirement_pipeline",
 }
 
 

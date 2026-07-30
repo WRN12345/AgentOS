@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
+import type { RequirementPipelineContent } from "../../types";
 
-/** 各 suggestion_type 的结构化 content 渲染（10.1 节六个 Agent 的输出结构，见 backend/app/agents/prompts）。 */
+/** 各 suggestion_type 的结构化 content 渲染（10.1 节六个 Agent + requirement_pipeline 的输出结构，见 backend/app/agents/prompts）。 */
 
 interface ContentProps {
   suggestionType: string;
@@ -135,6 +136,85 @@ function PlanningContent({ content }: { content: Record<string, unknown> }) {
   );
 }
 
+/** requirement_pipeline 组合建议（2026-07-30 设计文档 §4.2）：方面 + 需求要素 + 拆解/分配 + 协作点。 */
+function PipelineContent({ content }: { content: Record<string, unknown> }) {
+  const pipeline = content as RequirementPipelineContent;
+  const aspects = pipeline.involved_aspects ?? [];
+  const breakdown = pipeline.work_item_breakdown ?? [];
+  const unresolved = pipeline.unresolved_mentions ?? [];
+  return (
+    <>
+      {aspects.length > 0 && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">涉及方面</h4>
+          <div className="flex flex-wrap gap-1">
+            {aspects.map((aspect) => (
+              <Badge key={aspect} variant="outline">
+                {aspect}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+      <StringList title="目标" value={pipeline.goals} />
+      <StringList title="约束" value={pipeline.constraints} />
+      <StringList title="交付物" value={pipeline.deliverables} />
+      <StringList title="验收标准" value={pipeline.acceptance_criteria} />
+      {breakdown.length > 0 && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">
+            工作项拆解与分配建议
+          </h4>
+          <ul className="space-y-1">
+            {breakdown.map((w, i) => (
+              <li key={i} className="rounded-md bg-muted px-3 py-2">
+                <span className="font-medium">{w.title}</span>
+                {w.priority && (
+                  <Badge variant="outline" className="ml-2">
+                    {w.priority}
+                  </Badge>
+                )}
+                {w.user_specified && (
+                  <Badge className="ml-1 bg-blue-100 text-blue-700">
+                    按需求指定
+                  </Badge>
+                )}
+                {w.description && (
+                  <span className="block text-muted-foreground">
+                    {w.description}
+                  </span>
+                )}
+                <span className="block text-xs text-muted-foreground">
+                  {w.suggested_due_at && `建议截止：${w.suggested_due_at}`}
+                  {w.recommended_assignee &&
+                    `${w.suggested_due_at ? "；" : ""}推荐：${w.recommended_assignee.display_name}`}
+                  {w.recommended_assignee?.reason &&
+                    `（${w.recommended_assignee.reason}）`}
+                </span>
+                {(w.candidates ?? []).length > 0 && (
+                  <span className="block text-xs text-muted-foreground">
+                    候选：
+                    {(w.candidates ?? [])
+                      .map((c) => c.display_name ?? c.member_id)
+                      .join("、")}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <StringList title="协作点" value={pipeline.collaboration_points} />
+      {unresolved.length > 0 && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800">
+          以下指定人选未能匹配到成员：{unresolved.join("、")}
+        </p>
+      )}
+      <StringList title="风险" value={pipeline.risks} />
+    </>
+  );
+}
+
 const RISK_TYPE_LABELS: Record<string, string> = {
   overdue: "逾期/临期",
   blocked: "阻塞",
@@ -240,6 +320,7 @@ const TYPE_RENDERERS: Record<
   risk: RiskContent,
   review: ReviewContent,
   summary: SummaryContent,
+  pipeline: PipelineContent,
 };
 
 /**

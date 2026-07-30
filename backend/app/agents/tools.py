@@ -33,6 +33,7 @@ from app.domains.deadlines.models import DeadlineChangeRequest
 from app.domains.deadlines.state_machine import PENDING_STATUSES as DEADLINE_PENDING_STATUSES
 from app.domains.deliverables.models import Deliverable
 from app.domains.files.models import StoredFile
+from app.domains.identity.models import User
 from app.domains.project.models import ROLE_ADMIN, MemberCapability, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
@@ -117,6 +118,35 @@ async def list_member_capabilities(session: AsyncSession) -> list[dict]:
             "confirmed": capability.confirmed,
         }
         for member, capability in rows
+    ]
+
+
+async def list_capability_tags(session: AsyncSession) -> list[str]:
+    """成员技能标签词表：member_capabilities.tag 去重集合（供需求流水线
+    约束 involved_aspects 的取值范围，保证分配匹配准确）。"""
+    rows = (
+        await session.execute(select(MemberCapability.tag).distinct().order_by(MemberCapability.tag))
+    ).all()
+    return [tag for (tag,) in rows]
+
+
+async def list_assignable_members(session: AsyncSession) -> list[dict]:
+    """可分配成员清单：display_name / username（供需求流水线解析需求文本中
+    点名的人选）。
+
+    管理员不参与工作协作、停用成员不可分配，均不进入清单。
+    """
+    rows = (
+        await session.execute(
+            select(ProjectMember.id, ProjectMember.display_name, User.username)
+            .join(User, User.id == ProjectMember.user_id)
+            .where(ProjectMember.is_active.is_(True), ProjectMember.role != ROLE_ADMIN)
+            .order_by(ProjectMember.display_name)
+        )
+    ).all()
+    return [
+        {"member_id": str(member_id), "display_name": display_name, "username": username}
+        for member_id, display_name, username in rows
     ]
 
 
@@ -439,6 +469,18 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
             kind="read_query",
             func=list_member_capabilities,
             description="查询成员能力标签、熟练度与确认状态",
+        ),
+        AgentTool(
+            name="list_capability_tags",
+            kind="read_query",
+            func=list_capability_tags,
+            description="查询成员技能标签去重词表（约束需求流水线的 involved_aspects 取值）",
+        ),
+        AgentTool(
+            name="list_assignable_members",
+            kind="read_query",
+            func=list_assignable_members,
+            description="查询可分配成员清单（display_name/username，排除管理员与停用成员）",
         ),
         AgentTool(
             name="get_member_workload",

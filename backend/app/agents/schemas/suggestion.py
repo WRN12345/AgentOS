@@ -63,6 +63,66 @@ class AgentSuggestionEnvelope(AgentSuggestionOutput):
     model: str | None = None
 
 
+# ---------- requirement_pipeline 专用载荷（设计文档 2026-07-30 §4.2） ----------
+
+
+class PipelineAssignee(BaseModel):
+    """pipeline 拆解项的推荐负责人/候选人（member_id 为真实成员 ID 字符串）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    member_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class PipelineWorkItem(BaseModel):
+    """pipeline 拆解工作项：title/description/验收标准/优先级/建议 DDL + 分配建议。
+
+    user_specified 由系统侧按"需求文本点名解析结果"权威标记（用户指定的项
+    Agent 不得更改人选）；notes 承载对指定人选的合理性提示（技能不匹配、
+    负载过高），不阻止分配。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    acceptance_criteria: str = Field(min_length=1)
+    priority: str = Field(min_length=1)
+    suggested_due_at: str | None = None
+    recommended_assignee: PipelineAssignee | None = None
+    candidates: list[PipelineAssignee] = Field(default_factory=list)
+    user_specified: bool = False
+    notes: str = ""
+
+
+class PipelineSuggestionContent(SuggestionContent):
+    """requirement_pipeline 的 content 契约（§4.2）：需求分析 + 拆解 + 分配。
+
+    extra="forbid"：该载荷形状是前端向导的依赖契约，多余字段一律拒绝。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    goals: list[str]
+    constraints: list[str]
+    deliverables: list[str]
+    acceptance_criteria: list[str]
+    involved_aspects: list[str]
+    work_item_breakdown: list[PipelineWorkItem] = Field(min_length=1)
+    collaboration_points: list[str]
+    unresolved_mentions: list[str]
+    risks: list[str]
+
+
+#: suggestion_type → content 专用载荷模型。命中的类型在通用 Schema 之外
+#: 追加一次严格载荷校验，失败同样抛 SuggestionValidationError。
+CONTENT_PAYLOAD_MODELS: dict[str, type[SuggestionContent]] = {
+    "pipeline": PipelineSuggestionContent,
+}
+
+
 class SuggestionValidationError(ValueError):
     """结构校验失败：携带诊断信息（17.3 节）。
 
@@ -106,7 +166,7 @@ def parse_suggestion_output(raw: Any, *, run_id: str) -> AgentSuggestionOutput:
                 raw_output=raw,
             ) from exc
     try:
-        return AgentSuggestionOutput.model_validate(raw)
+        output = AgentSuggestionOutput.model_validate(raw)
     except ValidationError as exc:
         raise SuggestionValidationError(
             run_id=run_id,
@@ -114,3 +174,15 @@ def parse_suggestion_output(raw: Any, *, run_id: str) -> AgentSuggestionOutput:
             errors=exc.errors(),
             raw_output=raw,
         ) from exc
+    payload_model = CONTENT_PAYLOAD_MODELS.get(output.suggestion_type)
+    if payload_model is not None:
+        try:
+            payload_model.model_validate(output.content.model_dump(mode="json"))
+        except ValidationError as exc:
+            raise SuggestionValidationError(
+                run_id=run_id,
+                stage="schema_validate",
+                errors=exc.errors(),
+                raw_output=raw,
+            ) from exc
+    return output

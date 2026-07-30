@@ -1,4 +1,4 @@
-/** Agent 建议中心的类型/状态展示元数据（10.1 节六个 Agent + echo 占位能力）。 */
+/** Agent 建议中心的类型/状态展示元数据（10.1 节六个 Agent + echo 占位能力 + requirement_pipeline 组合能力）。 */
 
 /** suggestion_type → 中文标签与 Badge 样式。 */
 export const SUGGESTION_TYPE_META: Record<
@@ -11,6 +11,7 @@ export const SUGGESTION_TYPE_META: Record<
   risk: { label: "风险提示", className: "bg-red-100 text-red-700" },
   review: { label: "初审清单", className: "bg-amber-100 text-amber-700" },
   summary: { label: "进展摘要", className: "bg-green-100 text-green-700" },
+  pipeline: { label: "需求拆解方案", className: "bg-indigo-100 text-indigo-700" },
   echo: { label: "链路自检", className: "bg-gray-100 text-gray-700" },
 };
 
@@ -47,6 +48,7 @@ export const AGENT_TYPE_LABELS: Record<string, string> = {
   workflow_risk: "风险扫描",
   deliverable_review: "交付初审",
   summary_agent: "进展摘要",
+  requirement_pipeline: "需求拆解流水线",
   echo: "链路自检",
 };
 

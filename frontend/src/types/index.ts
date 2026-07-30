@@ -363,6 +363,46 @@ export interface AgentSuggestion {
   created_at: string;
 }
 
+/* ---------- 需求拆解流水线（2026-07-30 设计文档 §4.2） ---------- */
+
+/** requirement_pipeline 建议中的成员推荐（真实 member_id + 推荐理由）。 */
+export interface PipelineAssigneeCandidate {
+  member_id: string;
+  display_name: string;
+  reason?: string;
+}
+
+/** requirement_pipeline 建议 content.work_item_breakdown 的单项。 */
+export interface PipelineBreakdownItem {
+  title: string;
+  description?: string;
+  acceptance_criteria?: string;
+  /** Agent 输出 P0–P3，前端创建时映射为 WorkItemPriority。 */
+  priority?: string;
+  suggested_due_at?: string | null;
+  recommended_assignee?: PipelineAssigneeCandidate | null;
+  candidates?: PipelineAssigneeCandidate[];
+  /** 需求文本中点名指定的人选（Agent 不更改，仅做合理性校验）。 */
+  user_specified?: boolean;
+}
+
+/** requirement_pipeline 类型建议的 content 载荷。 */
+export interface RequirementPipelineContent {
+  summary?: string;
+  rationale?: string;
+  goals?: string[];
+  constraints?: string[];
+  deliverables?: string[];
+  acceptance_criteria?: string[];
+  /** 需求涉及的方面/技术点（取自成员技能标签词表）。 */
+  involved_aspects?: string[];
+  work_item_breakdown?: PipelineBreakdownItem[];
+  collaboration_points?: string[];
+  /** 需求文本中点名但匹配不到成员的名字。 */
+  unresolved_mentions?: string[];
+  risks?: string[];
+}
+
 /** Agent 运行记录（GET /agent-runs[/{id}]，T5.7 列表/详情带错误与耗时）。 */
 export interface AgentRun {
   id: string;

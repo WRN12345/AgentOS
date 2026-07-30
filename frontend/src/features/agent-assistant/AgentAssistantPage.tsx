@@ -45,7 +45,7 @@ import {
   suggestionTypeLabel,
 } from "./constants";
 import { SuggestionContent } from "./SuggestionContent";
-import { RequirementGuidedCreateDialog } from "./RequirementGuidedCreateDialog";
+import { RequirementPipelineWizard } from "./RequirementPipelineWizard";
 
 /**
  * Agent 建议中心（13.1 节，T5.7）：建议列表 + 过滤 + 采纳/忽略反馈 +
@@ -103,7 +103,7 @@ export default function AgentAssistantPage() {
           {isLeader && (
             <Button variant="outline" onClick={() => setGuideOpen(true)}>
               <Sparkles className="size-4" />
-              需求引导创建工作项
+              需求拆解向导
             </Button>
           )}
         </CardHeader>
@@ -162,7 +162,7 @@ export default function AgentAssistantPage() {
 
       <AgentRunsCard />
 
-      <RequirementGuidedCreateDialog
+      <RequirementPipelineWizard
         open={guideOpen}
         onOpenChange={setGuideOpen}
         members={members ?? []}

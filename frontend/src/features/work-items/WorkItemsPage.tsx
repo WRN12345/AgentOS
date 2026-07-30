@@ -39,7 +39,7 @@ import type {
 } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDate } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
-import { RequirementGuidedCreateDialog } from "../agent-assistant/RequirementGuidedCreateDialog";
+import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
 
 const STATUS_OPTIONS: WorkItemStatus[] = [
   "DRAFT",
@@ -103,7 +103,7 @@ export default function WorkItemsPage() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setGuideOpen(true)}>
               <Sparkles className="size-4" />
-              AI 需求引导
+              AI 需求拆解
             </Button>
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
@@ -232,7 +232,7 @@ export default function WorkItemsPage() {
         onOpenChange={setCreateOpen}
         members={members ?? []}
       />
-      <RequirementGuidedCreateDialog
+      <RequirementPipelineWizard
         open={guideOpen}
         onOpenChange={setGuideOpen}
         members={members ?? []}
