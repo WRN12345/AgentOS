@@ -135,6 +135,31 @@ async def test_admin_disable_self_follows_leader_rules(
 # ---------- 管理员账号保护：负责人/成员不能对管理员进行操作 ----------
 
 
+async def test_member_list_hides_admin_from_non_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """GET /members：leader/成员的列表不含 admin；admin 可见所有人。"""
+    ctx = await _make_ctx(client, project)
+    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    alice_headers = ctx["alice_headers"]
+    admin_headers = ctx["admin_headers"]
+    assert isinstance(leader_headers, dict)
+    assert isinstance(alice_headers, dict)
+    assert isinstance(admin_headers, dict)
+
+    for headers in (leader_headers, alice_headers):
+        resp = await client.get("/api/v1/members", headers=headers)
+        assert resp.status_code == 200, resp.text
+        roles = {m["role"] for m in resp.json()}
+        assert "admin" not in roles
+        assert all(m["id"] != str(admin.id) for m in resp.json())
+
+    resp = await client.get("/api/v1/members", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    assert any(m["id"] == str(admin.id) for m in resp.json())
+
+
 async def test_leader_cannot_update_admin(
     client: httpx.AsyncClient, project: Project
 ) -> None:

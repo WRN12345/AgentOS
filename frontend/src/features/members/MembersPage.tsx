@@ -92,6 +92,11 @@ export default function MembersPage() {
   const freshSelf =
     members?.find((m) => m.id === selfMember?.id) ?? selfMember;
 
+  // 负责人/成员的列表不出现管理员；管理员可见所有人（后端同样过滤，此处兜底）
+  const visibleMembers = isAdmin
+    ? (members ?? [])
+    : (members ?? []).filter((m) => m.role !== "admin");
+
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -140,7 +145,7 @@ export default function MembersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(members ?? []).map((m) => {
+              {visibleMembers.map((m) => {
                 const hasUnconfirmed = m.capabilities.some(
                   (c) => !c.confirmed,
                 );

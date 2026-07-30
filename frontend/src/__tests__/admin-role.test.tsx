@@ -86,14 +86,16 @@ describe("管理员角色页面可见性", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("成员管理页：leader 视角下 admin 行无编辑/禁用/确认按钮", async () => {
+  it("成员管理页：leader 视角不出现管理员，普通成员行操作按钮正常", async () => {
     signInAs(leader);
     stubGet({ "/members": members });
 
     renderWithProviders(<MembersPage />);
 
-    expect(await screen.findByText("王管理")).toBeInTheDocument();
-    // leader 可管理普通成员（leader 本人行 + 爱丽丝行），但 admin 行无操作按钮
+    expect(await screen.findByText("爱丽丝")).toBeInTheDocument();
+    // admin 行整个不渲染
+    expect(screen.queryByText("王管理")).not.toBeInTheDocument();
+    // 仅剩 leader 本人行与爱丽丝行有操作按钮
     expect(screen.getAllByRole("button", { name: /编辑/ })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: /禁用/ })).toHaveLength(2);
   });

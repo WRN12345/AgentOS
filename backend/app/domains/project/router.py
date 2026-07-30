@@ -35,10 +35,10 @@ router = APIRouter(prefix="/members", tags=["members"])
 
 @router.get("", response_model=list[MemberOut])
 async def list_members_endpoint(
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberOut]:
-    return await list_members(session)
+    return await list_members(session, actor)
 
 
 @router.post("", response_model=MemberCreatedOut, status_code=201)

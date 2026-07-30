@@ -133,13 +133,15 @@ async def _active_work_item_counts(session: AsyncSession) -> dict[uuid.UUID, int
 # ---------- 用例 ----------
 
 
-async def list_members(session: AsyncSession) -> list[MemberOut]:
-    """全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。"""
-    members = (
-        (await session.execute(select(ProjectMember).order_by(ProjectMember.created_at)))
-        .scalars()
-        .all()
-    )
+async def list_members(session: AsyncSession, actor: ProjectMember) -> list[MemberOut]:
+    """全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。
+
+    管理员账号仅管理员可见：负责人/成员的成员列表不含 admin。
+    """
+    stmt = select(ProjectMember).order_by(ProjectMember.created_at)
+    if actor.role != ROLE_ADMIN:
+        stmt = stmt.where(ProjectMember.role != ROLE_ADMIN)
+    members = (await session.execute(stmt)).scalars().all()
     counts = await _active_work_item_counts(session)
     out: list[MemberOut] = []
     for member in members:
