@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     # 到期/逾期提醒扫描（T3.6，4.2 节）：scheduler 触发周期与"临期"判定窗口
     due_scan_interval_seconds: float = 300.0
     due_soon_horizon_hours: int = 24
-    # Workflow Risk Agent 周期风险扫描（T5.5，4.2 节逾期风险扫描）触发周期
-    agent_risk_scan_interval_seconds: float = 3600.0
+    # Workflow Risk Agent 周期风险扫描（T5.5，4.2 节逾期风险扫描）触发周期，默认 24 小时
+    agent_risk_scan_interval_seconds: float = 86400.0
 
     # 认证（第 16 章）：JWT 密钥与令牌有效期；密钥走环境变量，禁止硬编码真实密钥
     jwt_secret: str = "dev-jwt-secret-change-in-production"

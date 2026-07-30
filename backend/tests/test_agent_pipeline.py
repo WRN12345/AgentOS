@@ -385,8 +385,8 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
 async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """拆解段返回非法 JSON → run=failed + json_parse 诊断，不产生正式建议。"""
-    provider = _ScriptedProvider([_analysis_stage(), "{not json"])
+    """拆解段返回非法 JSON（重试后仍非法）→ run=failed + json_parse 诊断，不产生正式建议。"""
+    provider = _ScriptedProvider([_analysis_stage(), "{not json", "{still not json"])
     _patch_provider(monkeypatch, provider)
     monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 一次定终态（17.3 节）
 
@@ -406,6 +406,38 @@ async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
                 await session.execute(select(func.count()).select_from(AgentSuggestion))
             ).scalar_one()
             assert suggestion_count == 0
+    finally:
+        await redis_client.aclose()
+
+
+async def test_pipeline_stage_retry_recovers_from_invalid_json(
+    project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """拆解段首次输出非法 JSON → 带解析错误反馈重试一次 → 恢复成功（17.3 节）。"""
+    _, zhangsan = await add_member(project, "zhangsan", "Zhang123!", display_name="张三")
+    _, lisi = await add_member(project, "lisi", "Li123!", display_name="李四")
+    provider = _ScriptedProvider(
+        [
+            _analysis_stage(),
+            '{"work_item_breakdown": [{"title": "缺括号"',  # 非法 JSON：对象未闭合
+            _breakdown_stage(),
+            _assign_stage(zhangsan, lisi),
+        ]
+    )
+    _patch_provider(monkeypatch, provider)
+
+    redis_client = create_redis_client()
+    try:
+        run = await _trigger(redis_client, "搭建 RAG 问答平台")
+        await _run_once(redis_client, run.id, prompt="搭建 RAG 问答平台")
+
+        async with async_session_factory() as session:
+            final = await session.get(AgentRun, run.id)
+            assert final is not None and final.status == "succeeded", final.error
+
+        # 共 4 次模型调用：拆解段多了一次重试，且重试提示词带解析错误反馈
+        assert len(provider.calls) == 4
+        assert "无法解析为合法 JSON" in provider.calls[2]["prompt"]
     finally:
         await redis_client.aclose()
 

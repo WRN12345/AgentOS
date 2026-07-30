@@ -1,4 +1,4 @@
-# AgentOS 备份与恢复脚本
+AgentOS 备份与恢复脚本
 
 对应设计文档 `docs/2026-07-26-agentos-workflow-platform-design.md` 19.4 节与任务 T6.5。
 

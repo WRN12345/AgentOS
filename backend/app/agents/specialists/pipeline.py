@@ -13,8 +13,10 @@ ProjectMember（排除 role=admin 与 is_active=false），作为 hard constrain
 传入分配段；系统侧权威标记 user_specified=true（Agent 不得更改指定），合理性
 提示只落在该成员的 reason/notes；匹配不到的名字列入 unresolved_mentions[]。
 
-任一段模型输出不是合法 JSON 对象时原样透传，由 validate_output 产生
-json_parse / schema_validate 诊断（与 build_output 同一语义，17.3 节）。
+任一段模型输出不是合法 JSON 对象时，先带解析错误反馈重试一次（模型偶发
+输出非法 JSON，如同类对象缺括号）；重试后仍非法才原样透传，由
+validate_output 产生 json_parse / schema_validate 诊断（与 build_output
+同一语义，17.3 节）。
 """
 
 import json
@@ -77,6 +79,40 @@ def _load_stage(raw: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+#: 每段模型调用的最大尝试次数：模型偶发输出非法 JSON（如同类对象缺括号），
+#: 带解析错误反馈重试一次通常可恢复；仍失败则透传原文走 json_parse 诊断。
+_STAGE_MAX_ATTEMPTS = 2
+
+
+async def _call_stage_json(*, system: str, user_prompt: str) -> str:
+    """调用一段模型并要求合法 JSON 对象；失败时带错误反馈重试，最终返回原文。
+
+    返回值语义与 call_model_json 一致：合法 JSON 对象文本，或（重试后仍
+    非法时）最后一次的原始输出，由调用方透传给 validate_output 诊断。
+    """
+    prompt = user_prompt
+    raw = ""
+    for _ in range(_STAGE_MAX_ATTEMPTS):
+        raw = await call_model_json(system=system, user_prompt=prompt)
+        if _load_stage(raw) is not None:
+            break
+        error = _stage_parse_error(raw)
+        prompt = (
+            f"{user_prompt}\n\n【上次输出无法解析为合法 JSON 对象：{error}。"
+            "请检查括号与引号配对，仅重新输出一个合法 JSON 对象，不要输出任何其他内容。】"
+        )
+    return raw
+
+
+def _stage_parse_error(raw: str) -> str:
+    """提取段落输出的 JSON 解析错误描述，用于重试反馈。"""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return str(exc)
+    return "输出不是 JSON 对象" if not isinstance(payload, dict) else ""
+
+
 async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     """顺序执行 需求分析 → 拆解 → 分配 三段，合并为一条 pipeline 建议。"""
     async with async_session_factory() as session:
@@ -92,7 +128,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     specified, unresolved = resolve_specified_assignees(requirement, assignable)
 
     # 1. 需求分析：目标/约束/交付物/验收标准 + involved_aspects（限词表取值）
-    raw_analysis = await call_model_json(
+    raw_analysis = await _call_stage_json(
         system=pipeline_prompts.ANALYZE_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_analyze_prompt(
             project_name=project_name,
@@ -105,7 +141,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         return raw_analysis  # 透传：validate_output 抛 json_parse 诊断
 
     # 2. 拆解：work_item_breakdown[] + collaboration_points[]
-    raw_breakdown = await call_model_json(
+    raw_breakdown = await _call_stage_json(
         system=pipeline_prompts.BREAKDOWN_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_breakdown_prompt(
             project_name=project_name,
@@ -121,7 +157,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     breakdown = breakdown_stage.get("work_item_breakdown") or []
 
     # 3. 分配：复用 assignment 的成员能力/负载数据，指定人选为硬约束
-    raw_assign = await call_model_json(
+    raw_assign = await _call_stage_json(
         system=pipeline_prompts.ASSIGN_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_assign_prompt(
             project_name=project_name,

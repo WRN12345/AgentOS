@@ -39,7 +39,7 @@ cp .env.example .env   # 然后按下表逐项修改
 | `LOG_DIR` | 容器内日志目录（挂载 `./data/logs`） | 默认即可 |
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务周期 | 默认即可 |
 | `DUE_SCAN_INTERVAL_SECONDS` | 到期/逾期提醒扫描周期（秒） | 默认 300 |
-| `AGENT_RISK_SCAN_INTERVAL_SECONDS` | 风险扫描 Agent 周期（秒） | 默认 3600 |
+| `AGENT_RISK_SCAN_INTERVAL_SECONDS` | 风险扫描 Agent 周期（秒） | 默认 86400（24 小时） |
 | `STORAGE_BACKEND` / `STORAGE_ROOT` | 文件存储后端（首版 `local`）与容器内根目录 | 默认即可 |
 | `UPLOAD_MAX_BYTES` / `UPLOAD_ALLOWED_EXTENSIONS` / `UPLOAD_ALLOWED_MIME_TYPES` | 上传大小上限与类型白名单 | 按需收紧 |
 | `JWT_SECRET` | JWT 签名密钥 | **必须换强随机值** |

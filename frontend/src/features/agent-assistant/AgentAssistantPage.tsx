@@ -55,7 +55,10 @@ export default function AgentAssistantPage() {
   const isLeader = useIsLeader();
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [guideOpen, setGuideOpen] = useState(false);
+  // 拆解向导：resume 为 null 表示新建模式；传入既有 pipeline 建议则为恢复模式
+  const [wizard, setWizard] = useState<{ resume: AgentSuggestion | null } | null>(
+    null,
+  );
 
   // 16 节：使用云端模型时提示"数据将发送至外部服务"
   const { data: config } = useQuery({
@@ -101,7 +104,7 @@ export default function AgentAssistantPage() {
             </CardDescription>
           </div>
           {isLeader && (
-            <Button variant="outline" onClick={() => setGuideOpen(true)}>
+            <Button variant="outline" onClick={() => setWizard({ resume: null })}>
               <Sparkles className="size-4" />
               需求拆解向导
             </Button>
@@ -153,7 +156,11 @@ export default function AgentAssistantPage() {
           ) : (
             <div className="space-y-3">
               {suggestions.map((s) => (
-                <SuggestionCard key={s.id} suggestion={s} />
+                <SuggestionCard
+                  key={s.id}
+                  suggestion={s}
+                  onAdoptPipeline={(target) => setWizard({ resume: target })}
+                />
               ))}
             </div>
           )}
@@ -163,17 +170,27 @@ export default function AgentAssistantPage() {
       <AgentRunsCard />
 
       <RequirementPipelineWizard
-        open={guideOpen}
-        onOpenChange={setGuideOpen}
+        open={wizard !== null}
+        onOpenChange={(next) => {
+          if (!next) setWizard(null);
+        }}
         members={members ?? []}
         llmIsExternal={config?.llm_is_external ?? false}
+        resumeSuggestion={wizard?.resume ?? null}
       />
     </div>
   );
 }
 
 /** 单条建议卡片：类型/状态徽标 + 摘要，展开查看完整内容与反馈操作。 */
-function SuggestionCard({ suggestion }: { suggestion: AgentSuggestion }) {
+function SuggestionCard({
+  suggestion,
+  onAdoptPipeline,
+}: {
+  suggestion: AgentSuggestion;
+  /** pipeline 建议的"采纳"：打开拆解向导确认后批量创建工作项。 */
+  onAdoptPipeline: (suggestion: AgentSuggestion) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const isLeader = useIsLeader();
   const queryClient = useQueryClient();
@@ -291,13 +308,19 @@ function SuggestionCard({ suggestion }: { suggestion: AgentSuggestion }) {
             </p>
             {isLeader && suggestion.review_status === "pending" && (
               <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  disabled={feedback.isPending}
-                  onClick={() => feedback.mutate("accepted")}
-                >
-                  采纳
-                </Button>
+                {suggestion.suggestion_type === "pipeline" ? (
+                  <Button size="sm" onClick={() => onAdoptPipeline(suggestion)}>
+                    采纳并创建工作项
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={feedback.isPending}
+                    onClick={() => feedback.mutate("accepted")}
+                  >
+                    采纳
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"

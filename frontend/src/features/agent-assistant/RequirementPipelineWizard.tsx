@@ -71,6 +71,11 @@ interface RequirementPipelineWizardProps {
   members: Member[];
   /** 16 节：外部模型服务时在向导内同步提示。 */
   llmIsExternal: boolean;
+  /**
+   * 从既有 pipeline 建议恢复（建议中心"采纳并创建工作项"入口）：
+   * 跳过输入需求与等待分析，直接用该建议的拆解结果进入确认步骤。
+   */
+  resumeSuggestion?: AgentSuggestion | null;
 }
 
 /** Agent 输出 P0–P3，映射为工作项优先级；兼容直接输出枚举值的情况。 */
@@ -99,6 +104,24 @@ function normalizeCandidate(value: unknown): PipelineAssigneeCandidate | null {
   };
 }
 
+/** 把 pipeline 建议的拆解结果映射为可编辑草稿（key 复用幂等键生成器，兼容非安全上下文）。 */
+function draftsFromContent(content: RequirementPipelineContent): DraftItem[] {
+  return (content.work_item_breakdown ?? []).map((item) => {
+    const recommended = normalizeCandidate(item.recommended_assignee);
+    return {
+      key: newIdempotencyKey(),
+      title: item.title ?? "",
+      description: item.description ?? "",
+      acceptanceCriteria: item.acceptance_criteria ?? "",
+      priority: mapPriority(item.priority),
+      dueAt: item.suggested_due_at ?? "",
+      assigneeId: recommended?.member_id ?? "",
+      recommended,
+      userSpecified: item.user_specified ?? false,
+    };
+  });
+}
+
 /**
  * 需求拆解流水线向导（2026-07-30 设计文档 §5），取代原 RequirementGuidedCreateDialog。
  *
@@ -107,12 +130,17 @@ function normalizeCandidate(value: unknown): PipelineAssigneeCandidate | null {
  * 确认/编辑拆解出的多个工作项 → 前端逐项调既有 POST /work-items 批量创建，
  * 全部成功后写 accepted 反馈；忽略只写 ignored 反馈，不产生业务写入
  * （原则 2：人类决定，Agent 建议）。
+ *
+ * 两种入口：新建模式（工作项页/建议中心顶部按钮，走完整四步）；
+ * 恢复模式（建议中心对 pending 的 pipeline 建议点"采纳并创建工作项"，
+ * 传入 resumeSuggestion，跳过输入与等待，直接确认其拆解结果）。
  */
 export function RequirementPipelineWizard({
   open,
   onOpenChange,
   members,
   llmIsExternal,
+  resumeSuggestion = null,
 }: RequirementPipelineWizardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -182,24 +210,19 @@ export function RequirementPipelineWizard({
     setSuggestion(found);
     const content = found.content as RequirementPipelineContent;
     setPipelineContent(content);
-    setDrafts(
-      (content.work_item_breakdown ?? []).map((item) => {
-        const recommended = normalizeCandidate(item.recommended_assignee);
-        return {
-          key: crypto.randomUUID(),
-          title: item.title ?? "",
-          description: item.description ?? "",
-          acceptanceCriteria: item.acceptance_criteria ?? "",
-          priority: mapPriority(item.priority),
-          dueAt: item.suggested_due_at ?? "",
-          assigneeId: recommended?.member_id ?? "",
-          recommended,
-          userSpecified: item.user_specified ?? false,
-        };
-      }),
-    );
+    setDrafts(draftsFromContent(content));
     setStep("confirm");
   }, [step, suggestions, runId]);
+
+  // 从既有建议恢复（建议中心"采纳并创建工作项"）：跳过输入/等待，直接进入确认步骤
+  useEffect(() => {
+    if (!open || !resumeSuggestion) return;
+    const content = resumeSuggestion.content as RequirementPipelineContent;
+    setSuggestion(resumeSuggestion);
+    setPipelineContent(content);
+    setDrafts(draftsFromContent(content));
+    setStep("confirm");
+  }, [open, resumeSuggestion]);
 
   // 反馈（best-effort）：采纳/忽略只写 agent_suggestions，不产生业务写入
   const sendFeedback = async (action: "accepted" | "ignored") => {
@@ -230,7 +253,7 @@ export function RequirementPipelineWizard({
     setDrafts((prev) => [
       ...prev,
       {
-        key: crypto.randomUUID(),
+        key: newIdempotencyKey(),
         title: "",
         description: "",
         acceptanceCriteria: "",

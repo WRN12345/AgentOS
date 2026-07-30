@@ -5,7 +5,7 @@
 - `example.ping`：工程链路示例任务（SCHEDULER_EXAMPLE_INTERVAL_SECONDS）；
 - `due.scan`：到期/逾期提醒扫描（DUE_SCAN_INTERVAL_SECONDS，默认 300s，T3.6）；
 - `agent.risk_scan`：Workflow Risk Agent 周期风险扫描
-  （AGENT_RISK_SCAN_INTERVAL_SECONDS，默认 3600s，T5.5）。
+  （AGENT_RISK_SCAN_INTERVAL_SECONDS，默认 86400s 即 24 小时，T5.5）。
 
 单循环按各自周期触发：记录上次触发时间，到达周期即 enqueue，
 睡眠取各周期的最小值。阶段 5 的日报等调度如需周期化也在此同样挂接。
