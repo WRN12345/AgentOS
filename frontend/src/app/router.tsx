@@ -3,6 +3,7 @@ import AppLayout from "../components/AppLayout";
 import RequireAuth from "../components/RequireAuth";
 import LoginPage from "../features/auth/LoginPage";
 import DashboardPage from "../features/dashboard/DashboardPage";
+import TeamOverviewPage from "../features/dashboard/TeamOverviewPage";
 import MembersPage from "../features/members/MembersPage";
 import WorkItemsPage from "../features/work-items/WorkItemsPage";
 import WorkItemDetailPage from "../features/work-items/WorkItemDetailPage";
@@ -21,6 +22,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <DashboardPage /> },
+      { path: "team-overview", element: <TeamOverviewPage /> },
       { path: "members", element: <MembersPage /> },
       { path: "work-items", element: <WorkItemsPage /> },
       { path: "work-items/:id", element: <WorkItemDetailPage /> },

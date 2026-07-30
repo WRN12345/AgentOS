@@ -95,8 +95,8 @@ describe("成员核心路径", () => {
     expect(screen.getByText("待开始任务")).toBeInTheDocument();
     expect(screen.getByText(/任务「编写评测脚本」/)).toBeInTheDocument();
 
-    // 看板状态分布：进行中 1、待开始 1
-    expect(screen.getByText("全员工作量")).toBeInTheDocument();
+    // 我的待办列表渲染（团队视角内容已移至团队概览页）
+    expect(screen.getByText("我的待办")).toBeInTheDocument();
 
     // 权限差异：项目时间线（审计事件流）仅负责人可见
     expect(screen.queryByText("项目时间线")).not.toBeInTheDocument();

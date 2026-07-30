@@ -19,14 +19,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 import { api } from "../../services/api";
 import type {
   AgentConfig,
   AgentSuggestion,
   ApprovalItem,
   Member,
-  WorkItemStatus,
   WorkItemSummary,
 } from "../../types";
 import {
@@ -34,76 +32,21 @@ import {
   formatDate,
   formatDateTime,
 } from "../work-items/constants";
-import { useAuthStore, useIsAdmin, useIsLeader } from "../../app/store";
-import { roleBadgeVariant, roleLabel } from "../../lib/roles";
+import { useAuthStore, useIsLeader } from "../../app/store";
 import {
   SUGGESTION_TYPE_META,
   suggestionTypeLabel,
 } from "../agent-assistant/constants";
 import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
 import { TodoSection } from "./TodoSection";
-import { TimelineSection } from "./TimelineSection";
-
-const STATUS_ORDER: WorkItemStatus[] = [
-  "DRAFT",
-  "READY",
-  "IN_PROGRESS",
-  "BLOCKED",
-  "IN_REVIEW",
-  "COMPLETED",
-  "CANCELLED",
-];
-
-/** 未完成任务状态（"我的待办"与到期统计共用）。 */
-const ACTIVE_STATUSES: WorkItemStatus[] = [
-  "READY",
-  "IN_PROGRESS",
-  "BLOCKED",
-  "IN_REVIEW",
-];
-
-/** 距今天数（按截止时间计）。 */
-function daysUntil(dueAt: string): number {
-  const ms = new Date(dueAt).getTime() - Date.now();
-  return Math.ceil(ms / (24 * 60 * 60 * 1000));
-}
-
-/** 顶部统计卡：整卡可点击跳转到对应页面。 */
-function StatCard({
-  label,
-  value,
-  to,
-  alert = false,
-}: {
-  label: string;
-  value: number;
-  to: string;
-  alert?: boolean;
-}) {
-  return (
-    <Link to={to}>
-      <Card className="h-full transition-colors hover:bg-accent/50">
-        <CardHeader className="p-4 pb-2">
-          <CardDescription>{label}</CardDescription>
-          <CardTitle
-            className={cn("text-2xl", alert && value > 0 && "text-destructive")}
-          >
-            {value}
-          </CardTitle>
-        </CardHeader>
-      </Card>
-    </Link>
-  );
-}
+import { ACTIVE_STATUSES, StatCard, daysUntil } from "./shared";
 
 /**
- * 个人工作台：顶部统计卡 + 我的待办 + AI 动态，下方保留团队概览
- * （状态分布、全员工作量、即将到期、项目时间线，13.2 节）。
- * 全部由既有列表接口前端聚合，无后端改动。
+ * 个人工作台：顶部统计卡 + 我的待办 + AI 动态（一屏内展示，列表内部滚动）。
+ * 团队视角内容已拆至 /team-overview。
  */
 export default function DashboardPage() {
   const isLeader = useIsLeader();
-  const isAdmin = useIsAdmin();
   const selfMember = useAuthStore((s) => s.member);
   // AI 需求拆解向导：resume 为 null 是新建模式，传入建议是恢复模式（"去确认"入口）
   const [wizard, setWizard] = useState<{ resume: AgentSuggestion | null } | null>(
@@ -171,28 +114,12 @@ export default function DashboardPage() {
   );
   const suggestionFeed = (suggestions ?? []).slice(0, 5);
 
-  // 状态分布
-  const statusCount = new Map<WorkItemStatus, number>();
-  for (const item of all) {
-    statusCount.set(item.status, (statusCount.get(item.status) ?? 0) + 1);
-  }
-
-  // 即将到期：未完成且 7 天内截止
-  const upcoming = all
-    .filter(
-      (i) =>
-        i.due_at &&
-        ACTIVE_STATUSES.includes(i.status) &&
-        daysUntil(i.due_at) <= 7,
-    )
-    .sort((a, b) => (a.due_at! < b.due_at! ? -1 : 1));
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">工作台</h1>
         <p className="text-sm text-muted-foreground">
-          我的任务、审批与 AI 动态一览；团队整体情况见下方团队概览
+          我的任务、审批与 AI 动态一览；团队整体情况见「团队概览」
         </p>
       </div>
 
@@ -224,7 +151,7 @@ export default function DashboardPage() {
           {/* 待处理中心：需要当前用户动作的事项聚合（13.2 节） */}
           <TodoSection />
 
-          {/* 我的待办：我作为主执行人的未完成任务，按 DDL 升序 */}
+          {/* 我的待办：我作为主执行人的未完成任务，按 DDL 升序；超长内部滚动 */}
           <Card>
             <CardHeader>
               <CardTitle>我的待办</CardTitle>
@@ -232,7 +159,7 @@ export default function DashboardPage() {
                 我负责的任务，按截止时间排序，逾期标红
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="max-h-80 overflow-y-auto">
               {myTodo.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   暂无进行中的任务
@@ -284,13 +211,13 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        {/* AI 动态：最近的建议；pipeline 待反馈的可直接打开向导确认 */}
+        {/* AI 动态：最近的建议；pipeline 待反馈的可直接打开向导确认；超长内部滚动 */}
         <Card className="self-start">
           <CardHeader>
             <CardTitle>AI 动态</CardTitle>
             <CardDescription>最近的 AI 建议与待确认事项</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="max-h-96 overflow-y-auto">
             {suggestionFeed.length === 0 ? (
               <p className="text-sm text-muted-foreground">暂无 AI 建议</p>
             ) : (
@@ -339,141 +266,6 @@ export default function DashboardPage() {
             )}
           </CardContent>
         </Card>
-      </div>
-
-      {/* 团队概览：原团队看板内容，保持不变 */}
-      <div className="space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold">团队概览</h2>
-          <p className="text-sm text-muted-foreground">
-            全团队的任务状态、工作量与近期动态
-          </p>
-        </div>
-
-        {/* 状态分布 */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
-          {STATUS_ORDER.map((s) => (
-            <Card key={s}>
-              <CardHeader className="p-4 pb-2">
-                <CardDescription>{STATUS_META[s].label}</CardDescription>
-                <CardTitle className="text-2xl">
-                  {statusCount.get(s) ?? 0}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          {/* 全员工作量 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>全员工作量</CardTitle>
-              <CardDescription>每名成员当前的活跃任务数</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>成员</TableHead>
-                    <TableHead>角色</TableHead>
-                    <TableHead className="text-right">活跃任务</TableHead>
-                    <TableHead className="text-right">每周可投入</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(members ?? [])
-                    // 管理员不参与工作协作，不进入工作量统计
-                    .filter((m) => m.is_active && m.role !== "admin")
-                    .map((m) => (
-                      <TableRow key={m.id}>
-                        <TableCell className="font-medium">
-                          {m.display_name}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={roleBadgeVariant(m.role)}>
-                            {roleLabel(m.role)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {m.active_work_items}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {m.weekly_available_hours != null
-                            ? `${m.weekly_available_hours}h`
-                            : "—"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* 即将到期 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>即将到期</CardTitle>
-              <CardDescription>
-                未完成且 7 天内截止的任务（含已逾期）
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {upcoming.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  暂无即将到期的任务
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>标题</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>主执行人</TableHead>
-                      <TableHead>截止时间</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {upcoming.map((i) => {
-                      const overdue = daysUntil(i.due_at!) < 0;
-                      return (
-                        <TableRow key={i.id}>
-                          <TableCell>
-                            <Link
-                              to={`/work-items/${i.id}`}
-                              className="font-medium text-primary hover:underline"
-                            >
-                              {i.title}
-                            </Link>
-                          </TableCell>
-                          <TableCell>
-                            <Badge className={STATUS_META[i.status].className}>
-                              {STATUS_META[i.status].label}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{i.assignee.display_name}</TableCell>
-                          <TableCell>
-                            <span
-                              className={
-                                overdue ? "font-medium text-destructive" : ""
-                              }
-                            >
-                              {formatDate(i.due_at)}
-                              {overdue && "（已逾期）"}
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* 项目时间线：审计事件流（13.1 节，负责人与管理员只读可见） */}
-        {(isLeader || isAdmin) && <TimelineSection />}
       </div>
 
       <RequirementPipelineWizard

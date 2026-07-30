@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  BarChart3,
   Bot,
   ChevronsUpDown,
   ClipboardCheck,
@@ -31,6 +32,7 @@ import type { AgentConfig, Member } from "../types";
 
 const navItems = [
   { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
+  { to: "/team-overview", label: "团队概览", icon: BarChart3, end: false },
   { to: "/members", label: "成员与能力", icon: Users, end: false },
   { to: "/work-items", label: "任务", icon: ListTodo, end: false },
   { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },

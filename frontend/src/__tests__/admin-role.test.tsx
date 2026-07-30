@@ -12,7 +12,7 @@ vi.mock("../services/api", async (importOriginal) => {
 import WorkItemsPage from "../features/work-items/WorkItemsPage";
 import MembersPage from "../features/members/MembersPage";
 import ApprovalsPage from "../features/approvals/ApprovalsPage";
-import DashboardPage from "../features/dashboard/DashboardPage";
+import TeamOverviewPage from "../features/dashboard/TeamOverviewPage";
 import { stubGet } from "../test/mock-api";
 import { renderWithProviders, signInAs } from "../test/render";
 import {
@@ -143,7 +143,7 @@ describe("管理员角色页面可见性", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("团队看板：全员工作量表不包含 admin（管理员不参与协作）", async () => {
+  it("团队概览：全员工作量表不包含 admin（管理员不参与协作）", async () => {
     signInAs(admin);
     stubGet({
       "/members": members,
@@ -154,7 +154,7 @@ describe("管理员角色页面可见性", () => {
       "/deadline-change-requests?role=mine": [],
     });
 
-    renderWithProviders(<DashboardPage />);
+    renderWithProviders(<TeamOverviewPage />);
 
     expect(await screen.findByText("全员工作量")).toBeInTheDocument();
     // leader 与普通成员出现在工作量表，admin 不出现
