@@ -65,7 +65,7 @@ import {
 } from "../collaboration/constants";
 import { DeliveryReviewSection } from "./DeliveryReviewSection";
 
-/** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更；管理员只读待审批列表；成员查看并撤销自己的申请。 */
+/** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更并可查已处理记录；管理员只读待审批列表与审批记录；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
   const isLeader = useIsLeader();
   const isAdmin = useIsAdmin();
@@ -83,12 +83,18 @@ export default function ApprovalsPage() {
       <Tabs defaultValue={canSeePending ? "pending" : "mine"} className="space-y-4">
         <TabsList>
           {canSeePending && <TabsTrigger value="pending">待我审批</TabsTrigger>}
+          {canSeePending && <TabsTrigger value="processed">审批记录</TabsTrigger>}
           {isLeader && <TabsTrigger value="delivery">交付审核</TabsTrigger>}
           <TabsTrigger value="mine">我的申请</TabsTrigger>
         </TabsList>
         {canSeePending && (
           <TabsContent value="pending">
             <PendingApprovals />
+          </TabsContent>
+        )}
+        {canSeePending && (
+          <TabsContent value="processed">
+            <ProcessedApprovals />
           </TabsContent>
         )}
         {isLeader && (
@@ -137,6 +143,8 @@ function PendingApprovals() {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    // 审批通过后该申请会进入「审批记录」列表，同步失效
+    queryClient.invalidateQueries({ queryKey: ["approvals", "processed"] });
     queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
     queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
     queryClient.invalidateQueries({ queryKey: ["work-items"] });
@@ -506,6 +514,94 @@ function PendingApprovals() {
           </Form>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/** 已处理审批记录（GET /approvals/processed，leader/admin 可见）：按处理时间倒序，只读。 */
+function ProcessedApprovals() {
+  const { data: processed, isLoading } = useQuery({
+    queryKey: ["approvals", "processed"],
+    queryFn: () => api.get<ApprovalItem[]>("/approvals/processed"),
+  });
+
+  if (isLoading) {
+    return <p className="text-sm text-muted-foreground">加载中…</p>;
+  }
+
+  if (!processed || processed.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>审批记录</CardTitle>
+          <CardDescription>暂无审批记录</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {processed.map((item) => {
+        const statusMeta =
+          TRANSFER_STATUS_META[
+            item.status as keyof typeof TRANSFER_STATUS_META
+          ];
+        return (
+          <Card key={`${item.kind}-${item.id}`}>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      item.kind === "transfer" ? "default" : "secondary"
+                    }
+                  >
+                    {item.kind === "transfer" ? "转派申请" : "DDL 变更"}
+                  </Badge>
+                  <Link
+                    to={`/work-items/${item.work_item_id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {item.work_item_title}
+                  </Link>
+                  {statusMeta && (
+                    <Badge className={statusMeta.className}>
+                      {statusMeta.label}
+                    </Badge>
+                  )}
+                </div>
+                <span className="text-sm text-muted-foreground">
+                  申请于 {formatDateTime(item.created_at)}
+                </span>
+              </div>
+              <CardDescription>{item.summary}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
+                <div>
+                  <h3 className="mb-1 font-medium text-muted-foreground">
+                    申请人
+                  </h3>
+                  {item.requested_by.display_name}
+                </div>
+                <div>
+                  <h3 className="mb-1 font-medium text-muted-foreground">
+                    处理人
+                  </h3>
+                  {item.approved_by?.display_name ?? "—"}
+                </div>
+                <div>
+                  <h3 className="mb-1 font-medium text-muted-foreground">
+                    处理时间
+                  </h3>
+                  {item.approved_at ? formatDateTime(item.approved_at) : "—"}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
   );
 }

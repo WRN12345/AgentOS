@@ -238,6 +238,9 @@ export interface ApprovalItem {
   target_id: string | null;
   old_due_at: string | null;
   new_due_at: string | null;
+  /** 已处理记录（GET /approvals/processed）额外返回：处理人与处理时间；发起人撤销时为 null。 */
+  approved_by?: MemberBrief | null;
+  approved_at?: string | null;
 }
 
 /* ---------- 阶段 4：交付与审核 ---------- */
