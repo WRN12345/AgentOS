@@ -88,6 +88,11 @@ async def _start_item(
         f"/api/v1/work-items/{item_id}/publish", json={"version": 1}, headers=leader_headers
     )
     assert resp.status_code == 200, resp.text
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    resp = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers
+    )
+    assert resp.status_code == 200, resp.text
     resp = await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": 2}, headers=alice_headers
     )

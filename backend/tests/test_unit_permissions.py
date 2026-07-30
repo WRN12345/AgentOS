@@ -42,6 +42,12 @@ async def test_leader_cannot_run_assignee_commands(
     assert resp.status_code == 403
     assert resp.json()["code"] == "FORBIDDEN"
 
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
+
     # 主执行人正常 start → IN_PROGRESS(v3)
     started = await command_work_item(client, ctx["alice_headers"], item_id, "start", 2)  # type: ignore[arg-type]
     assert started.status_code == 200
@@ -76,7 +82,13 @@ async def test_non_assignee_member_cannot_run_progress_commands(
     item = await create_work_item(client, leader_headers, alice.id)  # type: ignore[arg-type]
     await publish_work_item(client, leader_headers, item)
     item_id = item["id"]
-    await command_work_item(client, alice_headers, item_id, "start", 2)  # type: ignore[arg-type]
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
+    started = await command_work_item(client, alice_headers, item_id, "start", 2)  # type: ignore[arg-type]
+    assert started.status_code == 200, started.text
 
     # IN_PROGRESS：bob 不能 block
     resp = await command_work_item(client, bob_headers, item_id, "block", 3)  # type: ignore[arg-type]

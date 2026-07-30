@@ -25,6 +25,7 @@ import { useAuthStore, useIsLeader } from "../../app/store";
 import type { Member, WorkItem, WorkItemStatus } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDateTime } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
+import { DevDocSection } from "./DevDocSection";
 import { CollaborationSection } from "../collaboration/CollaborationSection";
 import { DeliverableSection } from "../deliverables/DeliverableSection";
 import { TransferSection } from "../collaboration/TransferSection";
@@ -125,6 +126,16 @@ export default function WorkItemDetailPage() {
       // T4.4：无交付物时提交审核被 422 拒绝，引导先提交交付物
       if (error instanceof ApiError && error.code === "DELIVERABLE_REQUIRED") {
         toast.error("请先提交交付物，再提交审核");
+        return;
+      }
+      // 开发文档前置：未确认文档且未豁免时 start 被 409 拦截，引导到文档区
+      if (error instanceof ApiError && error.code === "DEV_DOC_REQUIRED") {
+        toast.error(errorMessage(error, "请先提交开发文档并通过负责人确认"), {
+          description: "可在下方「开发文档」区撰写并提交",
+        });
+        document
+          .getElementById("dev-doc-section")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
       toast.error(errorMessage(error, "操作失败"));
@@ -250,6 +261,8 @@ export default function WorkItemDetailPage() {
       </Card>
 
       <CollaborationSection workItem={item} members={members ?? []} />
+
+      <DevDocSection workItem={item} />
 
       <DeliverableSection workItem={item} />
 

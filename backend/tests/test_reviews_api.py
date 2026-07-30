@@ -63,6 +63,11 @@ async def _item_in_review(
     )
     assert resp.status_code == 201, resp.text
     item_id = resp.json()["id"]
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    resp = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers
+    )
+    assert resp.status_code == 200, resp.text
     for command, version in (("publish", 1), ("start", 2)):
         headers = leader_headers if command == "publish" else alice_headers
         resp = await client.post(

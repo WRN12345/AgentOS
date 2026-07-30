@@ -93,6 +93,14 @@ async def test_work_item_status_change_publishes_to_counterpart(
         )
         assert published.status_code == 200, published.text
 
+        # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+        waived = await client.post(
+            f"/api/v1/work-items/{item['id']}/dev-doc/waive",
+            json={},
+            headers=ctx["leader_headers"],  # type: ignore[arg-type]
+        )
+        assert waived.status_code == 200, waived.text
+
         payload = await _next_payload(alice_pubsub)
         assert payload["type"] == "work_item.published"
         assert set(payload) == {"id", "type", "data", "created_at"}

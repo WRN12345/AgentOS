@@ -20,7 +20,7 @@ class ApprovalItemOut(BaseModel):
     按 updated_at 倒序（已处理，approved_by/approved_at 有值）。
     """
 
-    kind: Literal["transfer", "deadline_change"]
+    kind: Literal["transfer", "deadline_change", "dev_doc"]
     id: uuid.UUID
     work_item_id: uuid.UUID
     work_item_title: str
@@ -45,3 +45,7 @@ class ApprovalItemOut(BaseModel):
     target_id: uuid.UUID | None = None
     old_due_at: datetime | None = None
     new_due_at: datetime | None = None
+
+    # kind=dev_doc 专有字段（否则为 null）：第 N 次提交 / 打回理由
+    doc_version: int | None = None
+    review_note: str | None = None

@@ -215,6 +215,66 @@ function PipelineContent({ content }: { content: Record<string, unknown> }) {
   );
 }
 
+/** dev_doc_review 初审结论（verdict）展示。 */
+export const DEV_DOC_VERDICT_META: Record<
+  string,
+  { label: string; className: string }
+> = {
+  sufficient: { label: "内容完备", className: "bg-green-100 text-green-700" },
+  needs_work: { label: "建议补充", className: "bg-amber-100 text-amber-700" },
+};
+
+/** dev_doc_review 初审建议（2026-07-30 设计文档 §4.4）：结论 + 完整性检查 + 对齐度 + 风险。 */
+function DevDocReviewContent({ content }: { content: Record<string, unknown> }) {
+  const checklist = (content.checklist ?? []) as {
+    aspect?: string;
+    verdict?: string;
+    note?: string;
+  }[];
+  const verdict = typeof content.verdict === "string" ? content.verdict : "";
+  const verdictMeta = DEV_DOC_VERDICT_META[verdict];
+  return (
+    <>
+      {verdict && (
+        <div>
+          <Badge className={verdictMeta?.className ?? ""}>
+            {verdictMeta?.label ?? verdict}
+          </Badge>
+        </div>
+      )}
+      {checklist.length > 0 && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">完整性检查</h4>
+          <ul className="space-y-1">
+            {checklist.map((c, i) => (
+              <li key={i} className="rounded-md bg-muted px-3 py-2">
+                <span className="font-medium">{c.aspect}</span>
+                {c.verdict && (
+                  <Badge variant="outline" className="ml-2">
+                    {c.verdict}
+                  </Badge>
+                )}
+                {c.note && (
+                  <span className="block text-muted-foreground">{c.note}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {typeof content.alignment === "string" && content.alignment && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">
+            与验收标准对齐度
+          </h4>
+          <p className="whitespace-pre-wrap">{content.alignment}</p>
+        </div>
+      )}
+      <StringList title="风险提示" value={content.risks} />
+    </>
+  );
+}
+
 const RISK_TYPE_LABELS: Record<string, string> = {
   overdue: "逾期/临期",
   blocked: "阻塞",
@@ -321,6 +381,7 @@ const TYPE_RENDERERS: Record<
   review: ReviewContent,
   summary: SummaryContent,
   pipeline: PipelineContent,
+  dev_doc_review: DevDocReviewContent,
 };
 
 /**

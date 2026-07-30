@@ -55,15 +55,17 @@ import type {
   ApprovalItem,
   DeadlineChangeRequest,
   DeadlineChangeSummary,
+  DevDoc,
   TransferRequest,
   TransferRequestSummary,
 } from "../../types";
-import { formatDateTime } from "../work-items/constants";
+import { formatDateTime, DEV_DOC_STATUS_META } from "../work-items/constants";
 import {
   DEADLINE_CHANGE_STATUS_META,
   TRANSFER_STATUS_META,
 } from "../collaboration/constants";
 import { DeliveryReviewSection } from "./DeliveryReviewSection";
+import { DevDocReviewPanel } from "../work-items/DevDocSection";
 
 /** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更并可查已处理记录；管理员只读待审批列表与审批记录；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
@@ -110,7 +112,14 @@ export default function ApprovalsPage() {
   );
 }
 
-/** 负责人待审批列表（GET /approvals）：转派与 DDL 变更统一卡片；管理员只读（无审批按钮）。 */
+/** 审批聚合条目类型中文标签（含开发文档前置的 dev_doc）。 */
+const APPROVAL_KIND_LABELS: Record<string, string> = {
+  transfer: "转派申请",
+  deadline_change: "DDL 变更",
+  dev_doc: "开发文档",
+};
+
+/** 负责人待审批列表（GET /approvals）：转派、DDL 变更与开发文档统一卡片；管理员只读（无审批按钮）。 */
 function PendingApprovals() {
   const queryClient = useQueryClient();
   const isLeader = useIsLeader();
@@ -140,6 +149,13 @@ function PendingApprovals() {
       ),
     enabled: detailItem?.kind === "deadline_change",
   });
+  // 开发文档详情：展开时按任务拉取（含 AI 初审建议关联）
+  const { data: devDocDetail } = useQuery({
+    queryKey: ["dev-doc", detailItem?.work_item_id],
+    queryFn: () =>
+      api.get<DevDoc>(`/work-items/${detailItem!.work_item_id}/dev-doc`),
+    enabled: detailItem?.kind === "dev_doc",
+  });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["approvals"] });
@@ -147,6 +163,8 @@ function PendingApprovals() {
     queryClient.invalidateQueries({ queryKey: ["approvals", "processed"] });
     queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
     queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
+    queryClient.invalidateQueries({ queryKey: ["dev-doc"] });
+    queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
     queryClient.invalidateQueries({ queryKey: ["work-items"] });
     queryClient.invalidateQueries({ queryKey: ["notifications"] });
   };
@@ -158,6 +176,16 @@ function PendingApprovals() {
   const decideMutation = useMutation({
     mutationFn: (values: { decision_note: string }) => {
       const { item, action } = decision!;
+      // 开发文档：确认/打回走 dev-doc 命令接口（打回理由必填，提交前已校验）
+      if (item.kind === "dev_doc") {
+        return api.post(
+          `/work-items/${item.work_item_id}/dev-doc/${action === "approve" ? "confirm" : "return"}`,
+          action === "approve"
+            ? { version: item.version }
+            : { version: item.version, review_note: values.decision_note.trim() },
+          newIdempotencyKey(),
+        );
+      }
       const prefix =
         item.kind === "transfer"
           ? "/transfer-requests"
@@ -172,8 +200,15 @@ function PendingApprovals() {
       );
     },
     onSuccess: (_data, values, _ctx) => {
+      const isDevDoc = decision?.item.kind === "dev_doc";
       toast.success(
-        decision?.action === "approve" ? "已通过审批" : "已驳回申请",
+        decision?.action === "approve"
+          ? isDevDoc
+            ? "已确认开发文档"
+            : "已通过审批"
+          : isDevDoc
+            ? "已打回开发文档"
+            : "已驳回申请",
       );
       void values;
       invalidate();
@@ -217,7 +252,7 @@ function PendingApprovals() {
                     item.kind === "transfer" ? "default" : "secondary"
                   }
                 >
-                  {item.kind === "transfer" ? "转派申请" : "DDL 变更"}
+                  {APPROVAL_KIND_LABELS[item.kind] ?? item.kind}
                 </Badge>
                 <Link
                   to={`/work-items/${item.work_item_id}`}
@@ -225,6 +260,11 @@ function PendingApprovals() {
                 >
                   {item.work_item_title}
                 </Link>
+                {item.kind === "dev_doc" && (
+                  <Badge className={DEV_DOC_STATUS_META.SUBMITTED.className}>
+                    {DEV_DOC_STATUS_META.SUBMITTED.label}
+                  </Badge>
+                )}
               </div>
               <span className="text-sm text-muted-foreground">
                 {formatDateTime(item.created_at)}
@@ -236,10 +276,18 @@ function PendingApprovals() {
             <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
               <div>
                 <h3 className="mb-1 font-medium text-muted-foreground">
-                  申请人
+                  {item.kind === "dev_doc" ? "撰写人" : "申请人"}
                 </h3>
                 {item.requested_by.display_name}
               </div>
+              {item.kind === "dev_doc" && item.doc_version != null && (
+                <div>
+                  <h3 className="mb-1 font-medium text-muted-foreground">
+                    提交次数
+                  </h3>
+                  第 {item.doc_version} 次提交
+                </div>
+              )}
               {item.kind === "transfer" && (
                 <div>
                   <h3 className="mb-1 font-medium text-muted-foreground">
@@ -290,14 +338,14 @@ function PendingApprovals() {
                     size="sm"
                     onClick={() => setDecision({ item, action: "approve" })}
                   >
-                    通过
+                    {item.kind === "dev_doc" ? "确认" : "通过"}
                   </Button>
                   <Button
                     size="sm"
                     variant="destructive"
                     onClick={() => setDecision({ item, action: "reject" })}
                   >
-                    驳回
+                    {item.kind === "dev_doc" ? "打回" : "驳回"}
                   </Button>
                 </>
               )}
@@ -314,7 +362,11 @@ function PendingApprovals() {
         <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {detailItem?.kind === "transfer" ? "转派申请详情" : "DDL 变更详情"}
+              {detailItem?.kind === "transfer"
+                ? "转派申请详情"
+                : detailItem?.kind === "dev_doc"
+                  ? "开发文档详情"
+                  : "DDL 变更详情"}
             </DialogTitle>
             <DialogDescription>{detailItem?.summary}</DialogDescription>
           </DialogHeader>
@@ -458,6 +510,40 @@ function PendingApprovals() {
                 )}
               </div>
             ))}
+          {detailItem?.kind === "dev_doc" &&
+            (!devDocDetail ? (
+              <p className="text-sm text-muted-foreground">加载中…</p>
+            ) : (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <h3 className="mb-1 font-medium text-muted-foreground">
+                      撰写人
+                    </h3>
+                    {devDocDetail.author?.display_name ?? "—"}
+                  </div>
+                  <div>
+                    <h3 className="mb-1 font-medium text-muted-foreground">
+                      提交时间
+                    </h3>
+                    {formatDateTime(devDocDetail.updated_at)}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="mb-1 font-medium text-muted-foreground">
+                    文档内容
+                  </h3>
+                  <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2">
+                    {devDocDetail.content}
+                  </pre>
+                </div>
+                {devDocDetail.latest_review_suggestion_id && (
+                  <DevDocReviewPanel
+                    suggestionId={devDocDetail.latest_review_suggestion_id}
+                  />
+                )}
+              </div>
+            ))}
         </DialogContent>
       </Dialog>
 
@@ -469,7 +555,13 @@ function PendingApprovals() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {decision?.action === "approve" ? "通过申请" : "驳回申请"}
+              {decision?.item.kind === "dev_doc"
+                ? decision.action === "approve"
+                  ? "确认开发文档"
+                  : "打回开发文档"
+                : decision?.action === "approve"
+                  ? "通过申请"
+                  : "驳回申请"}
             </DialogTitle>
             <DialogDescription>
               {decision?.item.summary}。审批意见仅留痕审计，不进入通知正文。
@@ -477,9 +569,20 @@ function PendingApprovals() {
           </DialogHeader>
           <Form {...decisionForm}>
             <form
-              onSubmit={decisionForm.handleSubmit((v) =>
-                decideMutation.mutate(v),
-              )}
+              onSubmit={decisionForm.handleSubmit((v) => {
+                // 开发文档打回：review_note 后端必填，前端先拦截
+                if (
+                  decision?.item.kind === "dev_doc" &&
+                  decision.action === "reject" &&
+                  !v.decision_note.trim()
+                ) {
+                  decisionForm.setError("decision_note", {
+                    message: "打回开发文档必须填写理由",
+                  });
+                  return;
+                }
+                decideMutation.mutate(v);
+              })}
               className="space-y-4"
             >
               <FormField
@@ -487,7 +590,12 @@ function PendingApprovals() {
                 name="decision_note"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>审批意见（可选）</FormLabel>
+                    <FormLabel>
+                      {decision?.item.kind === "dev_doc" &&
+                      decision.action === "reject"
+                        ? "打回理由（必填）"
+                        : "审批意见（可选）"}
+                    </FormLabel>
                     <FormControl>
                       <Textarea rows={3} {...field} />
                     </FormControl>
@@ -507,7 +615,9 @@ function PendingApprovals() {
                     ? "提交中…"
                     : decision?.action === "approve"
                       ? "确认通过"
-                      : "确认驳回"}
+                      : decision?.item.kind === "dev_doc"
+                        ? "确认打回"
+                        : "确认驳回"}
                 </Button>
               </DialogFooter>
             </form>
@@ -544,9 +654,13 @@ function ProcessedApprovals() {
     <div className="space-y-3">
       {processed.map((item) => {
         const statusMeta =
-          TRANSFER_STATUS_META[
-            item.status as keyof typeof TRANSFER_STATUS_META
-          ];
+          item.kind === "dev_doc"
+            ? DEV_DOC_STATUS_META[
+                item.status as keyof typeof DEV_DOC_STATUS_META
+              ]
+            : TRANSFER_STATUS_META[
+                item.status as keyof typeof TRANSFER_STATUS_META
+              ];
         return (
           <Card key={`${item.kind}-${item.id}`}>
             <CardHeader>
@@ -557,7 +671,7 @@ function ProcessedApprovals() {
                       item.kind === "transfer" ? "default" : "secondary"
                     }
                   >
-                    {item.kind === "transfer" ? "转派申请" : "DDL 变更"}
+                    {APPROVAL_KIND_LABELS[item.kind] ?? item.kind}
                   </Badge>
                   <Link
                     to={`/work-items/${item.work_item_id}`}
@@ -577,11 +691,11 @@ function ProcessedApprovals() {
               </div>
               <CardDescription>{item.summary}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
                 <div>
                   <h3 className="mb-1 font-medium text-muted-foreground">
-                    申请人
+                    {item.kind === "dev_doc" ? "撰写人" : "申请人"}
                   </h3>
                   {item.requested_by.display_name}
                 </div>
@@ -598,6 +712,11 @@ function ProcessedApprovals() {
                   {item.approved_at ? formatDateTime(item.approved_at) : "—"}
                 </div>
               </div>
+              {item.kind === "dev_doc" && item.review_note && (
+                <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                  打回理由：{item.review_note}
+                </p>
+              )}
             </CardContent>
           </Card>
         );

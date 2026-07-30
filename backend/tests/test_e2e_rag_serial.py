@@ -25,9 +25,13 @@
 - 场景末尾按审计事件完整回放第 9 章时序，与预期步骤逐一比对。
 """
 
+import uuid
+
 import httpx
 
+from app.domains.dev_docs.models import DevDoc
 from app.domains.project.models import Project, ProjectMember
+from app.infrastructure.database.engine import async_session_factory
 from tests.helpers_e2e import (
     VALID_REQUIREMENT_OUTPUT,
     StubModelProvider,
@@ -160,6 +164,11 @@ async def test_rag_serial_end_to_end(
     assert await _approvals(client, lh) == []
 
     # ---- 步骤 4：RAG 工程师开始执行 ----
+    # 开发文档前置（设计 2026-07-30 §4.3）：直接建库豁免行放行 start——
+    # 本场景做精确审计链回放，走 waive 接口会引入与场景无关的 dev_doc 事件
+    async with async_session_factory() as session:
+        session.add(DevDoc(work_item_id=uuid.UUID(item_id), waived=True))
+        await session.commit()
     resp = await command_work_item(client, rh, item_id, "start", 3)
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "IN_PROGRESS"

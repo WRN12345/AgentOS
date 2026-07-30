@@ -32,6 +32,7 @@ from app.domains.collaboration.state_machine import CollaborationStatus
 from app.domains.deadlines.models import DeadlineChangeRequest
 from app.domains.deadlines.state_machine import PENDING_STATUSES as DEADLINE_PENDING_STATUSES
 from app.domains.deliverables.models import Deliverable
+from app.domains.dev_docs.models import DevDoc
 from app.domains.files.models import StoredFile
 from app.domains.identity.models import User
 from app.domains.project.models import ROLE_ADMIN, MemberCapability, ProjectMember
@@ -216,6 +217,22 @@ async def list_deliverable_metadata(
 
 
 # ---------- 风险扫描只读工具（T5.5 Workflow Risk Agent） ----------
+
+
+async def get_dev_doc(session: AsyncSession, work_item_id: uuid.UUID) -> dict | None:
+    """工作项的开发文档（状态/提交次数/Markdown 正文，供 dev_doc_review 初审引用）。"""
+    doc = (
+        await session.execute(select(DevDoc).where(DevDoc.work_item_id == work_item_id))
+    ).scalar_one_or_none()
+    if doc is None:
+        return None
+    return {
+        "id": str(doc.id),
+        "work_item_id": str(doc.work_item_id),
+        "status": doc.status,
+        "doc_version": doc.doc_version,
+        "content": doc.content,
+    }
 
 
 async def list_blocked_items(session: AsyncSession, *, limit: int = 50) -> list[dict]:
@@ -493,6 +510,12 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
             kind="read_query",
             func=list_deliverable_metadata,
             description="查询工作项交付物最小上下文（文本正文/Git 链接/文件元数据，不读文件原文）",
+        ),
+        AgentTool(
+            name="get_dev_doc",
+            kind="read_query",
+            func=get_dev_doc,
+            description="查询工作项的开发文档（状态/提交次数/Markdown 正文，供文档初审）",
         ),
         AgentTool(
             name="list_blocked_items",

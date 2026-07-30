@@ -68,6 +68,11 @@ class ErrorCodes:
     # Agent 建议人工反馈（12.5 节，T5.7）：仅 pending 可反馈，重复反馈 409
     AGENT_SUGGESTION_ALREADY_REVIEWED = "AGENT_SUGGESTION_ALREADY_REVIEWED"
 
+    # 开发文档前置（设计文档 2026-07-30）：start 前置校验 / 乐观锁 / 状态机
+    DEV_DOC_REQUIRED = "DEV_DOC_REQUIRED"
+    DEV_DOC_VERSION_CONFLICT = "DEV_DOC_VERSION_CONFLICT"
+    DEV_DOC_INVALID_TRANSITION = "DEV_DOC_INVALID_TRANSITION"
+
 
 class ApiException(Exception):
     """业务异常：按统一错误格式返回。"""

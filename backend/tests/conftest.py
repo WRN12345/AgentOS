@@ -87,7 +87,7 @@ async def _clean_tables() -> None:
                 "member_capabilities, work_item_collaborators, work_items, "
                 "collaboration_requests, notifications, "
                 "transfer_requests, deadline_change_requests, stored_files, "
-                "agent_suggestions, agent_runs, "
+                "agent_suggestions, agent_runs, dev_docs, "
                 "project_members, projects"
             )
         )

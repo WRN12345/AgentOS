@@ -15,10 +15,13 @@
 """
 
 import asyncio
+import uuid
 
 import httpx
 
+from app.domains.dev_docs.models import DevDoc
 from app.domains.project.models import Project, ProjectMember
+from app.infrastructure.database.engine import async_session_factory
 from tests.helpers_e2e import (
     VALID_REQUIREMENT_OUTPUT,
     StubModelProvider,
@@ -131,6 +134,17 @@ async def test_dual_items_parallel_end_to_end(
     )
     assert resp_pub_a.status_code == 200, resp_pub_a.text
     assert resp_pub_b.status_code == 200, resp_pub_b.text
+    # 开发文档前置（设计 2026-07-30 §4.3）：直接建库豁免行放行 start——
+    # 本场景按 target 划分两条审计链做串扰断言，waive 接口会引入
+    # 与场景无关的 dev_doc 事件
+    async with async_session_factory() as session:
+        session.add_all(
+            [
+                DevDoc(work_item_id=uuid.UUID(item_a_id), waived=True),
+                DevDoc(work_item_id=uuid.UUID(item_b_id), waived=True),
+            ]
+        )
+        await session.commit()
     resp_start_a, resp_start_b = await asyncio.gather(
         command_work_item(client, ah, item_a_id, "start", 2),
         command_work_item(client, bh, item_b_id, "start", 2),

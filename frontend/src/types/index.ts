@@ -221,7 +221,7 @@ export interface DeadlineChangeRequest extends DeadlineChangeSummary {
 
 /** 负责人待审批聚合项（GET /approvals）：转派与 DDL 变更统一形状。 */
 export interface ApprovalItem {
-  kind: "transfer" | "deadline_change";
+  kind: "transfer" | "deadline_change" | "dev_doc";
   id: string;
   work_item_id: string;
   work_item_title: string;
@@ -241,6 +241,36 @@ export interface ApprovalItem {
   /** 已处理记录（GET /approvals/processed）额外返回：处理人与处理时间；发起人撤销时为 null。 */
   approved_by?: MemberBrief | null;
   approved_at?: string | null;
+  /** kind="dev_doc" 时返回：第 N 次提交与打回理由。 */
+  doc_version?: number;
+  review_note?: string | null;
+}
+
+/* ---------- 开发文档前置（2026-07-30 设计文档 §4） ---------- */
+
+export type DevDocStatus = "DRAFT" | "SUBMITTED" | "CONFIRMED" | "RETURNED";
+
+/** 开发文档（GET /work-items/{id}/dev-doc；404 表示还没有文档）。 */
+export interface DevDoc {
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  author: MemberBrief | null;
+  content: string;
+  status: DevDocStatus;
+  /** 负责人打回理由（RETURNED 时有值）。 */
+  review_note: string | null;
+  confirmed_by: MemberBrief | null;
+  confirmed_at: string | null;
+  /** 每次提交 +1（"第 N 次提交"）。 */
+  doc_version: number;
+  /** 负责人已豁免该任务的文档要求。 */
+  waived: boolean;
+  /** 最新一条 AI 初审建议（dev_doc_review）id，LLM 降级时为 null。 */
+  latest_review_suggestion_id: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /* ---------- 阶段 4：交付与审核 ---------- */

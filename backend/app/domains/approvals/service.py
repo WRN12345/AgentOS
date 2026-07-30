@@ -1,10 +1,11 @@
 """负责人审批聚合服务（12.6 节）。
 
-- list_pending_approvals：聚合 PENDING 的转派申请与 PENDING_APPROVAL 的
-  DDL 变更申请，统一形状、按创建时间倒序返回；
-- list_processed_approvals：聚合已处理（APPROVED/REJECTED/CANCELLED）的
-  两类申请，按 updated_at 倒序、最多 50 条，供前端"审批记录"标签页展示
-  谁、什么时候、处理结果。
+- list_pending_approvals：聚合 PENDING 的转派申请、PENDING_APPROVAL 的
+  DDL 变更申请与 SUBMITTED 的开发文档（kind="dev_doc"），统一形状、
+  按创建时间倒序返回；
+- list_processed_approvals：聚合已处理（转派/DDL：APPROVED/REJECTED/CANCELLED；
+  开发文档：CONFIRMED/RETURNED）的申请，按 updated_at 倒序、最多 50 条，
+  供前端"审批记录"标签页展示谁、什么时候、处理结果。
 
 权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
 普通成员返回空列表（不 403）。
@@ -19,6 +20,8 @@ from app.domains.approvals.schemas import ApprovalItemOut
 from app.domains.collaboration.models import CollaborationRequest
 from app.domains.deadlines.models import DeadlineChangeRequest
 from app.domains.deadlines.state_machine import DeadlineChangeStatus, DeadlineTargetType
+from app.domains.dev_docs.models import DevDoc
+from app.domains.dev_docs.state_machine import DevDocStatus
 from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
@@ -36,6 +39,11 @@ PROCESSED_DEADLINE_CHANGE_STATUSES = (
     DeadlineChangeStatus.REJECTED.value,
     DeadlineChangeStatus.CANCELLED.value,
 )
+#: 已处理的开发文档状态：确认通过 / 打回（DRAFT 回到成员手中，不算"已处理"）
+PROCESSED_DEV_DOC_STATUSES = (
+    DevDocStatus.CONFIRMED.value,
+    DevDocStatus.RETURNED.value,
+)
 
 #: 已处理列表返回的最大条数（审批记录标签页只看最近处理结果）
 PROCESSED_LIMIT = 50
@@ -49,13 +57,18 @@ async def _aggregate_items(
     session: AsyncSession,
     transfers: list[TransferRequest],
     deadline_changes: list[DeadlineChangeRequest],
+    dev_docs: list[DevDoc],
 ) -> list[ApprovalItemOut]:
-    """把两类申请聚合成统一形状的审批项（批量加载标题与成员显示名）。"""
-    if not transfers and not deadline_changes:
+    """把三类申请聚合成统一形状的审批项（批量加载标题与成员显示名）。"""
+    if not transfers and not deadline_changes and not dev_docs:
         return []
 
     # 批量加载关联工作项标题与成员显示名
-    item_ids = {r.work_item_id for r in transfers} | {r.work_item_id for r in deadline_changes}
+    item_ids = (
+        {r.work_item_id for r in transfers}
+        | {r.work_item_id for r in deadline_changes}
+        | {d.work_item_id for d in dev_docs}
+    )
     member_ids: set[uuid.UUID] = set()
     for r in transfers:
         member_ids.update((r.from_member_id, r.to_member_id))
@@ -65,6 +78,11 @@ async def _aggregate_items(
         member_ids.add(r.requested_by)
         if r.approved_by is not None:
             member_ids.add(r.approved_by)
+    for d in dev_docs:
+        if d.author_member_id is not None:
+            member_ids.add(d.author_member_id)
+        if d.confirmed_by is not None:
+            member_ids.add(d.confirmed_by)
 
     item_titles: dict[uuid.UUID, str] = {}
     if item_ids:
@@ -155,6 +173,29 @@ async def _aggregate_items(
                 new_due_at=r.new_due_at,
             )
         )
+    for d in dev_docs:
+        title = item_titles.get(d.work_item_id, "")
+        # 进入审批聚合的文档（SUBMITTED/CONFIRMED/RETURNED）都经过 submit，必有撰写人
+        assert d.author_member_id is not None, "已提交的开发文档必有撰写人"
+        items.append(
+            ApprovalItemOut(
+                kind="dev_doc",
+                id=d.id,
+                work_item_id=d.work_item_id,
+                work_item_title=title,
+                summary=f"{title}：第 {d.doc_version} 次提交",
+                requested_by=brief(d.author_member_id),
+                status=d.status,
+                impact_analysis_status=None,
+                version=d.version,
+                created_at=d.created_at,
+                updated_at=d.updated_at,
+                approved_by=approver_brief(d.confirmed_by),
+                approved_at=d.confirmed_at,
+                doc_version=d.doc_version,
+                review_note=d.review_note,
+            )
+        )
     return items
 
 
@@ -187,8 +228,17 @@ async def list_pending_approvals(
         .scalars()
         .all()
     )
+    dev_docs = list(
+        (
+            await session.execute(
+                select(DevDoc).where(DevDoc.status == DevDocStatus.SUBMITTED.value)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
-    items = await _aggregate_items(session, transfers, deadline_changes)
+    items = await _aggregate_items(session, transfers, deadline_changes, dev_docs)
     items.sort(key=lambda item: item.created_at, reverse=True)
     return items
 
@@ -225,7 +275,19 @@ async def list_processed_approvals(
         .scalars()
         .all()
     )
+    dev_docs = list(
+        (
+            await session.execute(
+                select(DevDoc)
+                .where(DevDoc.status.in_(PROCESSED_DEV_DOC_STATUSES))
+                .order_by(DevDoc.updated_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
-    items = await _aggregate_items(session, transfers, deadline_changes)
+    items = await _aggregate_items(session, transfers, deadline_changes, dev_docs)
     items.sort(key=lambda item: item.updated_at, reverse=True)
     return items[:limit]

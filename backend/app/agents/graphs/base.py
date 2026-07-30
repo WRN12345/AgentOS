@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 from app.agents.schemas.suggestion import AgentSuggestionEnvelope, parse_suggestion_output
 from app.agents.specialists.assignment import assignment_advisor_capability
+from app.agents.specialists.dev_doc_review import dev_doc_review_capability
 from app.agents.specialists.pipeline import requirement_pipeline_capability
 from app.agents.specialists.planning import planning_advisor_capability
 from app.agents.specialists.requirement import requirement_analyst_capability
@@ -114,6 +115,7 @@ CAPABILITIES = {
     "deliverable_review": deliverable_review_capability,
     "summary_agent": summary_agent_capability,
     "requirement_pipeline": requirement_pipeline_capability,
+    "dev_doc_review": dev_doc_review_capability,
 }
 
 #: agent_type → 能力名。T5.4/T5.5 六个具体 Agent（10.1 节）挂在同名能力上；
@@ -127,6 +129,7 @@ AGENT_ROUTES: dict[str, str] = {
     "deliverable_review": "deliverable_review",
     "summary_agent": "summary_agent",
     "requirement_pipeline": "requirement_pipeline",
+    "dev_doc_review": "dev_doc_review",
 }
 
 

@@ -72,6 +72,12 @@ async def test_assignee_permissions_switch_only_after_approval(
     # 负责人审批通过 → 主责任转移
     await _approve(client, leader_headers, req_id)  # type: ignore[arg-type]
 
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后新负责人才可 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
+
     # 旧负责人 alice：start / 发起协作 / 再发起转派 全部 403
     resp = await command_work_item(client, alice_headers, item_id, "start", 3)  # type: ignore[arg-type]
     assert resp.status_code == 403

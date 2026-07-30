@@ -22,6 +22,8 @@ from app.agents.service import request_agent_analysis
 from app.agents.specialists.review import AGENT_TYPE as DELIVERABLE_REVIEW_AGENT_TYPE
 from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
+from app.domains.dev_docs.models import DevDoc
+from app.domains.dev_docs.state_machine import DevDocStatus
 from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
@@ -392,6 +394,25 @@ async def run_command(
             )
 
     new_status = transition(item.status, command)
+
+    if command == "start":
+        # 开发文档前置（设计文档 2026-07-30 §4.3）：存在 CONFIRMED 文档或已豁免
+        # 才允许开工；unblock（BLOCKED → IN_PROGRESS）不重复校验；
+        # 校验放在状态机裁决之后，非法迁移（如 DRAFT 直接 start）优先报迁移错误
+        doc = (
+            await session.execute(
+                select(DevDoc).where(DevDoc.work_item_id == item.id).limit(1)
+            )
+        ).scalar_one_or_none()
+        confirmed = doc is not None and doc.status == DevDocStatus.CONFIRMED.value
+        waived = doc is not None and doc.waived
+        if not (confirmed or waived):
+            raise ApiException(
+                409,
+                ErrorCodes.DEV_DOC_REQUIRED,
+                "请先提交开发文档并通过负责人确认",
+            )
+
     before_status = item.status
     item.status = new_status.value
     item.version += 1

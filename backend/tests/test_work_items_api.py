@@ -102,6 +102,12 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
     )
     assert start_forbidden.status_code == 403
 
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers
+    )
+    assert waived.status_code == 200, waived.text
+
     # 主执行人 start → IN_PROGRESS
     started = await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": 2}, headers=alice_headers
@@ -240,6 +246,11 @@ async def test_idempotent_start_replays_once(client: httpx.AsyncClient, project:
     ah = ctx["alice_headers"]
     item = (await _create_item(client, lh, str(alice.id))).json()  # type: ignore[union-attr]
     await client.post(f"/api/v1/work-items/{item['id']}/publish", json={"version": 1}, headers=lh)
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item['id']}/dev-doc/waive", json={}, headers=lh
+    )
+    assert waived.status_code == 200, waived.text
 
     headers = {**ah, "Idempotency-Key": "idem-start-0001"}
     r1 = await client.post(

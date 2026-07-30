@@ -143,6 +143,13 @@ async def test_cancel_blocked_work_item_409(client: httpx.AsyncClient, project: 
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     item = await create_published_item(client, ctx["leader_headers"], alice.id)  # type: ignore[arg-type]
 
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item['id']}/dev-doc/waive",
+        json={},
+        headers=ctx["leader_headers"],  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
     started = await client.post(
         f"/api/v1/work-items/{item['id']}/start",
         json={"version": 2},
@@ -234,6 +241,13 @@ async def _item_in_review(
     """
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     item = await create_published_item(client, ctx["leader_headers"], alice.id, title=title)  # type: ignore[arg-type]
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item['id']}/dev-doc/waive",
+        json={},
+        headers=ctx["leader_headers"],  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
     started = await client.post(
         f"/api/v1/work-items/{item['id']}/start",
         json={"version": 2},

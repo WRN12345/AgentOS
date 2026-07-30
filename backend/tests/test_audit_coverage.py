@@ -39,6 +39,11 @@ async def _item_in_progress(
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     item = await create_work_item(client, ctx["leader_headers"], alice.id)  # type: ignore[arg-type]
     await publish_work_item(client, ctx["leader_headers"], item)  # type: ignore[arg-type]
+    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
+    waived = await client.post(
+        f"/api/v1/work-items/{item['id']}/dev-doc/waive", json={}, headers=ctx["leader_headers"]  # type: ignore[arg-type]
+    )
+    assert waived.status_code == 200, waived.text
     started = await command_work_item(client, ctx["alice_headers"], item["id"], "start", 2)  # type: ignore[arg-type]
     assert started.status_code == 200
     return item

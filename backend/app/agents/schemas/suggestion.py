@@ -17,7 +17,7 @@ run_id）以 JSON 文本形式承载，worker 原样落入 agent_runs.error（17
 
 import json
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -116,10 +116,38 @@ class PipelineSuggestionContent(SuggestionContent):
     risks: list[str]
 
 
+# ---------- dev_doc_review 专用载荷（设计文档 2026-07-30 §4.4） ----------
+
+
+class DevDocChecklistItem(BaseModel):
+    """文档完整性检查项：目标/方案/接口/排期/风险逐项过。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    aspect: str = Field(min_length=1)
+    verdict: Literal["pass", "fail", "uncertain"]
+    note: str = ""
+
+
+class DevDocReviewSuggestionContent(SuggestionContent):
+    """dev_doc_review 的 content 契约：初审清单 + 对齐度 + 整体结论。
+
+    extra="forbid"：该载荷形状是前端初审面板的依赖契约，多余字段一律拒绝。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    checklist: list[DevDocChecklistItem] = Field(min_length=1)
+    alignment: str = Field(min_length=1)
+    verdict: Literal["sufficient", "needs_work"]
+    risks: list[str]
+
+
 #: suggestion_type → content 专用载荷模型。命中的类型在通用 Schema 之外
 #: 追加一次严格载荷校验，失败同样抛 SuggestionValidationError。
 CONTENT_PAYLOAD_MODELS: dict[str, type[SuggestionContent]] = {
     "pipeline": PipelineSuggestionContent,
+    "dev_doc_review": DevDocReviewSuggestionContent,
 }
 
 
