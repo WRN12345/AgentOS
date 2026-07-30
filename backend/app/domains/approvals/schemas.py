@@ -14,7 +14,11 @@ from app.domains.work_items.schemas import MemberBrief
 
 
 class ApprovalItemOut(BaseModel):
-    """统一审批项：转派申请与 DDL 变更申请共用形状，按 created_at 倒序。"""
+    """统一审批项：转派申请与 DDL 变更申请共用形状。
+
+    GET /approvals 按 created_at 倒序（待审批）；GET /approvals/processed
+    按 updated_at 倒序（已处理，approved_by/approved_at 有值）。
+    """
 
     kind: Literal["transfer", "deadline_change"]
     id: uuid.UUID
@@ -27,6 +31,10 @@ class ApprovalItemOut(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+
+    # 处理结果（仅已处理列表有值；待审批列表恒为 null）
+    approved_by: MemberBrief | None = None
+    approved_at: datetime | None = None
 
     # kind=transfer 专有字段（否则为 null）
     from_member: MemberBrief | None = None

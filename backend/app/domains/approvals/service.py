@@ -1,7 +1,12 @@
-"""负责人待审批聚合服务（12.6 节）。
+"""负责人审批聚合服务（12.6 节）。
 
-聚合 PENDING 的转派申请与 PENDING_APPROVAL 的 DDL 变更申请，统一形状、
-按时间倒序返回。权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
+- list_pending_approvals：聚合 PENDING 的转派申请与 PENDING_APPROVAL 的
+  DDL 变更申请，统一形状、按创建时间倒序返回；
+- list_processed_approvals：聚合已处理（APPROVED/REJECTED/CANCELLED）的
+  两类申请，按 updated_at 倒序、最多 50 条，供前端"审批记录"标签页展示
+  谁、什么时候、处理结果。
+
+权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
 普通成员返回空列表（不 403）。
 """
 
@@ -20,40 +25,32 @@ from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.schemas import MemberBrief
 
+#: 已处理（终态）申请状态：两类申请的状态机枚举一致（8.3/8.4 节）
+PROCESSED_TRANSFER_STATUSES = (
+    TransferStatus.APPROVED.value,
+    TransferStatus.REJECTED.value,
+    TransferStatus.CANCELLED.value,
+)
+PROCESSED_DEADLINE_CHANGE_STATUSES = (
+    DeadlineChangeStatus.APPROVED.value,
+    DeadlineChangeStatus.REJECTED.value,
+    DeadlineChangeStatus.CANCELLED.value,
+)
+
+#: 已处理列表返回的最大条数（审批记录标签页只看最近处理结果）
+PROCESSED_LIMIT = 50
+
 
 def _iso_date(value) -> str:
     return value.strftime("%Y-%m-%d") if value is not None else "未设置"
 
 
-async def list_pending_approvals(
-    session: AsyncSession, actor: ProjectMember
+async def _aggregate_items(
+    session: AsyncSession,
+    transfers: list[TransferRequest],
+    deadline_changes: list[DeadlineChangeRequest],
 ) -> list[ApprovalItemOut]:
-    """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
-        return []
-
-    transfers = list(
-        (
-            await session.execute(
-                select(TransferRequest).where(
-                    TransferRequest.status == TransferStatus.PENDING.value
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    deadline_changes = list(
-        (
-            await session.execute(
-                select(DeadlineChangeRequest).where(
-                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    """把两类申请聚合成统一形状的审批项（批量加载标题与成员显示名）。"""
     if not transfers and not deadline_changes:
         return []
 
@@ -62,7 +59,12 @@ async def list_pending_approvals(
     member_ids: set[uuid.UUID] = set()
     for r in transfers:
         member_ids.update((r.from_member_id, r.to_member_id))
-    member_ids.update(r.requested_by for r in deadline_changes)
+        if r.approved_by is not None:
+            member_ids.add(r.approved_by)
+    for r in deadline_changes:
+        member_ids.add(r.requested_by)
+        if r.approved_by is not None:
+            member_ids.add(r.approved_by)
 
     item_titles: dict[uuid.UUID, str] = {}
     if item_ids:
@@ -82,6 +84,9 @@ async def list_pending_approvals(
 
     def brief(member_id: uuid.UUID) -> MemberBrief:
         return briefs.get(member_id) or MemberBrief(id=member_id, display_name="")
+
+    def approver_brief(member_id: uuid.UUID | None) -> MemberBrief | None:
+        return brief(member_id) if member_id is not None else None
 
     # 协作级 DDL 变更的目标标题（协作请求标题）
     collab_target_ids = {
@@ -115,6 +120,8 @@ async def list_pending_approvals(
                 version=r.version,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                approved_by=approver_brief(r.approved_by),
+                approved_at=r.approved_at,
                 from_member=from_brief,
                 to_member=to_brief,
             )
@@ -140,12 +147,85 @@ async def list_pending_approvals(
                 version=r.version,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                approved_by=approver_brief(r.approved_by),
+                approved_at=r.approved_at,
                 target_type=r.target_type,
                 target_id=r.target_id,
                 old_due_at=r.old_due_at,
                 new_due_at=r.new_due_at,
             )
         )
+    return items
 
+
+async def list_pending_approvals(
+    session: AsyncSession, actor: ProjectMember
+) -> list[ApprovalItemOut]:
+    """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
+    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+        return []
+
+    transfers = list(
+        (
+            await session.execute(
+                select(TransferRequest).where(
+                    TransferRequest.status == TransferStatus.PENDING.value
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    deadline_changes = list(
+        (
+            await session.execute(
+                select(DeadlineChangeRequest).where(
+                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    items = await _aggregate_items(session, transfers, deadline_changes)
     items.sort(key=lambda item: item.created_at, reverse=True)
     return items
+
+
+async def list_processed_approvals(
+    session: AsyncSession, actor: ProjectMember, *, limit: int = PROCESSED_LIMIT
+) -> list[ApprovalItemOut]:
+    """已处理审批记录：终态（APPROVED/REJECTED/CANCELLED）申请按 updated_at
+    倒序、最多 limit 条；权限与待审批列表一致（普通成员空列表，不 403）。"""
+    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+        return []
+
+    transfers = list(
+        (
+            await session.execute(
+                select(TransferRequest)
+                .where(TransferRequest.status.in_(PROCESSED_TRANSFER_STATUSES))
+                .order_by(TransferRequest.updated_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    deadline_changes = list(
+        (
+            await session.execute(
+                select(DeadlineChangeRequest)
+                .where(DeadlineChangeRequest.status.in_(PROCESSED_DEADLINE_CHANGE_STATUSES))
+                .order_by(DeadlineChangeRequest.updated_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    items = await _aggregate_items(session, transfers, deadline_changes)
+    items.sort(key=lambda item: item.updated_at, reverse=True)
+    return items[:limit]
