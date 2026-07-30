@@ -98,9 +98,9 @@ export default function AgentAssistantPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
-            <CardTitle>Agent 建议中心</CardTitle>
+            <CardTitle>AI 助手</CardTitle>
             <CardDescription>
-              Agent 只产出建议，不产生任何业务写入；采纳后的动作由人工确认后走正式流程
+              AI 把一句话需求拆成任务并推荐负责人，确认后才生效
             </CardDescription>
           </div>
           {isLeader && (
@@ -150,9 +150,21 @@ export default function AgentAssistantPage() {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : !suggestions || suggestions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              暂无符合条件的建议。可在工作项详情或本页触发 Agent 分析。
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                暂无符合条件的建议
+              </p>
+              {isLeader && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setWizard({ resume: null })}
+                >
+                  <Sparkles className="size-4" />
+                  去拆解需求
+                </Button>
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
               {suggestions.map((s) => (
@@ -233,7 +245,7 @@ function SuggestionCard({
                 to={`/work-items/${suggestion.work_item_id}`}
                 className="text-sm text-primary hover:underline"
               >
-                关联工作项
+                关联任务
               </Link>
             ) : (
               <span className="text-sm text-muted-foreground">项目级建议</span>

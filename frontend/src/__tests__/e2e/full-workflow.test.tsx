@@ -130,7 +130,7 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
 
     renderWithProviders(<WorkItemsPage />);
     await user.click(
-      await screen.findByRole("button", { name: /创建工作项/ }),
+      await screen.findByRole("button", { name: /创建任务/ }),
     );
     await user.type(screen.getByLabelText("标题"), "搭建 RAG 检索管道");
     const comboboxes = screen.getAllByRole("combobox");

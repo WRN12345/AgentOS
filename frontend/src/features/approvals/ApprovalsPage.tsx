@@ -73,26 +73,34 @@ export default function ApprovalsPage() {
   const canSeePending = isLeader || isAdmin;
 
   return (
-    <Tabs defaultValue={canSeePending ? "pending" : "mine"} className="space-y-4">
-      <TabsList>
-        {canSeePending && <TabsTrigger value="pending">待我审批</TabsTrigger>}
-        {isLeader && <TabsTrigger value="delivery">交付审核</TabsTrigger>}
-        <TabsTrigger value="mine">我的申请</TabsTrigger>
-      </TabsList>
-      {canSeePending && (
-        <TabsContent value="pending">
-          <PendingApprovals />
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-semibold">审批中心</h1>
+        <p className="text-sm text-muted-foreground">
+          转派、DDL 变更与交付审核在这里集中处理
+        </p>
+      </div>
+      <Tabs defaultValue={canSeePending ? "pending" : "mine"} className="space-y-4">
+        <TabsList>
+          {canSeePending && <TabsTrigger value="pending">待我审批</TabsTrigger>}
+          {isLeader && <TabsTrigger value="delivery">交付审核</TabsTrigger>}
+          <TabsTrigger value="mine">我的申请</TabsTrigger>
+        </TabsList>
+        {canSeePending && (
+          <TabsContent value="pending">
+            <PendingApprovals />
+          </TabsContent>
+        )}
+        {isLeader && (
+          <TabsContent value="delivery">
+            <DeliveryReviewSection />
+          </TabsContent>
+        )}
+        <TabsContent value="mine">
+          <MyRequests />
         </TabsContent>
-      )}
-      {isLeader && (
-        <TabsContent value="delivery">
-          <DeliveryReviewSection />
-        </TabsContent>
-      )}
-      <TabsContent value="mine">
-        <MyRequests />
-      </TabsContent>
-    </Tabs>
+      </Tabs>
+    </div>
   );
 }
 

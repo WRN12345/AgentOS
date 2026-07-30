@@ -103,7 +103,7 @@ export default function MembersPage() {
         <div>
           <CardTitle>成员与能力</CardTitle>
           <CardDescription>
-            全员角色、能力标签、确认状态与当前工作量
+            团队成员的角色、技能与工作量；AI 分配任务时参考这里的能力数据
           </CardDescription>
         </div>
         <div className="flex gap-2">

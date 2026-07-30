@@ -94,10 +94,8 @@ export default function WorkItemsPage() {
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <div>
-          <CardTitle>工作项</CardTitle>
-          <CardDescription>
-            项目全部工作项的标题、状态、负责人、优先级与截止时间
-          </CardDescription>
+          <CardTitle>任务</CardTitle>
+          <CardDescription>拆解、分配与跟踪团队任务</CardDescription>
         </div>
         {isLeader && (
           <div className="flex gap-2">
@@ -107,7 +105,7 @@ export default function WorkItemsPage() {
             </Button>
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
-              创建工作项
+              创建任务
             </Button>
           </div>
         )}
@@ -214,11 +212,38 @@ export default function WorkItemsPage() {
               ))}
               {(items ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="text-center text-muted-foreground"
-                  >
-                    暂无符合条件的工作项
+                  <TableCell colSpan={6} className="text-center">
+                    {assigneeId !== "all" ||
+                    status !== "all" ||
+                    dueFrom ||
+                    dueTo ? (
+                      <span className="text-muted-foreground">
+                        暂无符合条件的任务
+                      </span>
+                    ) : (
+                      <div className="space-y-3 py-6">
+                        <p className="text-muted-foreground">还没有任务</p>
+                        {isLeader && (
+                          <div className="flex justify-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setGuideOpen(true)}
+                            >
+                              <Sparkles className="size-4" />
+                              AI 需求拆解
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => setCreateOpen(true)}
+                            >
+                              <Plus className="size-4" />
+                              手动创建
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </TableCell>
                 </TableRow>
               )}

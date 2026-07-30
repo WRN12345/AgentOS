@@ -108,9 +108,9 @@ describe("负责人核心路径", () => {
     mockApi.post.mockResolvedValue({});
 
     renderWithProviders(<WorkItemsPage />);
-    // 负责人可见「创建工作项」入口（成员不可见，见成员路径测试）
+    // 负责人可见「创建任务」入口（成员不可见，见成员路径测试）
     await user.click(
-      await screen.findByRole("button", { name: /创建工作项/ }),
+      await screen.findByRole("button", { name: /创建任务/ }),
     );
 
     await user.type(screen.getByLabelText("标题"), "搭建 RAG 检索管道");

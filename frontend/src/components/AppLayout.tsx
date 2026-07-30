@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
   ChevronsUpDown,
@@ -7,6 +9,7 @@ import {
   ListTodo,
   LogOut,
   Package,
+  Sparkles,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,26 +23,42 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { roleBadgeVariant, roleLabel } from "@/lib/roles";
 import { api } from "../services/api";
-import { useAuthStore } from "../app/store";
+import { useAuthStore, useIsLeader } from "../app/store";
 import { useEventStream } from "../services/events";
 import { NotificationBell } from "../features/notifications/NotificationBell";
+import { RequirementPipelineWizard } from "../features/agent-assistant/RequirementPipelineWizard";
+import type { AgentConfig, Member } from "../types";
 
 const navItems = [
-  { to: "/", label: "团队看板", icon: LayoutDashboard, end: true },
+  { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
   { to: "/members", label: "成员与能力", icon: Users, end: false },
-  { to: "/work-items", label: "工作项", icon: ListTodo, end: false },
+  { to: "/work-items", label: "任务", icon: ListTodo, end: false },
   { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },
   { to: "/deliverables", label: "交付物", icon: Package, end: false },
-  { to: "/agent-assistant", label: "Agent 助手", icon: Bot, end: false },
+  { to: "/agent-assistant", label: "AI 助手", icon: Bot, end: false },
 ];
 
 /** 应用主布局：左侧导航 + 顶栏当前用户与登出入口。 */
 export default function AppLayout() {
   const navigate = useNavigate();
+  const isLeader = useIsLeader();
   const { user, member, refreshToken, clear } = useAuthStore();
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
   useEventStream();
+
+  // 顶栏「AI 需求拆解」向导所需数据（仅负责人可见该入口）
+  const { data: members } = useQuery({
+    queryKey: ["members"],
+    queryFn: () => api.get<Member[]>("/members"),
+    enabled: isLeader,
+  });
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api.get<AgentConfig>("/config"),
+    enabled: isLeader,
+  });
 
   const handleLogout = async () => {
     // 登出即撤销 Refresh Token；失败也照常清空本地登录态
@@ -92,6 +111,16 @@ export default function AppLayout() {
             Agent 协作工作流平台
           </span>
           <div className="flex items-center gap-1">
+            {isLeader && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setWizardOpen(true)}
+              >
+                <Sparkles className="size-4" />
+                AI 需求拆解
+              </Button>
+            )}
             <NotificationBell />
             {/* 轻量下拉（不用 Radix）：部分环境下 Radix 触发器无响应，见 SimpleMenu 注释 */}
             <SimpleMenu
@@ -134,6 +163,13 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      <RequirementPipelineWizard
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        members={members ?? []}
+        llmIsExternal={config?.llm_is_external ?? false}
+      />
     </div>
   );
 }

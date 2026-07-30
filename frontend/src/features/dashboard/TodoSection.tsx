@@ -103,7 +103,7 @@ export function TodoSection() {
         key: `work-item-${item.id}`,
         category: "待开始任务",
         categoryClassName: "bg-blue-100 text-blue-700",
-        title: `工作项「${item.title}」`,
+        title: `任务「${item.title}」`,
         workItemId: item.id,
       });
     }
@@ -146,7 +146,7 @@ export function TodoSection() {
           )}
         </div>
         <CardDescription>
-          需要接受、提交、修改或确认的事项，点击跳转对应工作项
+          需要接受、提交、修改或确认的事项，点击跳转对应任务
         </CardDescription>
       </CardHeader>
       <CardContent>

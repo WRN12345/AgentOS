@@ -312,12 +312,27 @@ export function RequirementPipelineWizard({
     queryClient.invalidateQueries({ queryKey: ["work-items"] });
     if (failed.length === 0) {
       await sendFeedback("accepted");
-      toast.success(`已批量创建 ${succeeded} 个工作项`);
+      // 成功摘要带分配去向，让用户清楚"发生了什么"
+      const names = [
+        ...new Set(
+          items
+            .map(
+              (it) =>
+                members.find((m) => m.id === it.assigneeId)?.display_name,
+            )
+            .filter((n): n is string => Boolean(n)),
+        ),
+      ];
+      toast.success(
+        names.length > 0
+          ? `已创建 ${succeeded} 个任务，分配给 ${names.join("、")}`
+          : `已创建 ${succeeded} 个任务`,
+      );
       close(false);
       navigate("/work-items");
     } else {
       // 部分失败：不写 accepted 反馈，保留建议供重试
-      toast.error(`${failed.length} 个工作项创建失败，可重试失败项`);
+      toast.error(`${failed.length} 个任务创建失败，可重试失败项`);
     }
   };
 
@@ -338,7 +353,7 @@ export function RequirementPipelineWizard({
 
   const ignore = async () => {
     await sendFeedback("ignored");
-    toast.success("已忽略该建议，未创建任何工作项");
+    toast.success("已忽略该建议，未创建任何任务");
     close(false);
   };
 
@@ -356,7 +371,7 @@ export function RequirementPipelineWizard({
           <DialogTitle>需求拆解向导</DialogTitle>
           <DialogDescription>
             自然语言需求 → Agent 拆解与分配建议 → 人工确认 →
-            批量创建。Agent 只产出建议，确认后才创建正式工作项。
+            批量创建。Agent 只产出建议，确认后才创建正式任务。
           </DialogDescription>
         </DialogHeader>
 
@@ -465,7 +480,7 @@ export function RequirementPipelineWizard({
               {drafts.map((draft, index) => (
                 <div key={draft.key} className="space-y-3 rounded-md border p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">工作项 {index + 1}</span>
+                    <span className="font-medium">任务 {index + 1}</span>
                     <div className="flex items-center gap-2">
                       {draft.userSpecified && (
                         <Badge className="bg-blue-100 text-blue-700">
@@ -489,7 +504,7 @@ export function RequirementPipelineWizard({
                       onChange={(e) =>
                         updateDraft(draft.key, { title: e.target.value })
                       }
-                      placeholder="请输入工作项标题"
+                      placeholder="请输入任务标题"
                     />
                   </div>
                   <div className="space-y-1">
@@ -586,7 +601,7 @@ export function RequirementPipelineWizard({
               ))}
               <Button variant="outline" size="sm" onClick={addDraft}>
                 <Plus className="size-4" />
-                新增工作项
+                新增任务
               </Button>
             </div>
 
@@ -631,7 +646,7 @@ export function RequirementPipelineWizard({
             </ul>
             {hasFailed && (
               <p className="text-muted-foreground">
-                已成功创建的工作项不受影响；失败项可重试，或关闭后在建议中心重新处理该建议。
+                已成功创建的任务不受影响；失败项可重试，或关闭后在 AI 助手页重新处理该建议。
               </p>
             )}
             <DialogFooter className="gap-2">

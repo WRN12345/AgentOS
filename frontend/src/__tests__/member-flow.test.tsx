@@ -88,12 +88,12 @@ describe("成员核心路径", () => {
 
     renderWithProviders(<DashboardPage />);
 
-    // 我的待处理：收到的协作请求（待响应）+ 我的 READY 工作项（待开始任务）
+    // 我的待处理：收到的协作请求（待响应）+ 我的 READY 任务（待开始任务）
     expect(await screen.findByText("我的待处理")).toBeInTheDocument();
     expect(screen.getByText("待响应")).toBeInTheDocument();
     expect(screen.getByText(/协作「补充评测语料」/)).toBeInTheDocument();
     expect(screen.getByText("待开始任务")).toBeInTheDocument();
-    expect(screen.getByText(/工作项「编写评测脚本」/)).toBeInTheDocument();
+    expect(screen.getByText(/任务「编写评测脚本」/)).toBeInTheDocument();
 
     // 看板状态分布：进行中 1、待开始 1
     expect(screen.getByText("全员工作量")).toBeInTheDocument();
