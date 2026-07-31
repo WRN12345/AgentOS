@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from app.core.errors import ApiException, ErrorCodes, IdempotentReplay
 from app.core.logging import setup_logging
@@ -152,8 +152,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             return response
 
         body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
+        if isinstance(response, StreamingResponse):
+            async for chunk in response.body_iterator:
+                body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+        else:
+            body = bytes(response.body)
 
         headers = dict(response.headers)
         headers.pop("content-length", None)

@@ -21,7 +21,7 @@
 
 import inspect
 import uuid
-from typing import Any, TypedDict
+from typing import Any, Required, TypedDict
 
 from langgraph.graph import END, StateGraph
 from sqlalchemy import select
@@ -54,15 +54,16 @@ class AgentGraphState(TypedDict, total=False):
     """基础图状态（全部可 JSON 序列化，供检查点持久化）。
 
     T5.4/T5.5 接入具体 Agent 时在此扩展上下文字段（最小上下文原则，16 节）。
+    Required 字段由 initial_state 保证提供；其余字段由图节点在运行中产出。
     """
 
-    run_id: str
-    agent_type: str
-    trigger_source: str
-    work_item_id: str | None
-    request_id: str | None
+    run_id: Required[str]
+    agent_type: Required[str]
+    trigger_source: Required[str]
+    work_item_id: Required[str | None]
+    request_id: Required[str | None]
     # 人工触发时携带的自然语言输入（如需求描述）
-    prompt: str
+    prompt: Required[str]
     # 授权后的项目上下文（只含完成分析所需的最小字段）
     context: dict[str, Any]
     # 路由结果：命中的能力名
@@ -180,7 +181,8 @@ async def run_capability(state: AgentGraphState) -> dict[str, Any]:
     能力函数可为同步（echo）或 async（具体 Agent 需查库/调模型）；
     模型不可用等错误直接冒泡，由 worker 统一标记 run failed（17.3 节）。
     """
-    capability = CAPABILITIES[state["capability"]]
+    # capability 由 route_capability 节点保证写入；缺省回退 echo 与路由语义一致
+    capability = CAPABILITIES[state.get("capability", "echo")]
     result = capability(state)
     if inspect.isawaitable(result):
         result = await result
@@ -206,7 +208,9 @@ async def save_suggestion(state: AgentGraphState) -> dict[str, Any]:
     写入走工具注册表中的 write_suggestion（10.3 节唯一写工具）；系统侧在
     此处补信封字段（run_id；模型名以 agent_runs.model 为准，不冗余存储）。
     """
-    suggestion = state["suggestion"]
+    # suggestion 由 validate_output 节点保证写入（图顺序不变量）
+    suggestion = state.get("suggestion")
+    assert suggestion is not None, "validate_output must run before save_suggestion"
     context = state.get("context", {})
     leader_id = context.get("leader_id")
     work_item_id = state.get("work_item_id")

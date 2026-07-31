@@ -8,8 +8,9 @@ worker 每轮循环先把到点任务搬回即时 List 再 BRPOP。
 import json
 import time
 import uuid
+from collections.abc import Awaitable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as redis
 
@@ -31,12 +32,14 @@ async def enqueue(
     client: redis.Redis, task_type: str, payload: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     task = make_task(task_type, payload)
-    await client.lpush(QUEUE_KEY, json.dumps(task))
+    await cast(Awaitable[int], client.lpush(QUEUE_KEY, json.dumps(task)))
     return task
 
 
 async def dequeue(client: redis.Redis, timeout: int = 5) -> dict[str, Any] | None:
-    result = await client.brpop(QUEUE_KEY, timeout=timeout)
+    result = await cast(
+        Awaitable[list[Any] | None], client.brpop([QUEUE_KEY], timeout=timeout)
+    )
     if result is None:
         return None
     _, raw = result
@@ -52,7 +55,10 @@ async def enqueue_delayed(
 ) -> dict[str, Any]:
     """延迟投递：任务进 ZSET，到点后由 worker 的 promote_due_delayed 搬入即时队列。"""
     task = make_task(task_type, payload)
-    await client.zadd(DELAYED_QUEUE_KEY, {json.dumps(task): time.time() + delay_seconds})
+    await cast(
+        Awaitable[int],
+        client.zadd(DELAYED_QUEUE_KEY, {json.dumps(task): time.time() + delay_seconds}),
+    )
     return task
 
 
@@ -62,8 +68,11 @@ async def promote_due_delayed(client: redis.Redis, *, now: float | None = None) 
     BRPOP 阻塞期间到点的任务最多晚一个 dequeue 超时周期被消费，对秒级退避
     间隔无实际影响。单 worker 部署下 ZSET→List 搬移无竞争。
     """
-    due = await client.zrangebyscore(
-        DELAYED_QUEUE_KEY, "-inf", now if now is not None else time.time()
+    due = await cast(
+        Awaitable[list[Any]],
+        client.zrangebyscore(
+            DELAYED_QUEUE_KEY, "-inf", now if now is not None else time.time()
+        ),
     )
     if not due:
         return 0
