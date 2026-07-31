@@ -263,3 +263,66 @@ async def test_processed_list_member_gets_empty_list(
 
     resp = await client.get("/api/v1/approvals/processed")
     assert resp.status_code == 401
+
+
+async def test_processed_list_includes_delivery_review(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """交付审核结论进入 processed（kind=delivery_review）：requested_by 为交付物
+    提交人、status 为审核结论、approved_by/at 为负责人与处理时间、含交付物版本。"""
+    ctx = await _setup(client, project)
+    leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    item = ctx["item"]
+    leader_headers = ctx["leader_headers"]
+    alice_headers = ctx["alice_headers"]
+
+    # 推进到 IN_REVIEW：豁免开发文档 → start → 提交交付物 → submit
+    resp = await client.post(
+        f"/api/v1/work-items/{item['id']}/dev-doc/waive",  # type: ignore[index]
+        json={},
+        headers=leader_headers,  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        f"/api/v1/work-items/{item['id']}/start",  # type: ignore[index]
+        json={"version": 2},
+        headers=alice_headers,  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        f"/api/v1/work-items/{item['id']}/deliverables",  # type: ignore[index]
+        json={"type": "text", "content": "交付说明"},
+        headers=alice_headers,  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 201, resp.text
+    deliverable_id = resp.json()["id"]
+    resp = await client.post(
+        f"/api/v1/work-items/{item['id']}/submit",  # type: ignore[index]
+        json={"version": 3},
+        headers=alice_headers,  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+
+    reviewed = await client.post(
+        f"/api/v1/work-items/{item['id']}/reviews",  # type: ignore[index]
+        json={"deliverable_id": deliverable_id, "decision": "approve", "feedback": "可以"},
+        headers=leader_headers,  # type: ignore[arg-type]
+    )
+    assert reviewed.status_code == 201, reviewed.text
+
+    resp = await client.get("/api/v1/approvals/processed", headers=leader_headers)  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    entry = items[0]
+    assert entry["kind"] == "delivery_review"
+    assert entry["status"] == "approve"
+    assert entry["work_item_title"] == "RAG 工作项"
+    assert entry["deliverable_version"] == 1
+    assert entry["deliverable_type"] == "text"
+    assert entry["requested_by"] == {"id": str(alice.id), "display_name": "爱丽丝"}
+    assert entry["approved_by"] == {"id": str(leader.id), "display_name": "负责人"}
+    assert entry["approved_at"] is not None
+    # 反馈正文属隐私信息（16 节），不进审批聚合
+    assert "feedback" not in entry

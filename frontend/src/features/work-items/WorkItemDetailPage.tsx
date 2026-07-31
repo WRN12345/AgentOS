@@ -118,6 +118,17 @@ export default function WorkItemDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },
     onError: (error) => {
+      // 开发文档前置：未确认文档且未豁免时 start 被 409 拦截，引导到文档区。
+      // 注意：DEV_DOC_REQUIRED 也是 409，必须先于 isVersionConflict 判断。
+      if (error instanceof ApiError && error.code === "DEV_DOC_REQUIRED") {
+        toast.error(errorMessage(error, "请先提交开发文档并通过负责人确认"), {
+          description: "可在下方「开发文档」区撰写并提交",
+        });
+        document
+          .getElementById("dev-doc-section")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
       if (error instanceof ApiError && error.isVersionConflict) {
         toast.error(VERSION_CONFLICT_MESSAGE);
         queryClient.invalidateQueries({ queryKey: ["work-items"] });
@@ -126,16 +137,6 @@ export default function WorkItemDetailPage() {
       // T4.4：无交付物时提交审核被 422 拒绝，引导先提交交付物
       if (error instanceof ApiError && error.code === "DELIVERABLE_REQUIRED") {
         toast.error("请先提交交付物，再提交审核");
-        return;
-      }
-      // 开发文档前置：未确认文档且未豁免时 start 被 409 拦截，引导到文档区
-      if (error instanceof ApiError && error.code === "DEV_DOC_REQUIRED") {
-        toast.error(errorMessage(error, "请先提交开发文档并通过负责人确认"), {
-          description: "可在下方「开发文档」区撰写并提交",
-        });
-        document
-          .getElementById("dev-doc-section")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
       toast.error(errorMessage(error, "操作失败"));

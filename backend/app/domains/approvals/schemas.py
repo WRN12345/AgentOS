@@ -20,7 +20,7 @@ class ApprovalItemOut(BaseModel):
     按 updated_at 倒序（已处理，approved_by/approved_at 有值）。
     """
 
-    kind: Literal["transfer", "deadline_change", "dev_doc"]
+    kind: Literal["transfer", "deadline_change", "dev_doc", "delivery_review"]
     id: uuid.UUID
     work_item_id: uuid.UUID
     work_item_title: str
@@ -49,3 +49,9 @@ class ApprovalItemOut(BaseModel):
     # kind=dev_doc 专有字段（否则为 null）：第 N 次提交 / 打回理由
     doc_version: int | None = None
     review_note: str | None = None
+
+    # kind=delivery_review 专有字段（否则为 null）：被审核的交付物版本与类型；
+    # status 承载审核结论（approve/request_changes/reject）。
+    # 反馈正文属隐私信息（16 节），不进审批聚合。
+    deliverable_version: int | None = None
+    deliverable_type: str | None = None

@@ -12,18 +12,27 @@
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.collaboration.models import CollaborationRequest
 from app.domains.deliverables.models import Deliverable
-from app.domains.deliverables.schemas import DeliverableCreateIn, DeliverableOut, FileBrief
+from app.domains.deliverables.schemas import (
+    DeliverableCreateIn,
+    DeliverableListItemOut,
+    DeliverableOut,
+    DeliverableReviewBrief,
+    FileBrief,
+)
 from app.domains.files.models import StoredFile
 from app.domains.files.service import get_stored_file, is_work_item_related
 from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.reviews.models import Review
+from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import MemberBrief
 from app.domains.work_items.service import get_work_item
 from app.domains.work_items.state_machine import WorkItemStatus
@@ -106,6 +115,136 @@ async def list_deliverables(
         .all()
     )
     return [await _to_out(session, d) for d in deliverables]
+
+
+async def _to_list_items(
+    session: AsyncSession, actor: ProjectMember, deliverables: list[Deliverable]
+) -> list[DeliverableListItemOut]:
+    """批量序列化交付物列表项（标题、提交人、审核结论）。
+
+    审核反馈可见性（16 节）：负责人、任务当前主执行人与提交人可见，其余成员
+    与管理员（只读）只见结论不见反馈正文。
+    """
+    if not deliverables:
+        return []
+
+    item_ids = {d.work_item_id for d in deliverables}
+    rows = await session.execute(
+        select(WorkItem.id, WorkItem.title, WorkItem.assignee_id).where(
+            WorkItem.id.in_(item_ids)
+        )
+    )
+    items_meta = {row.id: row for row in rows}
+
+    reviews = list(
+        (
+            await session.execute(
+                select(Review).where(
+                    Review.deliverable_id.in_({d.id for d in deliverables})
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    review_by_deliverable = {r.deliverable_id: r for r in reviews}
+
+    member_ids = {d.submitted_by for d in deliverables} | {
+        r.reviewed_by for r in reviews
+    }
+    members = (
+        (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.id.in_(member_ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    briefs = {m.id: MemberBrief(id=m.id, display_name=m.display_name) for m in members}
+
+    def brief(member_id: uuid.UUID) -> MemberBrief:
+        return briefs.get(member_id) or MemberBrief(id=member_id, display_name="")
+
+    result: list[DeliverableListItemOut] = []
+    for d in deliverables:
+        meta = items_meta.get(d.work_item_id)
+        # 反馈可见性：负责人 / 当前主执行人 / 提交人
+        can_see_feedback = (
+            actor.role == ROLE_LEADER
+            or actor.id == d.submitted_by
+            or (meta is not None and meta.assignee_id == actor.id)
+        )
+        review = review_by_deliverable.get(d.id)
+        review_brief: DeliverableReviewBrief | None = None
+        if review is not None:
+            review_brief = DeliverableReviewBrief(
+                decision=review.decision,
+                feedback=review.feedback if can_see_feedback else None,
+                reviewed_by=brief(review.reviewed_by),
+                created_at=review.created_at,
+            )
+        result.append(
+            DeliverableListItemOut(
+                id=d.id,
+                work_item_id=d.work_item_id,
+                work_item_title=meta.title if meta else "",
+                type=d.type,
+                version=d.version,
+                submitted_by=brief(d.submitted_by),
+                created_at=d.created_at,
+                review=review_brief,
+            )
+        )
+    return result
+
+
+async def list_mine(
+    session: AsyncSession, actor: ProjectMember
+) -> list[DeliverableListItemOut]:
+    """我提交的交付物（提交时间倒序）及审核结论，供审批中心"我的申请"页展示。"""
+    deliverables = list(
+        (
+            await session.execute(
+                select(Deliverable)
+                .where(Deliverable.submitted_by == actor.id)
+                .order_by(Deliverable.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return await _to_list_items(session, actor, deliverables)
+
+
+async def list_visible(
+    session: AsyncSession, actor: ProjectMember
+) -> list[DeliverableListItemOut]:
+    """交付物聚合页：负责人与管理员见全部；普通成员只见相关工作项
+    （主执行人 / 协作者 / 协作请求任一方，16 节）的交付物，按提交时间倒序。"""
+    stmt = select(Deliverable).order_by(Deliverable.created_at.desc())
+    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+        related_item_ids = select(WorkItem.id).where(
+            or_(
+                WorkItem.assignee_id == actor.id,
+                WorkItem.id.in_(
+                    select(WorkItemCollaborator.work_item_id).where(
+                        WorkItemCollaborator.member_id == actor.id
+                    )
+                ),
+                WorkItem.id.in_(
+                    select(CollaborationRequest.work_item_id).where(
+                        or_(
+                            CollaborationRequest.requester_id == actor.id,
+                            CollaborationRequest.assignee_id == actor.id,
+                        )
+                    )
+                ),
+            )
+        )
+        stmt = stmt.where(Deliverable.work_item_id.in_(related_item_ids))
+    deliverables = list((await session.execute(stmt)).scalars().all())
+    return await _to_list_items(session, actor, deliverables)
 
 
 async def get_deliverable_version(

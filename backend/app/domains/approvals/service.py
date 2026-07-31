@@ -4,7 +4,8 @@
   DDL 变更申请与 SUBMITTED 的开发文档（kind="dev_doc"），统一形状、
   按创建时间倒序返回；
 - list_processed_approvals：聚合已处理（转派/DDL：APPROVED/REJECTED/CANCELLED；
-  开发文档：CONFIRMED/RETURNED）的申请，按 updated_at 倒序、最多 50 条，
+  开发文档：CONFIRMED/RETURNED）的申请与交付审核结论（reviews 终审留痕，
+  kind="delivery_review"），按 updated_at 倒序、最多 50 条，
   供前端"审批记录"标签页展示谁、什么时候、处理结果。
 
 权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
@@ -20,9 +21,11 @@ from app.domains.approvals.schemas import ApprovalItemOut
 from app.domains.collaboration.models import CollaborationRequest
 from app.domains.deadlines.models import DeadlineChangeRequest
 from app.domains.deadlines.state_machine import DeadlineChangeStatus, DeadlineTargetType
+from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
 from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.reviews.models import Review
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
@@ -58,9 +61,11 @@ async def _aggregate_items(
     transfers: list[TransferRequest],
     deadline_changes: list[DeadlineChangeRequest],
     dev_docs: list[DevDoc],
+    reviews: list[Review] | None = None,
 ) -> list[ApprovalItemOut]:
-    """把三类申请聚合成统一形状的审批项（批量加载标题与成员显示名）。"""
-    if not transfers and not deadline_changes and not dev_docs:
+    """把申请与交付审核结论聚合成统一形状的审批项（批量加载标题与成员显示名）。"""
+    reviews = reviews or []
+    if not transfers and not deadline_changes and not dev_docs and not reviews:
         return []
 
     # 批量加载关联工作项标题与成员显示名
@@ -68,6 +73,7 @@ async def _aggregate_items(
         {r.work_item_id for r in transfers}
         | {r.work_item_id for r in deadline_changes}
         | {d.work_item_id for d in dev_docs}
+        | {r.work_item_id for r in reviews}
     )
     member_ids: set[uuid.UUID] = set()
     for r in transfers:
@@ -83,6 +89,25 @@ async def _aggregate_items(
             member_ids.add(d.author_member_id)
         if d.confirmed_by is not None:
             member_ids.add(d.confirmed_by)
+    for review in reviews:
+        member_ids.add(review.reviewed_by)
+
+    # 交付审核：批量加载被审核交付物（提交人 / 版本 / 类型）
+    deliverables: dict[uuid.UUID, Deliverable] = {}
+    if reviews:
+        del_rows = (
+            (
+                await session.execute(
+                    select(Deliverable).where(
+                        Deliverable.id.in_({review.deliverable_id for review in reviews})
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        deliverables = {d.id: d for d in del_rows}
+        member_ids.update(d.submitted_by for d in del_rows)
 
     item_titles: dict[uuid.UUID, str] = {}
     if item_ids:
@@ -196,6 +221,37 @@ async def _aggregate_items(
                 review_note=d.review_note,
             )
         )
+    for review in reviews:
+        title = item_titles.get(review.work_item_id, "")
+        deliverable = deliverables.get(review.deliverable_id)
+        # 交付物与审核同事务写入，正常必有；缺失时兜底展示，不阻塞列表
+        items.append(
+            ApprovalItemOut(
+                kind="delivery_review",
+                id=review.id,
+                work_item_id=review.work_item_id,
+                work_item_title=title,
+                summary=(
+                    f"{title}：第 {deliverable.version} 版交付审核"
+                    if deliverable is not None
+                    else f"{title}：交付审核"
+                ),
+                requested_by=(
+                    brief(deliverable.submitted_by)
+                    if deliverable is not None
+                    else brief(review.reviewed_by)
+                ),
+                status=review.decision,
+                impact_analysis_status=None,
+                version=1,
+                created_at=review.created_at,
+                updated_at=review.updated_at,
+                approved_by=approver_brief(review.reviewed_by),
+                approved_at=review.created_at,
+                deliverable_version=deliverable.version if deliverable else None,
+                deliverable_type=deliverable.type if deliverable else None,
+            )
+        )
     return items
 
 
@@ -287,7 +343,17 @@ async def list_processed_approvals(
         .scalars()
         .all()
     )
+    # 交付审核结论：reviews 即终审留痕（7.5 节），全部视为"已处理"
+    reviews = list(
+        (
+            await session.execute(
+                select(Review).order_by(Review.updated_at.desc()).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
-    items = await _aggregate_items(session, transfers, deadline_changes, dev_docs)
+    items = await _aggregate_items(session, transfers, deadline_changes, dev_docs, reviews)
     items.sort(key=lambda item: item.updated_at, reverse=True)
     return items[:limit]

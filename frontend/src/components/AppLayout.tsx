@@ -77,14 +77,15 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex min-h-screen">
+    // 视口高度的应用框架：侧边导航与顶栏固定，仅主内容区内部滚动
+    <div className="flex h-screen overflow-hidden">
       {/* 侧边导航 */}
       <aside className="flex w-56 shrink-0 flex-col border-r bg-sidebar">
         <div className="flex h-14 items-center px-4">
           <span className="text-lg font-semibold">AgentOS</span>
         </div>
         <Separator />
-        <nav className="flex-1 space-y-1 p-2">
+        <nav className="flex-1 space-y-1 overflow-y-auto p-2">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -161,7 +162,7 @@ export default function AppLayout() {
             </SimpleMenu>
           </div>
         </header>
-        <main className="flex-1 p-6">
+        <main className="flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>
       </div>

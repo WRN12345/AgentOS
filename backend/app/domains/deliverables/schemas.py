@@ -55,3 +55,28 @@ class DeliverableOut(BaseModel):
     submitted_by: MemberBrief
     created_at: datetime
     updated_at: datetime
+
+
+class DeliverableReviewBrief(BaseModel):
+    """交付物的审核结论摘要（反馈正文仅负责人与主执行人可见，16 节）。"""
+
+    decision: str
+    feedback: str | None
+    reviewed_by: MemberBrief
+    created_at: datetime
+
+
+class DeliverableListItemOut(BaseModel):
+    """交付物列表项：交付物聚合页与"我的申请"（role=mine）共用。
+
+    review 为 null 表示尚未审核；feedback 按 16 节仅对负责人与提交人返回。
+    """
+
+    id: uuid.UUID
+    work_item_id: uuid.UUID
+    work_item_title: str
+    type: str
+    version: int
+    submitted_by: MemberBrief
+    created_at: datetime
+    review: DeliverableReviewBrief | None

@@ -159,7 +159,7 @@ describe("ApprovalsPage 审批卡片", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "我的申请" })).toBeInTheDocument();
     expect(
-      await screen.findByText("我发起的转派与 DDL 变更申请会显示在这里"),
+      await screen.findByText("我发起的转派、DDL 变更申请与提交的交付物会显示在这里"),
     ).toBeInTheDocument();
   });
 });

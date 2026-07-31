@@ -426,3 +426,141 @@ async def test_collaboration_submit_rejects_foreign_deliverable(
         headers=bob_headers,
     )
     assert submitted.status_code == 422
+
+
+# ---------- GET /deliverables?role=mine（我的交付） ----------
+
+
+async def test_list_mine_returns_own_deliverables_with_review(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """成员看到自己提交的交付物（时间倒序）及审核结论；未审核的 review 为 null；
+    他人提交的不出现；匿名 401。"""
+    ctx = await _setup(client, project)
+    leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    alice_headers = ctx["alice_headers"]
+
+    # alice 的任务：两个交付物，第 1 版被审核
+    item_id = await _create_item(client, leader_headers, str(alice.id))  # type: ignore[arg-type]
+    await _start_item(client, ctx, item_id)
+    resp = await _deliver(client, alice_headers, item_id, {"type": "text", "content": "第一版"})  # type: ignore[arg-type]
+    assert resp.status_code == 201, resp.text
+    first_id = resp.json()["id"]
+    resp = await _deliver(client, alice_headers, item_id, {"type": "text", "content": "第二版"})  # type: ignore[arg-type]
+    assert resp.status_code == 201, resp.text
+    resp = await client.post(
+        f"/api/v1/work-items/{item_id}/submit", json={"version": 3}, headers=alice_headers  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    reviewed = await client.post(
+        f"/api/v1/work-items/{item_id}/reviews",
+        json={"deliverable_id": first_id, "decision": "request_changes", "feedback": "补充测试报告"},
+        headers=leader_headers,  # type: ignore[arg-type]
+    )
+    assert reviewed.status_code == 201, reviewed.text
+
+    # bob 的任务：一个交付物，不应出现在 alice 的列表
+    bob_item_id = await _create_item(client, leader_headers, str(bob.id))  # type: ignore[arg-type]
+    resp = await client.post(
+        f"/api/v1/work-items/{bob_item_id}/publish", json={"version": 1}, headers=leader_headers  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        f"/api/v1/work-items/{bob_item_id}/dev-doc/waive", json={}, headers=leader_headers  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        f"/api/v1/work-items/{bob_item_id}/start", json={"version": 2}, headers=ctx["bob_headers"]  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await _deliver(client, ctx["bob_headers"], bob_item_id, {"type": "text", "content": "鲍勃的交付"})  # type: ignore[arg-type]
+    assert resp.status_code == 201, resp.text
+
+    resp = await client.get("/api/v1/deliverables?role=mine", headers=alice_headers)  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    mine = resp.json()
+    assert len(mine) == 2
+    # 时间倒序：第二版在前，未审核 review 为 null
+    assert mine[0]["version"] == 2
+    assert mine[0]["work_item_title"] == "RAG 工作项"
+    assert mine[0]["review"] is None
+    # 第一版带审核结论与反馈
+    assert mine[1]["version"] == 1
+    assert mine[1]["review"]["decision"] == "request_changes"
+    assert mine[1]["review"]["feedback"] == "补充测试报告"
+    assert mine[1]["review"]["reviewed_by"] == {"id": str(leader.id), "display_name": "负责人"}
+
+    resp = await client.get("/api/v1/deliverables?role=mine")
+    assert resp.status_code == 401
+
+
+# ---------- GET /deliverables（聚合页，可见范围） ----------
+
+
+async def test_list_visible_scopes_and_feedback_visibility(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """负责人见全部交付物（含反馈）；相关成员（协作者）只见相关工作项且不见
+    反馈正文（16 节）；无关成员列表为空；提交人可见自己交付物的反馈。"""
+    ctx = await _setup(client, project)
+    leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    alice_headers = ctx["alice_headers"]
+
+    # alice 的任务（bob 为协作者）：提交交付物并被负责人审核（带反馈）
+    item_id = await _create_item(
+        client, leader_headers, str(alice.id), collaborator_ids=[str(bob.id)]  # type: ignore[arg-type]
+    )
+    await _start_item(client, ctx, item_id)
+    resp = await _deliver(client, alice_headers, item_id, {"type": "text", "content": "交付说明"})  # type: ignore[arg-type]
+    assert resp.status_code == 201, resp.text
+    deliverable_id = resp.json()["id"]
+    resp = await client.post(
+        f"/api/v1/work-items/{item_id}/submit", json={"version": 3}, headers=alice_headers  # type: ignore[arg-type]
+    )
+    assert resp.status_code == 200, resp.text
+    reviewed = await client.post(
+        f"/api/v1/work-items/{item_id}/reviews",
+        json={"deliverable_id": deliverable_id, "decision": "request_changes", "feedback": "补充测试报告"},
+        headers=leader_headers,  # type: ignore[arg-type]
+    )
+    assert reviewed.status_code == 201, reviewed.text
+
+    # 负责人：见全部，含反馈与提交人
+    resp = await client.get("/api/v1/deliverables", headers=leader_headers)  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["work_item_title"] == "RAG 工作项"
+    assert items[0]["submitted_by"] == {"id": str(alice.id), "display_name": "爱丽丝"}
+    assert items[0]["review"]["decision"] == "request_changes"
+    assert items[0]["review"]["feedback"] == "补充测试报告"
+
+    # 提交人 alice：见自己任务的交付物，含反馈
+    resp = await client.get("/api/v1/deliverables", headers=alice_headers)  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["review"]["feedback"] == "补充测试报告"
+
+    # 协作者 bob：相关工作项可见，但反馈正文按 16 节隐藏
+    resp = await client.get("/api/v1/deliverables", headers=ctx["bob_headers"])  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["review"]["decision"] == "request_changes"
+    assert items[0]["review"]["feedback"] is None
+
+    # 无关成员 dave：空列表
+    resp = await client.get("/api/v1/deliverables", headers=ctx["dave_headers"])  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    # 匿名 401
+    resp = await client.get("/api/v1/deliverables")
+    assert resp.status_code == 401

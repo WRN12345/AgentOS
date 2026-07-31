@@ -55,6 +55,7 @@ import type {
   ApprovalItem,
   DeadlineChangeRequest,
   DeadlineChangeSummary,
+  DeliverableListItem,
   DevDoc,
   TransferRequest,
   TransferRequestSummary,
@@ -64,6 +65,10 @@ import {
   DEADLINE_CHANGE_STATUS_META,
   TRANSFER_STATUS_META,
 } from "../collaboration/constants";
+import {
+  DELIVERABLE_TYPE_META,
+  REVIEW_DECISION_META,
+} from "../deliverables/constants";
 import { DeliveryReviewSection } from "./DeliveryReviewSection";
 import { DevDocReviewPanel } from "../work-items/DevDocSection";
 
@@ -112,11 +117,12 @@ export default function ApprovalsPage() {
   );
 }
 
-/** 审批聚合条目类型中文标签（含开发文档前置的 dev_doc）。 */
+/** 审批聚合条目类型中文标签（含开发文档前置的 dev_doc 与交付审核结论）。 */
 const APPROVAL_KIND_LABELS: Record<string, string> = {
   transfer: "转派申请",
   deadline_change: "DDL 变更",
   dev_doc: "开发文档",
+  delivery_review: "交付审核",
 };
 
 /** 负责人待审批列表（GET /approvals）：转派、DDL 变更与开发文档统一卡片；管理员只读（无审批按钮）。 */
@@ -658,9 +664,13 @@ function ProcessedApprovals() {
             ? DEV_DOC_STATUS_META[
                 item.status as keyof typeof DEV_DOC_STATUS_META
               ]
-            : TRANSFER_STATUS_META[
-                item.status as keyof typeof TRANSFER_STATUS_META
-              ];
+            : item.kind === "delivery_review"
+              ? REVIEW_DECISION_META[
+                  item.status as keyof typeof REVIEW_DECISION_META
+                ]
+              : TRANSFER_STATUS_META[
+                  item.status as keyof typeof TRANSFER_STATUS_META
+                ];
         return (
           <Card key={`${item.kind}-${item.id}`}>
             <CardHeader>
@@ -695,7 +705,11 @@ function ProcessedApprovals() {
               <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
                 <div>
                   <h3 className="mb-1 font-medium text-muted-foreground">
-                    {item.kind === "dev_doc" ? "撰写人" : "申请人"}
+                    {item.kind === "dev_doc"
+                      ? "撰写人"
+                      : item.kind === "delivery_review"
+                        ? "提交人"
+                        : "申请人"}
                   </h3>
                   {item.requested_by.display_name}
                 </div>
@@ -725,7 +739,7 @@ function ProcessedApprovals() {
   );
 }
 
-/** 成员侧"我的申请"：我发起的转派与 DDL 变更及审批进度，待审批可撤销。 */
+/** 成员侧"我的申请"：我发起的转派与 DDL 变更及审批进度（待审批可撤销），以及我提交的交付物与审核结论。 */
 function MyRequests() {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
@@ -742,9 +756,15 @@ function MyRequests() {
       api.get<DeadlineChangeSummary[]>("/deadline-change-requests?role=mine"),
   });
 
+  const { data: deliveries } = useQuery({
+    queryKey: ["deliverables", "mine"],
+    queryFn: () => api.get<DeliverableListItem[]>("/deliverables?role=mine"),
+  });
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
     queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
+    queryClient.invalidateQueries({ queryKey: ["deliverables"] });
     queryClient.invalidateQueries({ queryKey: ["approvals"] });
     queryClient.invalidateQueries({ queryKey: ["notifications"] });
   };
@@ -792,7 +812,9 @@ function MyRequests() {
   });
 
   const empty =
-    (transfers ?? []).length === 0 && (deadlineChanges ?? []).length === 0;
+    (transfers ?? []).length === 0 &&
+    (deadlineChanges ?? []).length === 0 &&
+    (deliveries ?? []).length === 0;
 
   if (empty) {
     return (
@@ -800,7 +822,7 @@ function MyRequests() {
         <CardHeader>
           <CardTitle>我的申请</CardTitle>
           <CardDescription>
-            我发起的转派与 DDL 变更申请会显示在这里
+            我发起的转派、DDL 变更申请与提交的交付物会显示在这里
           </CardDescription>
         </CardHeader>
       </Card>
@@ -923,6 +945,76 @@ function MyRequests() {
                           </Button>
                         )}
                     </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {(deliveries ?? []).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>我的交付</CardTitle>
+            <CardDescription>
+              我提交的交付物及负责人审核结论；详细内容见任务详情页交付区
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>工作项</TableHead>
+                  <TableHead>版本</TableHead>
+                  <TableHead>审核结论</TableHead>
+                  <TableHead>提交时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(deliveries ?? []).map((d) => (
+                  <TableRow key={d.id}>
+                    <TableCell>
+                      <Link
+                        to={`/work-items/${d.work_item_id}`}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        {d.work_item_title}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      第 {d.version} 版（{DELIVERABLE_TYPE_META[d.type].label}）
+                    </TableCell>
+                    <TableCell>
+                      {d.review ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              className={
+                                REVIEW_DECISION_META[d.review.decision]
+                                  .className
+                              }
+                            >
+                              {REVIEW_DECISION_META[d.review.decision].label}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {d.review.reviewed_by.display_name} ·{" "}
+                              {formatDateTime(d.review.created_at)}
+                            </span>
+                          </div>
+                          {d.review.feedback && (
+                            <p className="whitespace-pre-wrap rounded-md bg-muted px-2 py-1 text-xs">
+                              {d.review.feedback}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">
+                          待审核
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>{formatDateTime(d.created_at)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

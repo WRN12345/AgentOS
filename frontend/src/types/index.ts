@@ -221,7 +221,7 @@ export interface DeadlineChangeRequest extends DeadlineChangeSummary {
 
 /** 负责人待审批聚合项（GET /approvals）：转派与 DDL 变更统一形状。 */
 export interface ApprovalItem {
-  kind: "transfer" | "deadline_change" | "dev_doc";
+  kind: "transfer" | "deadline_change" | "dev_doc" | "delivery_review";
   id: string;
   work_item_id: string;
   work_item_title: string;
@@ -244,6 +244,26 @@ export interface ApprovalItem {
   /** kind="dev_doc" 时返回：第 N 次提交与打回理由。 */
   doc_version?: number;
   review_note?: string | null;
+  /** kind="delivery_review" 时返回：被审核的交付物版本与类型；status 为审核结论。 */
+  deliverable_version?: number | null;
+  deliverable_type?: string | null;
+}
+
+/** 交付物列表项（GET /deliverables 聚合页；?role=mine 为"我的申请"我的交付）。 */
+export interface DeliverableListItem {
+  id: string;
+  work_item_id: string;
+  work_item_title: string;
+  type: DeliverableType;
+  version: number;
+  submitted_by: MemberBrief;
+  created_at: string;
+  review: {
+    decision: ReviewDecision;
+    feedback: string | null;
+    reviewed_by: MemberBrief;
+    created_at: string;
+  } | null;
 }
 
 /* ---------- 开发文档前置（2026-07-30 设计文档 §4） ---------- */
