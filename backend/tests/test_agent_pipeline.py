@@ -304,8 +304,8 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert member is not None
         member.is_active = False  # 停用成员不可分配
         # 张三名下 1 个进行中工作项 → 负载/进行中清单数据
-        item = WorkItem(title="检索模块", description="描述", assignee_id=zhangsan.id,
-                        status="IN_PROGRESS")
+        item = WorkItem(title="检索模块", description="描述", project_id=zhangsan.project_id,
+                        assignee_id=zhangsan.id, status="IN_PROGRESS")
         item.collaborators = []
         session.add(item)
         await session.commit()

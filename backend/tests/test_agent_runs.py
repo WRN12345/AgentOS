@@ -27,11 +27,12 @@ from app.workers.worker import handle_task
 from tests.conftest import add_member
 
 
-async def _make_work_item(assignee_id: uuid.UUID) -> WorkItem:
+async def _make_work_item(assignee_id: uuid.UUID, *, project_id: uuid.UUID) -> WorkItem:
     async with async_session_factory() as session:
         item = WorkItem(
             title="实现用户登录",
             description="支持账号密码登录",
+            project_id=project_id,
             assignee_id=assignee_id,
             status="READY",
         )
@@ -57,7 +58,7 @@ async def test_agent_tables_exist() -> None:
 
 async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMember) -> None:
     """人工触发 echo 分析：队列 → worker → 图 → 建议 + 通知 + 检查点。"""
-    item = await _make_work_item(leader.id)
+    item = await _make_work_item(leader.id, project_id=project.id)
     redis_client = create_redis_client()
     try:
         # 清空共享测试队列：其他用例（如 POST /tasks/example）可能留有残留任务

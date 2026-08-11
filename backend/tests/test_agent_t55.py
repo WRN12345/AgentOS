@@ -71,6 +71,7 @@ async def _make_work_item(
     assignee_id: uuid.UUID,
     title: str,
     *,
+    project_id: uuid.UUID,
     status: str = "READY",
     due_at: datetime | None = None,
     acceptance_criteria: str | None = None,
@@ -79,6 +80,7 @@ async def _make_work_item(
         item = WorkItem(
             title=title,
             description="描述",
+            project_id=project_id,
             assignee_id=assignee_id,
             status=status,
             due_at=due_at,
@@ -111,9 +113,9 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
     """临期 + 阻塞工作项 → 风险扫描生成 risk 建议，通知负责人，周期触发去重。"""
     now = datetime.now(UTC)
     due_item = await _make_work_item(
-        leader.id, "临期工作项", status="IN_PROGRESS", due_at=now + timedelta(hours=2)
+        leader.id, "临期工作项", project_id=project.id, status="IN_PROGRESS", due_at=now + timedelta(hours=2)
     )
-    blocked_item = await _make_work_item(leader.id, "阻塞工作项", status="BLOCKED")
+    blocked_item = await _make_work_item(leader.id, "阻塞工作项", project_id=project.id, status="BLOCKED")
 
     provider = _FakeProvider(
         json.dumps(
@@ -218,6 +220,7 @@ async def _prepare_submittable_item(
     item = await _make_work_item(
         assignee.id,
         "实现登录接口",
+        project_id=assignee.project_id,
         status="IN_PROGRESS",
         acceptance_criteria=acceptance_criteria,
     )
@@ -355,10 +358,10 @@ async def test_summary_agent_uses_real_stats(
 ) -> None:
     """摘要建议生成；发给模型的统计与 DB 真实数据一致；fact_refs 引用真实 ID。"""
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
-    completed = await _make_work_item(alice.id, "已完成事项", status="COMPLETED")
-    in_review = await _make_work_item(alice.id, "待审工作项", status="IN_REVIEW")
-    await _make_work_item(alice.id, "阻塞工作项", status="BLOCKED")
-    await _make_work_item(alice.id, "待启动工作项", status="READY")
+    completed = await _make_work_item(alice.id, "已完成事项", project_id=project.id, status="COMPLETED")
+    in_review = await _make_work_item(alice.id, "待审工作项", project_id=project.id, status="IN_REVIEW")
+    await _make_work_item(alice.id, "阻塞工作项", project_id=project.id, status="BLOCKED")
+    await _make_work_item(alice.id, "待启动工作项", project_id=project.id, status="READY")
     async with async_session_factory() as session:
         transfer = TransferRequest(
             work_item_id=in_review.id,
@@ -466,7 +469,7 @@ async def test_project_level_agent_analysis_api(
         assert body["trigger_source"] == "manual"
 
         # 负责人：带 work_item_id 的项目级触发（校验工作项存在）
-        item = await _make_work_item(leader.id, "关联工作项")
+        item = await _make_work_item(leader.id, "关联工作项", project_id=project.id)
         resp = await client.post(
             "/api/v1/agent-analysis",
             json={"agent_type": "summary_agent", "work_item_id": str(item.id)},
@@ -509,7 +512,7 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
     project: Project, leader: ProjectMember
 ) -> None:
     """文本/Git 链接交付物带正文；文件类只带元数据，content 一律 None（不读原文）。"""
-    item = await _make_work_item(leader.id, "混合交付工作项", status="IN_PROGRESS")
+    item = await _make_work_item(leader.id, "混合交付工作项", project_id=project.id, status="IN_PROGRESS")
     async with async_session_factory() as session:
         stored = StoredFile(
             storage_key="2026/07/abc.pdf",
