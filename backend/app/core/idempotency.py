@@ -156,7 +156,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             async for chunk in response.body_iterator:
                 body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
         else:
-            body = bytes(response.body)
+            try:
+                body = bytes(response.body)  # type: ignore[arg-type]
+            except AttributeError:
+                # 某些响应类型（如 _StreamingResponse）没有 body 属性，
+                # 退而迭代 body_iterator
+                async for chunk in response.body_iterator:
+                    body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
 
         headers = dict(response.headers)
         headers.pop("content-length", None)

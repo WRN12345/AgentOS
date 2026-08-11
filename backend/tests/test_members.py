@@ -34,11 +34,11 @@ async def test_member_cannot_create_member(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
     """普通成员调用 POST /members → 403。"""
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     created = await _create_member_via_api(client, leader_headers)
     assert created.status_code == 201
 
-    member_headers = await auth_headers(client, "alice", MEMBER_PW)
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
     resp = await _create_member_via_api(client, member_headers, username="bob")
     assert resp.status_code == 403
     assert resp.json()["code"] == "FORBIDDEN"
@@ -48,7 +48,7 @@ async def test_leader_creates_member_with_login_account(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
     """负责人创建成员并生成登录账号；初始密码仅创建响应返回一次，可登录。"""
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     resp = await _create_member_via_api(client, leader_headers)
     assert resp.status_code == 201
     body = resp.json()
@@ -79,7 +79,7 @@ async def test_leader_creates_member_with_login_account(
 async def test_create_member_username_conflict(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     resp = await _create_member_via_api(client, leader_headers, username="leader")
     assert resp.status_code == 409
     assert resp.json()["code"] == "USERNAME_TAKEN"
@@ -89,10 +89,10 @@ async def test_get_members_returns_summary_without_sensitive_fields(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
     """任何项目成员可查全员摘要；响应不含密码哈希/令牌等敏感字段。"""
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     await _create_member_via_api(client, leader_headers)
 
-    member_headers = await auth_headers(client, "alice", MEMBER_PW)
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
     resp = await client.get("/api/v1/members", headers=member_headers)
     assert resp.status_code == 200
     body = resp.json()
@@ -119,7 +119,7 @@ async def test_get_members_rejects_non_member_and_anonymous(
 
         await create_user(session, "outsider", "Outsider123!")
         await session.commit()
-    outsider_headers = await auth_headers(client, "outsider", "Outsider123!")
+    outsider_headers = await auth_headers(client, "outsider", "Outsider123!", project_id=str(project.id))
     resp = await client.get("/api/v1/members", headers=outsider_headers)
     assert resp.status_code == 403
     assert resp.json()["code"] == "NOT_PROJECT_MEMBER"
@@ -129,10 +129,10 @@ async def test_capability_submit_and_confirm_flow(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
     """成员填报能力后未确认；负责人确认后翻转，全程留痕。"""
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     created = (await _create_member_via_api(client, leader_headers)).json()
     member_id = created["id"]
-    member_headers = await auth_headers(client, "alice", MEMBER_PW)
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
 
     # 成员填报自己的能力 → confirmed 全部 False
     caps = {"capabilities": [{"tag": "RAG", "proficiency": 4}, {"tag": "FastAPI", "proficiency": 3}]}
@@ -200,7 +200,7 @@ async def test_leader_updates_and_disables_member(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
     """负责人维护资料；禁用后成员账号无法登录，启用后恢复。"""
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     created = (await _create_member_via_api(client, leader_headers)).json()
     member_id = created["id"]
 
@@ -236,7 +236,7 @@ async def test_leader_updates_and_disables_member(
     assert login.status_code == 200
 
     # 普通成员不能 PATCH
-    member_headers = await auth_headers(client, "alice", MEMBER_PW)
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
     resp = await client.patch(
         f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
     )
@@ -259,6 +259,6 @@ async def test_direct_member_creation_via_helper(
 ) -> None:
     """add_member 辅助函数本身可用（供其他测试文件准备数据）。"""
     await add_member(project, "helper-user", "Helper123!", role="leader")
-    headers = await auth_headers(client, "helper-user", "Helper123!")
+    headers = await auth_headers(client, "helper-user", "Helper123!", project_id=str(project.id))
     resp = await client.get("/api/v1/members", headers=headers)
     assert resp.status_code == 200

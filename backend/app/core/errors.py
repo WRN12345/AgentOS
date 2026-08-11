@@ -28,6 +28,7 @@ class ErrorCodes:
     # 项目成员与权限（6.1 节）：资源关系校验失败统一 403
     FORBIDDEN = "FORBIDDEN"
     NOT_PROJECT_MEMBER = "NOT_PROJECT_MEMBER"
+    MISSING_PROJECT_ID = "MISSING_PROJECT_ID"
     USERNAME_TAKEN = "USERNAME_TAKEN"
 
     # 乐观锁版本冲突（17.2 节）：更新接口携带 version，不匹配返回 409

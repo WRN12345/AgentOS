@@ -30,7 +30,7 @@ from app.domains.deliverables.schemas import (
 )
 from app.domains.files.models import StoredFile
 from app.domains.files.service import get_stored_file, is_work_item_related
-from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.reviews.models import Review
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import MemberBrief
@@ -91,7 +91,7 @@ async def _to_out(session: AsyncSession, deliverable: Deliverable) -> Deliverabl
 
 async def _check_visible(session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID) -> None:
     """可见性（16 节）：负责人、管理员（只读）或工作项相关成员（主执行人/协作者/协作请求双方）。"""
-    if actor.role in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role in (ROLE_LEADER):
         return
     if not await is_work_item_related(session, item_id, actor.id):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "无权查看该工作项的交付物")
@@ -223,7 +223,7 @@ async def list_visible(
     """交付物聚合页：负责人与管理员见全部；普通成员只见相关工作项
     （主执行人 / 协作者 / 协作请求任一方，16 节）的交付物，按提交时间倒序。"""
     stmt = select(Deliverable).order_by(Deliverable.created_at.desc())
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role not in (ROLE_LEADER):
         related_item_ids = select(WorkItem.id).where(
             or_(
                 WorkItem.assignee_id == actor.id,

@@ -27,7 +27,7 @@ from app.core.errors import ApiException, ErrorCodes
 from app.domains.identity.security import decode_access_token
 from app.domains.identity.service import get_user_by_id
 from app.domains.project.models import ProjectMember
-from app.domains.project.service import get_default_project, get_member_by_user
+from app.domains.project.service import get_member_by_user
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.events import channel_for
@@ -40,7 +40,9 @@ HEARTBEAT_SECONDS = 15.0
 async def _resolve_member(
     request: Request, session: AsyncSession, token: str | None
 ) -> ProjectMember:
-    """解析 SSE 连接的成员身份：`?token=` 优先，Authorization 头兜底。"""
+    """解析 SSE 连接的成员身份：`?token=` 优先，Authorization 头兜底。
+    多项目后同时从 X-Project-Id 请求头读取项目上下文。
+    """
     raw = token
     if not raw:
         authorization = request.headers.get("Authorization", "")
@@ -61,8 +63,18 @@ async def _resolve_member(
     if not user.is_active:
         raise ApiException(403, ErrorCodes.USER_DISABLED, "账号已被禁用")
 
-    project = await get_default_project(session)
-    member = await get_member_by_user(session, project.id, user.id)
+    # 多项目：从 X-Project-Id 读取项目上下文
+    project_id_str = request.headers.get("X-Project-Id", "").strip()
+    if not project_id_str:
+        raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
+    try:
+        project_id = uuid.UUID(project_id_str)
+    except ValueError:
+        raise ApiException(
+            400, ErrorCodes.MISSING_PROJECT_ID, "X-Project-Id 格式无效，须为合法 UUID"
+        ) from None
+
+    member = await get_member_by_user(session, project_id, user.id)
     if member is None or not member.is_active:
         raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是项目成员或已被禁用")
     return member

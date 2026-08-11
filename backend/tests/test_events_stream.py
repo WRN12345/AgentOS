@@ -36,9 +36,9 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
         "leader": leader,
         "alice": alice,
         "bob": bob,
-        "leader_headers": await auth_headers(client, "leader", LEADER_PW),
-        "alice_headers": await auth_headers(client, "alice", ALICE_PW),
-        "bob_headers": await auth_headers(client, "bob", BOB_PW),
+        "leader_headers": await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id)),
+        "alice_headers": await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id)),
+        "bob_headers": await auth_headers(client, "bob", BOB_PW, project_id=str(project.id)),
     }
     created = await client.post(
         "/api/v1/work-items",
@@ -219,7 +219,10 @@ async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Pro
         "path": "/api/v1/events/stream",
         "raw_path": b"/api/v1/events/stream",
         "query_string": f"token={bob_token}".encode(),
-        "headers": [(b"host", b"test")],
+        "headers": [
+            (b"host", b"test"),
+            (b"x-project-id", str(project.id).encode()),
+        ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
     }

@@ -446,8 +446,8 @@ async def test_project_level_agent_analysis_api(
     """负责人触发项目级分析 202（work_item_id 可空）；普通成员 403；未注册类型 400。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
-    alice_headers = await auth_headers(client, "alice", ALICE_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
+    alice_headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
 
     redis_client = create_redis_client()
     try:

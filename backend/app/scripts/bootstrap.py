@@ -1,8 +1,7 @@
-"""初始数据引导（幂等）：默认项目 + 管理员账号与成员身份。
+"""初始数据引导（幂等）：默认项目 + 全局管理员账号。
 
-首版不开放公开注册（16 节），新环境通过本脚本获得首个可登录账号，
-并把它登记为默认项目（2.2 节单项目）的 admin 成员（管理员：查看全部 +
-成员账号管理；负责人由管理员登录后通过成员管理创建）。
+管理员升级为全局角色（users.is_admin），不属于任何项目、
+不参与业务协作，通过管理控制台管理平台。
 用法：python -m app.scripts.bootstrap（backend 容器启动时在迁移后自动执行）。
 配置：BOOTSTRAP_ADMIN_USERNAME / BOOTSTRAP_ADMIN_PASSWORD /
 BOOTSTRAP_PROJECT_NAME / BOOTSTRAP_ADMIN_DISPLAY_NAME。
@@ -17,14 +16,14 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.domains.identity.models import User
 from app.domains.identity.service import create_user
-from app.domains.project.models import ROLE_ADMIN, Project, ProjectMember
+from app.domains.project.models import Project
 from app.infrastructure.database.engine import async_session_factory, engine
 
 logger = setup_logging("backend")
 
 
 async def ensure_default_project() -> Project:
-    """幂等创建默认项目（首版只有一条有效项目记录）。"""
+    """幂等创建默认项目。"""
     async with async_session_factory() as session:
         project = (
             await session.execute(
@@ -39,7 +38,7 @@ async def ensure_default_project() -> Project:
 
 
 async def ensure_admin() -> User:
-    """幂等创建初始管理员账号：已存在则直接返回。"""
+    """幂等创建全局管理员账号（users.is_admin = True，不创建项目成员记录）。"""
     async with async_session_factory() as session:
         user = (
             await session.execute(
@@ -50,44 +49,23 @@ async def ensure_admin() -> User:
             user = await create_user(
                 session, settings.bootstrap_admin_username, settings.bootstrap_admin_password
             )
+            user.is_admin = True
+            await session.commit()
+        elif not user.is_admin:
+            # 已存在的初始账号但尚未标记为 admin（向前兼容旧部署）
+            user.is_admin = True
             await session.commit()
         return user
 
 
-async def ensure_admin_membership(project: Project, user: User) -> bool:
-    """幂等把初始账号登记为默认项目的 admin 成员。返回是否新建。"""
-    async with async_session_factory() as session:
-        existing = (
-            await session.execute(
-                select(ProjectMember).where(
-                    ProjectMember.project_id == project.id,
-                    ProjectMember.user_id == user.id,
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return False
-        session.add(
-            ProjectMember(
-                project_id=project.id,
-                user_id=user.id,
-                role=ROLE_ADMIN,
-                display_name=settings.bootstrap_admin_display_name,
-            )
-        )
-        await session.commit()
-        return True
-
-
 async def main() -> None:
     project = await ensure_default_project()
-    user = await ensure_admin()
-    membership_created = await ensure_admin_membership(project, user)
+    admin_user = await ensure_admin()
     logger.info(
-        "bootstrap: project=%s, admin=%s, admin membership %s",
+        "bootstrap: project=%s, global admin=%s (is_admin=%s)",
         settings.bootstrap_project_name,
         settings.bootstrap_admin_username,
-        "created" if membership_created else "already exists",
+        admin_user.is_admin,
     )
     await engine.dispose()
 
