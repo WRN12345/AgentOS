@@ -35,7 +35,7 @@ from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.files.models import StoredFile
 from app.domains.identity.models import User
-from app.domains.project.models import ROLE_ADMIN, MemberCapability, ProjectMember
+from app.domains.project.models import MemberCapability, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
@@ -98,15 +98,12 @@ async def list_open_work_items(
 
 
 async def list_member_capabilities(session: AsyncSession) -> list[dict]:
-    """成员能力清单：标签、熟练度、负责人确认状态（6.2 节，供分配建议引用）。
-
-    管理员不参与工作协作，不进入分配建议的候选数据源。
-    """
+    """成员能力清单：标签、熟练度、负责人确认状态（6.2 节，供分配建议引用）。"""
     rows = (
         await session.execute(
             select(ProjectMember, MemberCapability)
             .join(MemberCapability, MemberCapability.member_id == ProjectMember.id)
-            .where(ProjectMember.is_active.is_(True), ProjectMember.role != ROLE_ADMIN)
+            .where(ProjectMember.is_active.is_(True))
             .order_by(ProjectMember.display_name, MemberCapability.tag)
         )
     ).all()
@@ -135,13 +132,13 @@ async def list_assignable_members(session: AsyncSession) -> list[dict]:
     """可分配成员清单：display_name / username（供需求流水线解析需求文本中
     点名的人选）。
 
-    管理员不参与工作协作、停用成员不可分配，均不进入清单。
+    停用成员不可分配，不进入清单。
     """
     rows = (
         await session.execute(
             select(ProjectMember.id, ProjectMember.display_name, User.username)
             .join(User, User.id == ProjectMember.user_id)
-            .where(ProjectMember.is_active.is_(True), ProjectMember.role != ROLE_ADMIN)
+            .where(ProjectMember.is_active.is_(True))
             .order_by(ProjectMember.display_name)
         )
     ).all()
@@ -152,10 +149,7 @@ async def list_assignable_members(session: AsyncSession) -> list[dict]:
 
 
 async def get_member_workload(session: AsyncSession) -> list[dict]:
-    """成员当前负载：各活跃成员名下的活跃工作项数（6.2 节，供分配建议引用）。
-
-    管理员不参与工作协作，不进入分配建议的候选数据源。
-    """
+    """成员当前负载：各活跃成员名下的活跃工作项数（6.2 节，供分配建议引用）。"""
     rows = (
         await session.execute(
             select(ProjectMember.id, ProjectMember.display_name, func.count(WorkItem.id))
@@ -164,7 +158,7 @@ async def get_member_workload(session: AsyncSession) -> list[dict]:
                 (WorkItem.assignee_id == ProjectMember.id)
                 & (WorkItem.status.in_(ACTIVE_STATUSES)),
             )
-            .where(ProjectMember.is_active.is_(True), ProjectMember.role != ROLE_ADMIN)
+            .where(ProjectMember.is_active.is_(True))
             .group_by(ProjectMember.id, ProjectMember.display_name)
             .order_by(ProjectMember.display_name)
         )

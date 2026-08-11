@@ -28,7 +28,7 @@ from app.domains.audit.service import record_event
 from app.domains.collaboration.models import CollaborationRequest
 from app.domains.files.models import StoredFile
 from app.domains.files.schemas import StoredFileOut
-from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.service import get_work_item
 from app.infrastructure.storage.provider import StorageProvider
@@ -208,7 +208,7 @@ async def can_download_file(
 ) -> bool:
     """下载权限（16 节）：负责人、管理员（只读）全部可下；上传人本人可下；
     关联工作项的文件须与工作项有关；未关联文件仅负责人/管理员与上传人。"""
-    if actor.role in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role in (ROLE_LEADER):
         return True
     if stored.uploaded_by == actor.id:
         return True

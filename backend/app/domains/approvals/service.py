@@ -24,7 +24,7 @@ from app.domains.deadlines.state_machine import DeadlineChangeStatus, DeadlineTa
 from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
-from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.reviews.models import Review
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
@@ -259,7 +259,7 @@ async def list_pending_approvals(
     session: AsyncSession, actor: ProjectMember
 ) -> list[ApprovalItemOut]:
     """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role not in (ROLE_LEADER):
         return []
 
     transfers = list(
@@ -304,7 +304,7 @@ async def list_processed_approvals(
 ) -> list[ApprovalItemOut]:
     """已处理审批记录：终态（APPROVED/REJECTED/CANCELLED）申请按 updated_at
     倒序、最多 limit 条；权限与待审批列表一致（普通成员空列表，不 403）。"""
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role not in (ROLE_LEADER):
         return []
 
     transfers = list(

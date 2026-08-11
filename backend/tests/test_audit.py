@@ -75,7 +75,7 @@ async def test_list_audit_events_permission(client: httpx.AsyncClient, project: 
     # 普通成员（无负责人角色）→ 403
     await add_member(project, "erin", "Password1!")
 
-    leader_headers = await auth_headers(client, "dave", "Password1!")
+    leader_headers = await auth_headers(client, "dave", "Password1!", project_id=str(project.id))
     resp = await client.get("/api/v1/audit-events", headers=leader_headers)
     assert resp.status_code == 200
     items = resp.json()
@@ -88,7 +88,7 @@ async def test_list_audit_events_permission(client: httpx.AsyncClient, project: 
     assert item["source_ip"] == "10.0.0.2"
     assert item["created_at"]
 
-    member_headers = await auth_headers(client, "erin", "Password1!")
+    member_headers = await auth_headers(client, "erin", "Password1!", project_id=str(project.id))
     forbidden = await client.get("/api/v1/audit-events", headers=member_headers)
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == "FORBIDDEN"

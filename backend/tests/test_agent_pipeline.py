@@ -286,10 +286,12 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """合法三段输出 → 建议入库且符合 §4.2；指定人选 user_specified=true；
-    管理员/停用成员/未匹配名字落入 unresolved_mentions，不会被推荐。"""
+    停用成员/未匹配名字落入 unresolved_mentions，不会被推荐。
+    （多项目后管理员升级为全局角色，不再以成员身份存在，无需单独排除。）"""
     _, zhangsan = await add_member(project, "zhangsan", "Zhang123!", display_name="张三")
     _, lisi = await add_member(project, "lisi", "Li123!", display_name="李四")
-    await add_member(project, "wangguanli", "Wang123!", role="admin", display_name="王管理")
+    # 管理员不再以成员身份存在（全局 is_admin），此成员仅用于测试未匹配名字
+    await add_member(project, "wangguanli", "Wang123!", display_name="王管理")
     _, laoqian = await add_member(project, "laoqian", "Qian123!", display_name="老钱")
     async with async_session_factory() as session:
         session.add_all(
@@ -355,8 +357,9 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert second["recommended_assignee"]["member_id"] == str(lisi.id)
         assert second["user_specified"] is True
         assert "技能" in second["notes"]
-        # 未匹配点名：赵六不存在、王管理是管理员、老钱已停用 → 全部进 unresolved
-        assert sorted(content["unresolved_mentions"]) == sorted(["赵六", "王管理", "老钱"])
+        # 未匹配点名：赵六不存在、老钱已停用 → 进 unresolved
+        # 王管理是普通成员，可被正确匹配，不进入 unresolved
+        assert sorted(content["unresolved_mentions"]) == sorted(["赵六", "老钱"])
         # fact_refs 引用真实成员 ID
         assert str(zhangsan.id) in suggestion.fact_refs["member_ids"]
         assert str(lisi.id) in suggestion.fact_refs["member_ids"]

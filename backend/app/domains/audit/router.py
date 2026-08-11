@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit.models import AuditEvent
 from app.domains.audit.schemas import AuditEventOut
+from app.domains.identity.models import User
 from app.domains.project.dependencies import get_current_leader_or_admin
-from app.domains.project.models import ProjectMember
 from app.infrastructure.database.engine import get_session
 
 router = APIRouter(prefix="/audit-events", tags=["audit"])
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/audit-events", tags=["audit"])
 async def list_audit_events(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: ProjectMember = Depends(get_current_leader_or_admin),
+    _: User = Depends(get_current_leader_or_admin),
     session: AsyncSession = Depends(get_session),
 ) -> list[AuditEvent]:
     """按创建时间倒序返回审计事件（只读）。"""
