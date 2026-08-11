@@ -33,6 +33,10 @@ class WorkItem(CoreModel, VersionMixin):
         ),
     )
 
+    # 项目归属（spec D1：有独立列表入口的表冗余 project_id，NOT NULL）
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     acceptance_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)

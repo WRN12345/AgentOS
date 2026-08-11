@@ -25,7 +25,6 @@ from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
 from app.domains.project.models import ROLE_LEADER, ProjectMember
-from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import (
     MemberBrief,
@@ -75,8 +74,17 @@ _COMMAND_EVENT_TITLE = {
 
 
 async def get_work_item(
-    session: AsyncSession, item_id: uuid.UUID, *, for_update: bool = False
+    session: AsyncSession,
+    item_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+    project_id: uuid.UUID | None = None,
 ) -> WorkItem:
+    """按 id 取工作项（可选项目边界）。
+
+    project_id 传入时做越权 404（spec D3：墙外对象等同不存在）；
+    不传则只按 id 取（供派生域经 work_item_id 推导，如转派/交付物）。
+    """
     stmt = (
         select(WorkItem)
         .where(WorkItem.id == item_id)
@@ -87,7 +95,8 @@ async def get_work_item(
         # "读取 v1 → 检查通过 → 另一请求已提交" 的交错窗口
         stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
-    if item is None:
+    if item is None or (project_id is not None and item.project_id != project_id):
+        # 越权 404：项目墙外的工作项与不存在等价，不泄露存在性信息
         raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
     return item
 
@@ -95,13 +104,15 @@ async def get_work_item(
 async def list_work_items(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     assignee_id: uuid.UUID | None = None,
     status: str | None = None,
     due_from: datetime | None = None,
     due_to: datetime | None = None,
 ) -> list[WorkItemSummaryOut]:
-    """全量列表（原则 6 透明），支持按负责人、状态、DDL 区间过滤（13.1 节）。"""
-    stmt = select(WorkItem).order_by(WorkItem.created_at.desc())
+    """当前项目全量列表（原则 6 透明），支持按负责人、状态、DDL 区间过滤（13.1 节）。"""
+    stmt = select(WorkItem).where(WorkItem.project_id == project_id)
+    stmt = stmt.order_by(WorkItem.created_at.desc())
     if assignee_id is not None:
         stmt = stmt.where(WorkItem.assignee_id == assignee_id)
     if status is not None:
@@ -183,21 +194,34 @@ def _check_version(item: WorkItem, version: int) -> None:
         )
 
 
-async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> ProjectMember:
+async def _get_active_member(
+    session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
+) -> ProjectMember:
+    """取活跃成员并校验与工作项同项目（spec D3 跨实体引用同项目校验）。
+
+    成员不存在/已禁用 → 422；成员属于其他项目 → 400（跨项目指派被拒绝）。
+    """
     member = await session.get(ProjectMember, member_id)
     if member is None or not member.is_active:
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
         )
+    if member.project_id != project_id:
+        raise ApiException(
+            400,
+            ErrorCodes.CROSS_PROJECT_REFERENCE,
+            "不能指派其他项目的成员",
+            {"member_id": str(member_id)},
+        )
     return member
 
 
 async def _replace_collaborators(
-    session: AsyncSession, item: WorkItem, member_ids: list[uuid.UUID]
+    session: AsyncSession, item: WorkItem, member_ids: list[uuid.UUID], *, project_id: uuid.UUID
 ) -> None:
     unique_ids = list(dict.fromkeys(member_ids))
     for mid in unique_ids:
-        await _get_active_member(session, mid)
+        await _get_active_member(session, mid, project_id=project_id)
     # 先清空并 flush：唯一约束 (work_item_id, member_id) 下，同批 flush 会先插后删导致冲突
     item.collaborators = []
     await session.flush()
@@ -227,12 +251,12 @@ async def _build_status_events(
     只发 SSE 事件、不写站内通知——状态变化在列表/看板可见，不属于待办。
     """
     if _COMMAND_ACTOR[command] == "assignee":
-        project = await get_default_project(session)
+        # 通知该项目（工作项所属项目）的全体活跃负责人（spec 4.3 节）
         leaders = (
             (
                 await session.execute(
                     select(ProjectMember).where(
-                        ProjectMember.project_id == project.id,
+                        ProjectMember.project_id == item.project_id,
                         ProjectMember.role == ROLE_LEADER,
                         ProjectMember.is_active.is_(True),
                     )
@@ -270,9 +294,12 @@ async def create_work_item(
 ) -> WorkItemOut:
     """负责人创建工作项（初始 DRAFT），指定主执行人与可选协作者。"""
     _require_leader(actor)
-    await _get_active_member(session, payload.assignee_id)
+    # spec D3：assignee 与协作者必须与工作项同项目（跨项目指派 → 400）
+    await _get_active_member(session, payload.assignee_id, project_id=actor.project_id)
 
     item = WorkItem(
+        # 项目归属从请求上下文填充（spec D3：API 不接受传入，service 层派生）
+        project_id=actor.project_id,
         title=payload.title,
         description=payload.description,
         acceptance_criteria=payload.acceptance_criteria,
@@ -283,7 +310,9 @@ async def create_work_item(
     item.collaborators = []  # 显式初始化集合，避免异步懒加载
     session.add(item)
     await session.flush()
-    await _replace_collaborators(session, item, payload.collaborator_ids)
+    await _replace_collaborators(
+        session, item, payload.collaborator_ids, project_id=actor.project_id
+    )
     await session.flush()
 
     await record_event(
@@ -312,7 +341,7 @@ async def update_work_item(
 ) -> WorkItemOut:
     """负责人修改内容/主执行人/DDL/协作者（乐观锁）。assignee 变化必留痕。"""
     _require_leader(actor)
-    item = await get_work_item(session, item_id, for_update=True)
+    item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     _check_version(item, payload.version)
 
     before: dict[str, Any] = {}
@@ -329,7 +358,7 @@ async def update_work_item(
         setattr(item, field, new_value)
 
     if payload.assignee_id is not None and payload.assignee_id != item.assignee_id:
-        await _get_active_member(session, payload.assignee_id)
+        await _get_active_member(session, payload.assignee_id, project_id=actor.project_id)
         before["assignee_id"] = str(item.assignee_id)
         after["assignee_id"] = str(payload.assignee_id)
         item.assignee_id = payload.assignee_id
@@ -338,7 +367,9 @@ async def update_work_item(
         old_ids = sorted(str(c.member_id) for c in item.collaborators)
         new_ids = sorted(str(mid) for mid in dict.fromkeys(payload.collaborator_ids))
         if old_ids != new_ids:
-            await _replace_collaborators(session, item, payload.collaborator_ids)
+            await _replace_collaborators(
+                session, item, payload.collaborator_ids, project_id=actor.project_id
+            )
             before["collaborator_ids"] = old_ids
             after["collaborator_ids"] = new_ids
 
@@ -366,7 +397,7 @@ async def run_command(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, command: str, version: int
 ) -> WorkItemOut:
     """状态命令（publish/start/block/unblock/submit/cancel）：状态机 + 乐观锁 + 审计。"""
-    item = await get_work_item(session, item_id, for_update=True)
+    item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
 
     if _COMMAND_ACTOR[command] == "leader":
         _require_leader(actor)

@@ -293,7 +293,8 @@ async def test_manual_retry_failed_run_succeeds(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            item = WorkItem(title="RAG 工作项", description="d", assignee_id=leader.id, status="READY")
+            item = WorkItem(title="RAG 工作项", description="d", project_id=leader.project_id,
+                            assignee_id=leader.id, status="READY")
             item.collaborators = []
             session.add(item)
             await session.commit()
@@ -358,7 +359,8 @@ async def test_manual_retry_permissions_and_status(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            item = WorkItem(title="RAG 工作项", description="d", assignee_id=alice.id, status="READY")
+            item = WorkItem(title="RAG 工作项", description="d", project_id=alice.project_id,
+                            assignee_id=alice.id, status="READY")
             item.collaborators = []
             session.add(item)
             await session.commit()

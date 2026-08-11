@@ -31,6 +31,9 @@ class ErrorCodes:
     MISSING_PROJECT_ID = "MISSING_PROJECT_ID"
     USERNAME_TAKEN = "USERNAME_TAKEN"
 
+    # 跨项目引用（spec D3）：把 A 项目成员指派为 B 项目任务 assignee → 400
+    CROSS_PROJECT_REFERENCE = "CROSS_PROJECT_REFERENCE"
+
     # 乐观锁版本冲突（17.2 节）：更新接口携带 version，不匹配返回 409
     WORK_ITEM_VERSION_CONFLICT = "WORK_ITEM_VERSION_CONFLICT"
     # 工作项非法状态迁移（8.1 节）
