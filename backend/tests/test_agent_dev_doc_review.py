@@ -105,6 +105,7 @@ async def _make_item_with_doc(leader: ProjectMember, alice: ProjectMember) -> tu
         item = WorkItem(
             title="RAG 工作项",
             description="实现 RAG",
+            project_id=leader.project_id,
             assignee_id=alice.id,
             status="READY",
             acceptance_criteria="评估集准确率 ≥ 80%",

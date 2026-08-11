@@ -77,9 +77,17 @@ async def _run_once(redis_client, run_id: uuid.UUID, prompt: str = "") -> None:
     )
 
 
-async def _make_work_item(assignee_id: uuid.UUID, title: str, status: str = "READY") -> WorkItem:
+async def _make_work_item(
+    assignee: ProjectMember, title: str, status: str = "READY"
+) -> WorkItem:
     async with async_session_factory() as session:
-        item = WorkItem(title=title, description="描述", assignee_id=assignee_id, status=status)
+        item = WorkItem(
+            title=title,
+            description="描述",
+            project_id=assignee.project_id,
+            assignee_id=assignee.id,
+            status=status,
+        )
         item.collaborators = []
         session.add(item)
         await session.commit()
@@ -131,7 +139,7 @@ async def test_requirement_analyst_produces_structured_suggestion(
     )
     _patch_provider(monkeypatch, provider)
 
-    item = await _make_work_item(leader.id, "实现用户登录")
+    item = await _make_work_item(leader, "实现用户登录")
     redis_client = create_redis_client()
     try:
         run = await _trigger(
@@ -188,9 +196,9 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
         )
         await session.commit()
     # alice 名下两个活跃工作项 → 负载数据；目标工作项挂在 leader 名下
-    await _make_work_item(alice.id, "检索模块", status="IN_PROGRESS")
-    await _make_work_item(alice.id, "向量化管道")
-    item = await _make_work_item(leader.id, "RAG 问答工作项")
+    await _make_work_item(alice, "检索模块", status="IN_PROGRESS")
+    await _make_work_item(alice, "向量化管道")
+    item = await _make_work_item(leader, "RAG 问答工作项")
 
     provider = _FakeProvider(
         json.dumps(
@@ -286,8 +294,8 @@ async def test_planning_advisor_basic_contract(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """拆分/协作点/DDL 建议字段齐全；fact_refs 引用进行中工作项。"""
-    open_item = await _make_work_item(leader.id, "既有进行中工作项", status="IN_PROGRESS")
-    target = await _make_work_item(leader.id, "RAG 平台搭建")
+    open_item = await _make_work_item(leader, "既有进行中工作项", status="IN_PROGRESS")
+    target = await _make_work_item(leader, "RAG 平台搭建")
 
     provider = _FakeProvider(
         json.dumps(
@@ -363,7 +371,7 @@ async def test_model_unavailable_marks_run_failed(
     monkeypatch.setattr(settings, "agent_run_max_retries", 0)
     _patch_provider(monkeypatch, _DownProvider())
 
-    item = await _make_work_item(leader.id, "实现用户登录")
+    item = await _make_work_item(leader, "实现用户登录")
     redis_client = create_redis_client()
     try:
         run = await _trigger(redis_client, requirement.AGENT_TYPE, item.id, "需求原文")
