@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-MemberRole = Literal["leader", "member", "admin"]
+MemberRole = Literal["leader", "member"]
 
 
 class CapabilityIn(BaseModel):

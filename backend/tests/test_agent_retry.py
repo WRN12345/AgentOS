@@ -242,7 +242,7 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
         )
 
         # 4) 模型不可用期间，核心流程（登录、建工作项）全部可用
-        headers = await auth_headers(client, "leader", LEADER_PW)
+        headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         created = await client.post(
             "/api/v1/work-items",
             json={"title": "模型下线期间的工作项", "description": "核心业务不受影响", "assignee_id": str(leader.id)},
@@ -301,7 +301,7 @@ async def test_manual_retry_failed_run_succeeds(
 
         run = await _make_failed_run(redis_client, item_id, prompt="做一个 RAG 问答")
 
-        headers = await auth_headers(client, "leader", LEADER_PW)
+        headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         resp = await client.post(f"/api/v1/agent-runs/{run.id}/retry", headers=headers)
         assert resp.status_code == 202, resp.text
         assert resp.json()["status"] == "pending"
@@ -369,9 +369,9 @@ async def test_manual_retry_permissions_and_status(
         async with async_session_factory() as session:
             pending_run = await request_agent_analysis(session, redis_client, agent_type="echo")
 
-        leader_headers = await auth_headers(client, "leader", LEADER_PW)
-        alice_headers = await auth_headers(client, "alice", ALICE_PW)
-        bob_headers = await auth_headers(client, "bob", BOB_PW)
+        leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
+        alice_headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+        bob_headers = await auth_headers(client, "bob", BOB_PW, project_id=str(project.id))
 
         # 相关成员（主执行人 alice）→ 202
         resp = await client.post(f"/api/v1/agent-runs/{failed_run.id}/retry", headers=alice_headers)

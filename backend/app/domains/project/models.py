@@ -25,12 +25,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.models.base import CoreModel
 
-# 项目角色（6.1 节）：leader 负责人全管；member 普通成员；
-# admin 管理员——查看全部数据 + 成员账号管理，不参与业务协作（不可被指派）
+# 项目角色（6.1 节）：leader 负责人全管；member 普通成员
+# 管理员升级为全局角色（users.is_admin），不再作为项目内角色
 ROLE_LEADER = "leader"
 ROLE_MEMBER = "member"
-ROLE_ADMIN = "admin"
-ROLES = (ROLE_LEADER, ROLE_MEMBER, ROLE_ADMIN)
+ROLES = (ROLE_LEADER, ROLE_MEMBER)
 
 
 class Project(CoreModel):
@@ -44,7 +43,7 @@ class ProjectMember(CoreModel):
     __tablename__ = "project_members"
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", name="uq_project_members_project_user"),
-        CheckConstraint("role IN ('leader', 'member', 'admin')", name="ck_project_members_role"),
+        CheckConstraint("role IN ('leader', 'member')", name="ck_project_members_role"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

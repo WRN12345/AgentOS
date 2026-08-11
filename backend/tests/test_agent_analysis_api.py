@@ -27,7 +27,7 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
-    leader_headers = await auth_headers(client, "leader", LEADER_PW)
+    leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     created = await client.post(
         "/api/v1/work-items",
         json={"title": "RAG 工作项", "description": "实现 RAG", "assignee_id": str(alice.id)},
@@ -40,8 +40,8 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
         "bob": bob,
         "item_id": created.json()["id"],
         "leader_headers": leader_headers,
-        "alice_headers": await auth_headers(client, "alice", ALICE_PW),
-        "bob_headers": await auth_headers(client, "bob", BOB_PW),
+        "alice_headers": await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id)),
+        "bob_headers": await auth_headers(client, "bob", BOB_PW, project_id=str(project.id)),
     }
 
 

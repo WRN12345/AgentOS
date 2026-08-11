@@ -30,4 +30,13 @@ class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     is_active: bool
+    is_admin: bool
     created_at: datetime
+
+
+class MyProjectOut(BaseModel):
+    """用户参与的项目摘要（GET /me/projects）。"""
+    id: uuid.UUID
+    name: str
+    description: str | None
+    role: str  # "leader" | "member"
