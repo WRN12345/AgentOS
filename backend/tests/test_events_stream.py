@@ -103,7 +103,8 @@ async def test_work_item_status_change_publishes_to_counterpart(
 
         payload = await _next_payload(alice_pubsub)
         assert payload["type"] == "work_item.published"
-        assert set(payload) == {"id", "type", "data", "created_at"}
+        assert set(payload) == {"id", "type", "project_id", "data", "created_at"}
+        assert payload["project_id"] == str(project.id)
         assert payload["data"]["title"] == "工作项已发布"
         assert payload["data"]["link"] == f"/work-items/{item['id']}"
         uuid.UUID(payload["id"])  # id 为合法 uuid
@@ -218,10 +219,9 @@ async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Pro
         "scheme": "http",
         "path": "/api/v1/events/stream",
         "raw_path": b"/api/v1/events/stream",
-        "query_string": f"token={bob_token}".encode(),
+        "query_string": f"token={bob_token}&project_id={project.id}".encode(),
         "headers": [
             (b"host", b"test"),
-            (b"x-project-id", str(project.id).encode()),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
@@ -269,6 +269,7 @@ async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Pro
         assert lines[2].startswith("data: ")
         payload = json.loads(lines[2].removeprefix("data: "))
         assert payload["type"] == "collaboration.requested"
+        assert payload["project_id"] == str(project.id)
         assert payload["data"]["title"] == "新的协作请求"
         assert payload["id"] == lines[0].removeprefix("id: ")
     finally:

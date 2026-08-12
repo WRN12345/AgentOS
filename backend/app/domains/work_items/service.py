@@ -287,6 +287,7 @@ async def _build_status_events(
     event_type = _COMMAND_AUDIT_ACTION[command]
     return [
         OutgoingEvent(
+            project_id=item.project_id,
             recipient_id=recipient_id,
             type=event_type,
             title=_COMMAND_EVENT_TITLE[command],

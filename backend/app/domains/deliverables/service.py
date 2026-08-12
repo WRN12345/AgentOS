@@ -282,8 +282,11 @@ async def validate_file_reference(
     session: AsyncSession, item_id: uuid.UUID, file_id: uuid.UUID
 ) -> StoredFile:
     """file 引用校验（交付物提交与协作回传共用）：文件存在、归属同一工作项
-    （未关联则建立关联）、上传人与工作项有关。"""
-    stored = await get_stored_file(session, file_id)  # 不存在 → 404
+    （未关联则建立关联）、上传人与工作项有关；文件须与工作项同项目（越权 404）。"""
+    item = await session.get(WorkItem, item_id)
+    if item is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
+    stored = await get_stored_file(session, file_id, project_id=item.project_id)  # 他项目文件 → 404
     if stored.work_item_id is not None and stored.work_item_id != item_id:
         raise ApiException(
             422,

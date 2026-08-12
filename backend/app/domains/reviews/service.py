@@ -166,6 +166,7 @@ async def create_review(
     # 通知主执行人（同事务）：正文只含结论摘要，不含反馈（16 节）
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=item.assignee_id,
         type=action,
         title=_DECISION_NOTIFY_TITLE[payload.decision],

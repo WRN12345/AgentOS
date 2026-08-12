@@ -21,6 +21,7 @@ from app.infrastructure.events import OutgoingEvent
 async def notify(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     recipient_id: uuid.UUID,
     type: str,
     title: str,
@@ -30,11 +31,15 @@ async def notify(
 ) -> Notification:
     """写入一条站内通知。只 flush 不 commit，由业务用例统一提交。
 
+    project_id 由调用方从业务上下文派生填充（spec D3：service 层填充，
+    API 不接受传入）；通知归属 = 业务发生时的项目上下文。
+
     传入 outbox 时同步追加一条同内容实时事件；调用方须在业务 commit
     成功后发布 outbox（infrastructure/events.publish_after_commit），
     保证订阅者收到的事件对应已落库事实（4.3 节）。
     """
     notification = Notification(
+        project_id=project_id,
         recipient_id=recipient_id,
         type=type,
         title=title,
@@ -46,7 +51,12 @@ async def notify(
     if outbox is not None:
         outbox.append(
             OutgoingEvent(
-                recipient_id=recipient_id, type=type, title=title, body=body, link=link
+                project_id=project_id,
+                recipient_id=recipient_id,
+                type=type,
+                title=title,
+                body=body,
+                link=link,
             )
         )
     return notification
@@ -69,14 +79,15 @@ async def list_mine(
     session: AsyncSession,
     recipient_id: uuid.UUID,
     *,
+    project_id: uuid.UUID,
     unread_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[Notification], int]:
-    """查询本人通知（created_at 倒序），并返回当前未读总数。"""
+    """查询本人通知（created_at 倒序），并返回当前未读总数。仅限当前项目。"""
     stmt = (
         select(Notification)
-        .where(Notification.recipient_id == recipient_id)
+        .where(Notification.recipient_id == recipient_id, Notification.project_id == project_id)
         .order_by(Notification.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -89,18 +100,31 @@ async def list_mine(
         await session.execute(
             select(func.count())
             .select_from(Notification)
-            .where(Notification.recipient_id == recipient_id, Notification.is_read.is_(False))
+            .where(
+                Notification.recipient_id == recipient_id,
+                Notification.project_id == project_id,
+                Notification.is_read.is_(False),
+            )
         )
     ).scalar_one()
     return items, unread_count
 
 
 async def mark_read(
-    session: AsyncSession, recipient_id: uuid.UUID, notification_id: uuid.UUID
+    session: AsyncSession,
+    recipient_id: uuid.UUID,
+    notification_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID,
 ) -> Notification:
-    """标记已读（仅本人；他人通知按 404 处理，不暴露存在性）。幂等：重复已读直接返回。"""
+    """标记已读（仅本人且仅当前项目；他人/他项目通知按 404 处理，不暴露存在性）。
+    幂等：重复已读直接返回。"""
     notification = await session.get(Notification, notification_id)
-    if notification is None or notification.recipient_id != recipient_id:
+    if (
+        notification is None
+        or notification.recipient_id != recipient_id
+        or notification.project_id != project_id
+    ):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "通知不存在")
     if not notification.is_read:
         notification.is_read = True
