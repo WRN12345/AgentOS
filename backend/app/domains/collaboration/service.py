@@ -34,7 +34,7 @@ from app.domains.notifications.service import notify
 from app.domains.project.models import ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import MemberBrief
-from app.domains.work_items.service import get_work_item
+from app.domains.work_items.service import get_work_item, get_work_item_project_id
 from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
@@ -74,9 +74,16 @@ _COMMAND_NOTIFICATION = {
 # ---------- 查询与序列化 ----------
 
 
-async def get_request(session: AsyncSession, request_id: uuid.UUID) -> CollaborationRequest:
+async def get_request(
+    session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> CollaborationRequest:
     request = await session.get(CollaborationRequest, request_id)
     if request is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "协作请求不存在")
+    if project_id is not None and (
+        await get_work_item_project_id(session, request.work_item_id) != project_id
+    ):
+        # 越权 404：项目墙外的请求与不存在等价（spec D3），不泄露存在性信息
         raise ApiException(404, ErrorCodes.NOT_FOUND, "协作请求不存在")
     return request
 
@@ -162,17 +169,19 @@ async def request_to_out(
     return _to_out(request, item_titles, briefs)
 
 
-async def get_detail(session: AsyncSession, request_id: uuid.UUID) -> CollaborationRequestOut:
+async def get_detail(
+    session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> CollaborationRequestOut:
     """单条详情（含 goal/template/result_text 正文，项目成员可查，原则 6 透明）。"""
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, project_id=project_id)
     return await request_to_out(session, request)
 
 
 async def list_for_work_item(
-    session: AsyncSession, item_id: uuid.UUID
+    session: AsyncSession, item_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> list[CollaborationRequestSummaryOut]:
     """某工作项的协作请求列表（项目成员可查，原则 6 透明）。"""
-    await get_work_item(session, item_id)  # 工作项不存在 → 404
+    await get_work_item(session, item_id, project_id=project_id)  # 越权 → 404
     requests = list(
         (
             await session.execute(
@@ -191,7 +200,8 @@ async def list_for_work_item(
 async def list_mine(
     session: AsyncSession, actor: ProjectMember, role: str
 ) -> list[CollaborationRequestSummaryOut]:
-    """我的协作（13.2 节）：role=sent 我发出的，role=received 我收到的。"""
+    """我的协作（13.2 节）：role=sent 我发出的，role=received 我收到的；
+    限定当前项目（spec D2 经工作项推导）。"""
     column = (
         CollaborationRequest.requester_id if role == "sent" else CollaborationRequest.assignee_id
     )
@@ -199,7 +209,11 @@ async def list_mine(
         (
             await session.execute(
                 select(CollaborationRequest)
-                .where(column == actor.id)
+                .join(WorkItem, WorkItem.id == CollaborationRequest.work_item_id)
+                .where(
+                    column == actor.id,
+                    WorkItem.project_id == actor.project_id,
+                )
                 .order_by(CollaborationRequest.created_at.desc())
             )
         )
@@ -234,11 +248,21 @@ def _check_actor(request: CollaborationRequest, actor: ProjectMember, command: s
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅协作请求双方可执行该操作")
 
 
-async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> ProjectMember:
+async def _get_active_member(
+    session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
+) -> ProjectMember:
     member = await session.get(ProjectMember, member_id)
     if member is None or not member.is_active:
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
+        )
+    if member.project_id != project_id:
+        # spec D3：跨项目成员引用 → 400（成员属于其他项目，不能作为本项目协作接收人）
+        raise ApiException(
+            400,
+            ErrorCodes.CROSS_PROJECT_REFERENCE,
+            "不能与其它项目的成员发起协作",
+            {"member_id": str(member_id)},
         )
     return member
 
@@ -258,7 +282,7 @@ async def create_collaboration_request(
     审计 collaboration.requested → 通知接收人；commit 成功后向接收人发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     if item.assignee_id != actor.id:
         raise ApiException(
             403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可发起协作请求"
@@ -267,7 +291,7 @@ async def create_collaboration_request(
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "协作请求接收人不能是发起人自己"
         )
-    assignee = await _get_active_member(session, payload.assignee_id)
+    assignee = await _get_active_member(session, payload.assignee_id, project_id=actor.project_id)
 
     request = CollaborationRequest(
         work_item_id=item.id,
@@ -344,12 +368,12 @@ async def run_command(
     commit 成功后发布实时事件（与通知同内容）。
     """
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, project_id=actor.project_id)
     _check_actor(request, actor, command)
     _check_version(request, version)
 
     if command == "submit" and deliverable_id is not None:
-        deliverable = await get_deliverable(session, deliverable_id)  # 不存在 → 404
+        deliverable = await get_deliverable(session, deliverable_id, project_id=actor.project_id)
         if deliverable.work_item_id != request.work_item_id:
             raise ApiException(
                 422,

@@ -262,11 +262,15 @@ async def list_pending_approvals(
     if actor.role not in (ROLE_LEADER):
         return []
 
+    # 三类申请不冗余 project_id，经所属工作项推导过滤（spec D2）
     transfers = list(
         (
             await session.execute(
-                select(TransferRequest).where(
-                    TransferRequest.status == TransferStatus.PENDING.value
+                select(TransferRequest)
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    TransferRequest.status == TransferStatus.PENDING.value,
                 )
             )
         )
@@ -276,8 +280,11 @@ async def list_pending_approvals(
     deadline_changes = list(
         (
             await session.execute(
-                select(DeadlineChangeRequest).where(
-                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value
+                select(DeadlineChangeRequest)
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value,
                 )
             )
         )
@@ -287,7 +294,12 @@ async def list_pending_approvals(
     dev_docs = list(
         (
             await session.execute(
-                select(DevDoc).where(DevDoc.status == DevDocStatus.SUBMITTED.value)
+                select(DevDoc)
+                .join(WorkItem, WorkItem.id == DevDoc.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DevDoc.status == DevDocStatus.SUBMITTED.value,
+                )
             )
         )
         .scalars()
@@ -307,11 +319,16 @@ async def list_processed_approvals(
     if actor.role not in (ROLE_LEADER):
         return []
 
+    # 申请与审核均不冗余 project_id，经所属工作项推导过滤（spec D2）
     transfers = list(
         (
             await session.execute(
                 select(TransferRequest)
-                .where(TransferRequest.status.in_(PROCESSED_TRANSFER_STATUSES))
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    TransferRequest.status.in_(PROCESSED_TRANSFER_STATUSES),
+                )
                 .order_by(TransferRequest.updated_at.desc())
                 .limit(limit)
             )
@@ -323,7 +340,11 @@ async def list_processed_approvals(
         (
             await session.execute(
                 select(DeadlineChangeRequest)
-                .where(DeadlineChangeRequest.status.in_(PROCESSED_DEADLINE_CHANGE_STATUSES))
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DeadlineChangeRequest.status.in_(PROCESSED_DEADLINE_CHANGE_STATUSES),
+                )
                 .order_by(DeadlineChangeRequest.updated_at.desc())
                 .limit(limit)
             )
@@ -335,7 +356,11 @@ async def list_processed_approvals(
         (
             await session.execute(
                 select(DevDoc)
-                .where(DevDoc.status.in_(PROCESSED_DEV_DOC_STATUSES))
+                .join(WorkItem, WorkItem.id == DevDoc.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DevDoc.status.in_(PROCESSED_DEV_DOC_STATUSES),
+                )
                 .order_by(DevDoc.updated_at.desc())
                 .limit(limit)
             )
@@ -347,7 +372,11 @@ async def list_processed_approvals(
     reviews = list(
         (
             await session.execute(
-                select(Review).order_by(Review.updated_at.desc()).limit(limit)
+                select(Review)
+                .join(WorkItem, WorkItem.id == Review.work_item_id)
+                .where(WorkItem.project_id == actor.project_id)
+                .order_by(Review.updated_at.desc())
+                .limit(limit)
             )
         )
         .scalars()

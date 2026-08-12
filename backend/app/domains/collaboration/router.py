@@ -67,10 +67,10 @@ async def create_collaboration_request_endpoint(
 )
 async def list_work_item_collaboration_requests_endpoint(
     item_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[CollaborationRequestSummaryOut]:
-    return await list_for_work_item(session, item_id)
+    return await list_for_work_item(session, item_id, project_id=actor.project_id)
 
 
 @router.get(
@@ -91,10 +91,10 @@ async def list_my_collaboration_requests_endpoint(
 )
 async def get_collaboration_request_endpoint(
     request_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> CollaborationRequestOut:
-    return await get_detail(session, request_id)
+    return await get_detail(session, request_id, project_id=actor.project_id)
 
 
 @router.post(

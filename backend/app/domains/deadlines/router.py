@@ -63,10 +63,10 @@ async def create_deadline_change_request_endpoint(
 )
 async def list_work_item_deadline_change_requests_endpoint(
     item_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[DeadlineChangeSummaryOut]:
-    return await list_for_work_item(session, item_id)
+    return await list_for_work_item(session, item_id, project_id=actor.project_id)
 
 
 @router.get("/deadline-change-requests", response_model=list[DeadlineChangeSummaryOut])
@@ -81,10 +81,10 @@ async def list_my_deadline_change_requests_endpoint(
 @router.get("/deadline-change-requests/{request_id}", response_model=DeadlineChangeRequestOut)
 async def get_deadline_change_request_endpoint(
     request_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> DeadlineChangeRequestOut:
-    return await get_detail(session, request_id)
+    return await get_detail(session, request_id, project_id=actor.project_id)
 
 
 @router.post("/deadline-change-requests/{request_id}/approve", response_model=DeadlineChangeRequestOut)

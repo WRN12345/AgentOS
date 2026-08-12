@@ -227,6 +227,8 @@ async def _prepare_submittable_item(
     async with async_session_factory() as session:
         session.add(
             Deliverable(
+                # 0015 迁移后 project_id NOT NULL：项目归属经所属工作项推导
+                project_id=item.project_id,
                 work_item_id=item.id,
                 type="text",
                 content=deliverable_content,
@@ -528,6 +530,8 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
         session.add_all(
             [
                 Deliverable(
+                    # 0015 迁移后 project_id NOT NULL：项目归属经所属工作项推导
+                    project_id=project.id,
                     work_item_id=item.id,
                     type="text",
                     content="阶段性实现说明",
@@ -535,6 +539,7 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
                     submitted_by=leader.id,
                 ),
                 Deliverable(
+                    project_id=project.id,
                     work_item_id=item.id,
                     type="file",
                     stored_file_id=stored.id,

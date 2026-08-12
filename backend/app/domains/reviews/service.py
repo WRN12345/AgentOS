@@ -83,7 +83,7 @@ async def list_reviews(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID
 ) -> list[ReviewOut]:
     """某工作项的审核记录（含反馈正文）：仅负责人与主执行人可见（16 节）。"""
-    item = await get_work_item(session, item_id)  # 不存在 → 404
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     _check_feedback_visible(actor, item.assignee_id)
     reviews = list(
         (
@@ -108,7 +108,7 @@ async def create_review(
     """负责人最终审核（7.5 节）：状态推进 + reviews + 审计 + 通知，同一事务。"""
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可审核")
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     if item.status != WorkItemStatus.IN_REVIEW.value:
         raise ApiException(
             409,
@@ -117,7 +117,7 @@ async def create_review(
             {"current_status": item.status},
         )
 
-    deliverable = await get_deliverable(session, payload.deliverable_id)
+    deliverable = await get_deliverable(session, payload.deliverable_id, project_id=actor.project_id)
     if deliverable.work_item_id != item.id:
         raise ApiException(
             422,
