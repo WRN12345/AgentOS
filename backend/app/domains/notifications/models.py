@@ -22,6 +22,10 @@ class Notification(CoreModel):
     recipient_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_members.id"), index=True, nullable=False
     )
+    # 项目归属（独立列表入口冗余 project_id，spec D1）
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
+    )
     # 事件类型，复用审计动作名（如 collaboration.requested）
     type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)

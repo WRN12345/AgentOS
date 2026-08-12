@@ -41,6 +41,7 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 def _to_out(stored: StoredFile) -> StoredFileOut:
     return StoredFileOut(
         id=stored.id,
+        project_id=stored.project_id,
         original_filename=stored.original_filename,
         size_bytes=stored.size_bytes,
         mime_type=stored.mime_type,
@@ -53,9 +54,12 @@ def _to_out(stored: StoredFile) -> StoredFileOut:
     )
 
 
-async def get_stored_file(session: AsyncSession, file_id: uuid.UUID) -> StoredFile:
+async def get_stored_file(
+    session: AsyncSession, file_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> StoredFile:
     stored = await session.get(StoredFile, file_id)
-    if stored is None:
+    if stored is None or (project_id is not None and stored.project_id != project_id):
+        # 越权访问他项目文件与文件不存在等价，不暴露存在性（spec D5 越权 404）
         raise ApiException(404, ErrorCodes.NOT_FOUND, "文件不存在")
     return stored
 
@@ -88,9 +92,10 @@ async def upload_file(
     work_item_id: uuid.UUID | None,
     provider: StorageProvider,
 ) -> StoredFileOut:
-    """上传文件（14 章）：要求登录态；可选关联工作项（须存在，T4.4 复用）。"""
+    """上传文件（14 章）：要求登录态；可选关联工作项（须存在且同项目，T4.4 复用）。"""
     if work_item_id is not None:
-        await get_work_item(session, work_item_id)  # 不存在 → 404
+        # 跨实体引用同项目校验：不存在或他项目工作项 → 404（spec D5）
+        await get_work_item(session, work_item_id, project_id=actor.project_id)
     filename = _validate_type(upload.filename or "", upload.content_type)
 
     # 1-3) 流式写暂存文件，边写边计大小与 SHA-256；超限即中止并清理暂存
@@ -120,6 +125,7 @@ async def upload_file(
 
     # 5) 同事务写 stored_files 与审计事件；失败则补偿删除已落盘文件（17.2 节）
     stored = StoredFile(
+        project_id=actor.project_id,
         storage_backend=provider.backend_name,
         storage_key=storage_key,
         original_filename=filename,
@@ -227,7 +233,7 @@ async def authorize_download(
 
     审计事件含操作者与目标文件；request_id 与来源 IP 由请求上下文自动带（16 节）。
     """
-    stored = await get_stored_file(session, file_id)
+    stored = await get_stored_file(session, file_id, project_id=actor.project_id)
     if not await can_download_file(session, actor, stored):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "无权下载该文件")
     if stored.storage_backend != provider.backend_name or not await provider.exists(

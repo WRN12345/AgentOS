@@ -330,6 +330,7 @@ async def create_collaboration_request(
     )
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=assignee.id,
         type="collaboration.requested",
         title="新的协作请求",
@@ -426,6 +427,7 @@ async def run_command(
         ).scalar_one()
         await notify(
             session,
+            project_id=actor.project_id,
             recipient_id=recipient_id,
             type=_COMMAND_AUDIT_ACTION[command],
             title=title,

@@ -224,9 +224,12 @@ async def save_suggestion(state: AgentGraphState) -> dict[str, Any]:
     async with async_session_factory() as session:
         record = await write_suggestion(session, envelope=envelope)
         recipient_id: str | None = None
-        if leader_id is not None:
+        # 项目归属取自 load_context 填充的 project（spec D1：通知冗余 project_id）
+        project_id = (context.get("project") or {}).get("id")
+        if leader_id is not None and project_id is not None:
             await notify(
                 session,
+                project_id=uuid.UUID(project_id),
                 recipient_id=uuid.UUID(leader_id),
                 type=NOTIFICATION_TYPE,
                 title=title,
@@ -241,6 +244,7 @@ async def save_suggestion(state: AgentGraphState) -> dict[str, Any]:
     return {
         "suggestion_id": str(record.id),
         "notification_recipient_id": recipient_id or "",
+        "notification_project_id": project_id or "",
         "notification_title": title,
         "notification_body": body,
         "notification_link": link,

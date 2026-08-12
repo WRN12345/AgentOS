@@ -269,6 +269,7 @@ async def _notify_leaders(
     for leader in leaders:
         await notify(
             session,
+            project_id=project_id,
             recipient_id=leader.id,
             type=type,
             title=title,
@@ -439,6 +440,7 @@ async def approve_transfer(
 
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.from_member_id,
         type="transfer.approved",
         title="转派申请已通过",
@@ -448,6 +450,7 @@ async def approve_transfer(
     )
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=to_member.id,
         type="transfer.approved",
         title="你已成为工作项主执行人",
@@ -499,6 +502,7 @@ async def reject_transfer(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.from_member_id,
         type="transfer.rejected",
         title="转派申请被驳回",

@@ -367,6 +367,7 @@ async def _notify_leaders(
     for leader in leaders:
         await notify(
             session,
+            project_id=project_id,
             recipient_id=leader.id,
             type=type,
             title=title,
@@ -535,6 +536,7 @@ async def create_deadline_change_request(
         other_id = collab.assignee_id if actor.id == collab.requester_id else collab.requester_id
         await notify(
             session,
+            project_id=actor.project_id,
             recipient_id=other_id,
             type="deadline_change.approved",
             title="协作 DDL 已变更",
@@ -604,6 +606,7 @@ async def approve_deadline_change(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.requested_by,
         type="deadline_change.approved",
         title="DDL 变更已通过",
@@ -655,6 +658,7 @@ async def reject_deadline_change(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.requested_by,
         type="deadline_change.rejected",
         title="DDL 变更被驳回",

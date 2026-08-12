@@ -4,6 +4,8 @@
   （infrastructure/events）向客户端下发实时事件；
 - 认证：浏览器 EventSource 不能自定义请求头，支持 `?token=<access_token>`
   查询参数（同时兼容 `Authorization: Bearer` 头，便于 curl 调试）；
+- 项目上下文：同样走 query `?project_id=<uuid>`（EventSource 不能带 header），
+  并以 `X-Project-Id` 头兜底（便于 curl 调试）；连接只收当前项目事件（4.3 节）；
   校验规则与 get_current_member 一致（JWT 解析 → 用户有效且令牌版本匹配 →
   项目成员有效）；
 - 帧格式：`id:` / `event:` / `data:` 三段；15s 无事件发 `: ping` 注释帧，
@@ -63,8 +65,11 @@ async def _resolve_member(
     if not user.is_active:
         raise ApiException(403, ErrorCodes.USER_DISABLED, "账号已被禁用")
 
-    # 多项目：从 X-Project-Id 读取项目上下文
-    project_id_str = request.headers.get("X-Project-Id", "").strip()
+    # 多项目：优先 query 参数 project_id（浏览器 EventSource 不能自定义 header，
+    # spec 4.3 要求走 query，与 token 同传法）；header X-Project-Id 兜底（便于 curl 调试）
+    project_id_str = request.query_params.get("project_id") or request.headers.get(
+        "X-Project-Id", ""
+    )
     if not project_id_str:
         raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
     try:
