@@ -43,9 +43,12 @@ logger = setup_logging("backend")
 # ---------- 查询与序列化 ----------
 
 
-async def get_deliverable(session: AsyncSession, deliverable_id: uuid.UUID) -> Deliverable:
+async def get_deliverable(
+    session: AsyncSession, deliverable_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> Deliverable:
     deliverable = await session.get(Deliverable, deliverable_id)
-    if deliverable is None:
+    if deliverable is None or (project_id is not None and deliverable.project_id != project_id):
+        # 越权 404：项目墙外的交付物与不存在等价（spec D3），不泄露存在性信息
         raise ApiException(404, ErrorCodes.NOT_FOUND, "交付物不存在")
     return deliverable
 
@@ -101,7 +104,7 @@ async def list_deliverables(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID
 ) -> list[DeliverableOut]:
     """版本历史（7.5 节）：version 倒序，旧版本保留可查。"""
-    await get_work_item(session, item_id)  # 不存在 → 404
+    await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     await _check_visible(session, actor, item_id)
     deliverables = list(
         (
@@ -207,7 +210,10 @@ async def list_mine(
         (
             await session.execute(
                 select(Deliverable)
-                .where(Deliverable.submitted_by == actor.id)
+                .where(
+                    Deliverable.project_id == actor.project_id,
+                    Deliverable.submitted_by == actor.id,
+                )
                 .order_by(Deliverable.created_at.desc())
             )
         )
@@ -222,7 +228,11 @@ async def list_visible(
 ) -> list[DeliverableListItemOut]:
     """交付物聚合页：负责人与管理员见全部；普通成员只见相关工作项
     （主执行人 / 协作者 / 协作请求任一方，16 节）的交付物，按提交时间倒序。"""
-    stmt = select(Deliverable).order_by(Deliverable.created_at.desc())
+    stmt = (
+        select(Deliverable)
+        .where(Deliverable.project_id == actor.project_id)
+        .order_by(Deliverable.created_at.desc())
+    )
     if actor.role not in (ROLE_LEADER):
         related_item_ids = select(WorkItem.id).where(
             or_(
@@ -251,7 +261,7 @@ async def get_deliverable_version(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int
 ) -> DeliverableOut:
     """按版本号查询单条交付物。"""
-    await get_work_item(session, item_id)
+    await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     await _check_visible(session, actor, item_id)
     deliverable = (
         await session.execute(
@@ -298,7 +308,7 @@ async def create_deliverable(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, payload: DeliverableCreateIn
 ) -> DeliverableOut:
     """提交新版本交付物（7.5 节）：仅当前主执行人；终态工作项拒绝；写审计。"""
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     if item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可提交交付物")
     if item.status in (WorkItemStatus.COMPLETED.value, WorkItemStatus.CANCELLED.value):
@@ -319,6 +329,8 @@ async def create_deliverable(
         )
     ).scalar_one()
     deliverable = Deliverable(
+        # spec D3：项目归属经所属工作项推导填充，API 不接受传入
+        project_id=item.project_id,
         work_item_id=item.id,
         type=payload.type,
         content=payload.content,

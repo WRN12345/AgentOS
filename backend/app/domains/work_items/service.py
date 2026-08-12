@@ -101,6 +101,21 @@ async def get_work_item(
     return item
 
 
+async def get_work_item_project_id(
+    session: AsyncSession, work_item_id: uuid.UUID
+) -> uuid.UUID | None:
+    """按工作项取项目归属（派生域经父对象推导项目，spec D2）。
+
+    审批 4 源表/reviews 不冗余 project_id，查询时经 work_item_id 推导；
+    工作项不存在返回 None（与"项目墙外"等价，调用方统一按 404 处理）。
+    """
+    return (
+        await session.execute(
+            select(WorkItem.project_id).where(WorkItem.id == work_item_id)
+        )
+    ).scalar_one_or_none()
+
+
 async def list_work_items(
     session: AsyncSession,
     *,
