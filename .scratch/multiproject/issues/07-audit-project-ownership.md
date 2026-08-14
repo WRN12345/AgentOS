@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — 项目上下文与 admin 全局化
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 审计事件带项目归属
-- [ ] 管理端审计接口 admin 可访问（无成员记录也不 403）
+- [x] 审计事件带项目归属
+- [x] 管理端审计接口 admin 可访问（无成员记录也不 403）
