@@ -22,6 +22,23 @@ from app.domains.project.service import get_member_by_user
 from app.infrastructure.database.engine import get_session
 
 
+def project_id_from_request(request: Request) -> uuid.UUID:
+    """从 X-Project-Id 请求头解析项目上下文。
+
+    - 缺失或空白 → 400（MISSING_PROJECT_ID）
+    - UUID 格式无效 → 400
+    """
+    project_id_str = request.headers.get("X-Project-Id", "").strip()
+    if not project_id_str:
+        raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
+    try:
+        return uuid.UUID(project_id_str)
+    except ValueError:
+        raise ApiException(
+            400, ErrorCodes.MISSING_PROJECT_ID, "X-Project-Id 格式无效，须为合法 UUID"
+        ) from None
+
+
 async def get_current_member(
     request: Request,
     current_user: User = Depends(get_current_user),
@@ -29,22 +46,10 @@ async def get_current_member(
 ) -> ProjectMember:
     """解析当前用户在当前项目下的成员身份。
 
-    从 X-Project-Id 请求头读取项目上下文：
-    - 缺失或空白 → 400（MISSING_PROJECT_ID）
-    - UUID 格式无效 → 400
-    - 用户不是该项目成员或成员已禁用 → 403（NOT_PROJECT_MEMBER）
+    从 X-Project-Id 请求头读取项目上下文（缺失/无效 → 400）；
+    用户不是该项目成员或成员已禁用 → 403（NOT_PROJECT_MEMBER）。
     """
-    project_id_str = request.headers.get("X-Project-Id", "").strip()
-    if not project_id_str:
-        raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
-    try:
-        project_id = uuid.UUID(project_id_str)
-    except ValueError:
-        raise ApiException(
-            400, ErrorCodes.MISSING_PROJECT_ID, "X-Project-Id 格式无效，须为合法 UUID"
-        ) from None
-
-    member = await get_member_by_user(session, project_id, current_user.id)
+    member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
     if member is None or not member.is_active:
         raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
     return member
@@ -83,17 +88,7 @@ async def get_current_leader_or_admin(
         return current_user
 
     # 非管理员：从 X-Project-Id 解析项目成员身份并校验 leader 角色
-    project_id_str = request.headers.get("X-Project-Id", "").strip()
-    if not project_id_str:
-        raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
-    try:
-        project_id = uuid.UUID(project_id_str)
-    except ValueError:
-        raise ApiException(
-            400, ErrorCodes.MISSING_PROJECT_ID, "X-Project-Id 格式无效，须为合法 UUID"
-        ) from None
-
-    member = await get_member_by_user(session, project_id, current_user.id)
+    member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
     if member is None or not member.is_active or member.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可执行该操作")
     return current_user

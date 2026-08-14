@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 class AuditEventOut(BaseModel):
     id: uuid.UUID
+    project_id: uuid.UUID | None
     actor_id: uuid.UUID | None
     action: str
     target_type: str | None
