@@ -73,4 +73,22 @@ describe("auth store 项目上下文", () => {
     expect(useAuthStore.getState().projects).toBeNull();
     expect(useAuthStore.getState().currentProject).toBeNull();
   });
+
+  it("setCurrentProject 记录项目选择时间戳；清空当前项目时一并清空", () => {
+    const store = useAuthStore.getState();
+    store.setCurrentProject(makeProject());
+    // 选择项目即记录"上次选择时间"，供 24h 记忆窗口判断
+    expect(useAuthStore.getState().projectSelectedAt).toBeTypeOf("number");
+
+    store.setCurrentProject(null);
+    expect(useAuthStore.getState().currentProject).toBeNull();
+    expect(useAuthStore.getState().projectSelectedAt).toBeNull();
+  });
+
+  it("clear 同时清空项目选择时间戳", () => {
+    useAuthStore.getState().setCurrentProject(makeProject());
+    expect(useAuthStore.getState().projectSelectedAt).not.toBeNull();
+    useAuthStore.getState().clear();
+    expect(useAuthStore.getState().projectSelectedAt).toBeNull();
+  });
 });

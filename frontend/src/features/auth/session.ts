@@ -2,6 +2,30 @@ import { useAuthStore } from "../../app/store";
 import { api } from "../../services/api";
 import type { Member, MyProject, UserMe } from "../../types";
 
+/** 上次项目可"直接进入"的记忆窗口：24 小时（本地存储未过期即直接进入）。 */
+export const PROJECT_REMEMBER_MS = 24 * 60 * 60 * 1000;
+
+/** 上次项目选择时间戳是否仍在 24h 记忆窗口内（null=从未选过/已清空）。 */
+export function isProjectRemembered(selectedAt: number | null): boolean {
+  return selectedAt != null && Date.now() - selectedAt < PROJECT_REMEMBER_MS;
+}
+
+/**
+ * 从登录前的持久化上下文挑选可自动进入的项目：
+ * 仅当上次项目仍在 24h 记忆窗口内、且仍在我参与的项目列表中才采用，
+ * 否则返回 null（进选择页重新分流）。
+ */
+export function pickRememberedProject(
+  projects: MyProject[],
+  rememberedProject: MyProject | null,
+  rememberedAt: number | null,
+): MyProject | null {
+  if (!rememberedProject || !isProjectRemembered(rememberedAt)) {
+    return null;
+  }
+  return projects.find((p) => p.id === rememberedProject.id) ?? null;
+}
+
 /**
  * 加载当前用户参与的项目列表（GET /auth/me/projects，免项目头）。
  * 返回列表供调用方决定是否自动选中（ticket 09 用项目选择器替代）。
@@ -23,6 +47,19 @@ export async function loadProjects(): Promise<MyProject[]> {
 export async function selectProject(project: MyProject): Promise<void> {
   useAuthStore.getState().setCurrentProject(project);
   await loadIdentity();
+}
+
+/** 登出：尽力撤销 Refresh Token 后清空本地登录态（接口失败也照常清空）。 */
+export async function logout(): Promise<void> {
+  const { refreshToken, clear } = useAuthStore.getState();
+  try {
+    if (refreshToken) {
+      await api.post("/auth/logout", { refresh_token: refreshToken });
+    }
+  } catch {
+    // 忽略登出接口错误
+  }
+  clear();
 }
 
 /**
