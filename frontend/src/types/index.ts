@@ -486,3 +486,24 @@ export interface AgentConfig {
   llm_provider: string;
   llm_is_external: boolean;
 }
+
+/* ---------- 管理控制台（ticket 10，仅全局管理员） ---------- */
+
+/** 项目负责人摘要（GET /projects 内嵌；管理员视角，非成员记录）。 */
+export interface LeaderBrief {
+  id: string;
+  user_id: string;
+  username: string;
+  display_name: string;
+}
+
+/** GET /projects 返回的项目摘要（全局管理员视角，含负责人）。 */
+export interface AdminProject {
+  id: string;
+  name: string;
+  description: string | null;
+  /** 创建项目即指定的唯一负责人；历史数据可能为 null。 */
+  leader: LeaderBrief | null;
+  created_at: string;
+  updated_at: string;
+}

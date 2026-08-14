@@ -1,0 +1,71 @@
+"""管理控制台接口（ticket 10）：项目列表/创建、账号管理。
+
+全部 admin-only（get_current_admin）：全局管理员不属于任何项目、
+不参与业务协作，通过本组接口做平台管理（spec：项目创建仅 admin 可做）。
+审计查看沿用既有 GET /audit-events（admin 全量可见），不重复实现。
+"""
+
+import uuid
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.idempotency import idempotency_guard
+from app.domains.identity.models import User
+from app.domains.project.dependencies import get_current_admin
+from app.domains.admin.schemas import (
+    AdminProjectOut,
+    AdminUserUpdateIn,
+    ProjectCreateIn,
+    UserOut,
+)
+from app.domains.admin.service import (
+    create_project,
+    list_projects,
+    list_users,
+    update_user,
+)
+from app.infrastructure.database.engine import get_session
+
+router = APIRouter(tags=["admin"])
+
+
+@router.get("/projects", response_model=list[AdminProjectOut])
+async def list_projects_endpoint(
+    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminProjectOut]:
+    """项目列表：全部项目及负责人摘要。"""
+    return await list_projects(session)
+
+
+@router.post("/projects", response_model=AdminProjectOut, status_code=201)
+async def create_project_endpoint(
+    payload: ProjectCreateIn,
+    admin: User = Depends(get_current_admin),
+    _: None = Depends(idempotency_guard),
+    session: AsyncSession = Depends(get_session),
+) -> AdminProjectOut:
+    """创建项目并指定负责人（成为 leader 成员）。"""
+    return await create_project(session, admin, payload)
+
+
+@router.get("/users", response_model=list[UserOut])
+async def list_users_endpoint(
+    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[User]:
+    """账号列表：全部用户账号（不含敏感字段）。"""
+    return await list_users(session)
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user_endpoint(
+    user_id: uuid.UUID,
+    payload: AdminUserUpdateIn,
+    admin: User = Depends(get_current_admin),
+    _: None = Depends(idempotency_guard),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """账号启用/禁用。"""
+    return await update_user(session, admin, user_id, payload.is_active)

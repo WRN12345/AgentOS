@@ -11,6 +11,7 @@ from app.agents.schemas.suggestions import AgentConfigOut
 from app.core.config import settings
 from app.core.idempotency import idempotency_guard
 from app.core.logging import setup_logging
+from app.domains.admin.router import router as admin_router
 from app.domains.approvals.router import router as approvals_router
 from app.domains.audit.router import router as audit_router
 from app.domains.collaboration.router import router as collaboration_router
@@ -36,6 +37,7 @@ logger = setup_logging("backend")
 
 router = APIRouter()
 
+router.include_router(admin_router)
 router.include_router(auth_router)
 router.include_router(audit_router)
 router.include_router(members_router)

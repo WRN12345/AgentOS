@@ -35,4 +35,7 @@ export const queryKeys = {
     scoped("agent-suggestions", ...suffix),
   agentRuns: (...suffix: unknown[]) => scoped("agent-runs", ...suffix),
   notifications: (...suffix: unknown[]) => scoped("notifications", ...suffix),
+  /** 管理控制台（ticket 10）：全局管理员无项目上下文，键不含项目前缀。 */
+  adminProjects: (...suffix: unknown[]) => scoped("admin-projects", ...suffix),
+  adminUsers: (...suffix: unknown[]) => scoped("admin-users", ...suffix),
 };
