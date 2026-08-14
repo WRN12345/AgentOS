@@ -2,6 +2,7 @@ import type {
   Deliverable,
   Member,
   MemberBrief,
+  MyProject,
   TokenPair,
   UserMe,
   WorkItem,
@@ -22,7 +23,19 @@ export function makeUser(overrides: Partial<UserMe> = {}): UserMe {
     id: "user-1",
     username: "alice",
     is_active: true,
+    is_admin: false,
     created_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** 用户参与的项目（GET /auth/me/projects 形状）。 */
+export function makeProject(overrides: Partial<MyProject> = {}): MyProject {
+  return {
+    id: "project-1",
+    name: "Alpha",
+    description: null,
+    role: "member",
     ...overrides,
   };
 }

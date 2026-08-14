@@ -11,6 +11,7 @@ import {
 import { api } from "../../services/api";
 import type { AuditEvent, Member } from "../../types";
 import { formatDateTime } from "../work-items/constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 /** 审计动作中文映射（对应后端各域写入的 action 名称）。 */
 const ACTION_LABELS: Record<string, string> = {
@@ -61,7 +62,7 @@ export function TimelineSection() {
   });
 
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
 

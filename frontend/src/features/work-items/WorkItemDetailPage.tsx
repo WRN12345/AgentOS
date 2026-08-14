@@ -30,6 +30,7 @@ import { CollaborationSection } from "../collaboration/CollaborationSection";
 import { DeliverableSection } from "../deliverables/DeliverableSection";
 import { TransferSection } from "../collaboration/TransferSection";
 import { DeadlineChangeSection } from "../collaboration/DeadlineChangeSection";
+import { queryKeys } from "../../lib/queryKeys";
 
 /** 命令定义：状态机迁移动作（8.1 节）。 */
 interface Command {
@@ -96,12 +97,12 @@ export default function WorkItemDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
 
   const { data: item, isLoading } = useQuery({
-    queryKey: ["work-items", id],
+    queryKey: queryKeys.workItems(id),
     queryFn: () => api.get<WorkItem>(`/work-items/${id}`),
   });
 
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
 
@@ -115,7 +116,7 @@ export default function WorkItemDetailPage() {
       ),
     onSuccess: (_data, cmd) => {
       toast.success(`「${cmd.label}」操作成功`);
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
     },
     onError: (error) => {
       // 开发文档前置：未确认文档且未豁免时 start 被 409 拦截，引导到文档区。
@@ -131,7 +132,7 @@ export default function WorkItemDetailPage() {
       }
       if (error instanceof ApiError && error.isVersionConflict) {
         toast.error(VERSION_CONFLICT_MESSAGE);
-        queryClient.invalidateQueries({ queryKey: ["work-items"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
         return;
       }
       // T4.4：无交付物时提交审核被 422 拒绝，引导先提交交付物

@@ -38,6 +38,7 @@ import {
   VERSION_CONFLICT_MESSAGE,
 } from "../../services/api";
 import type { Member, WorkItem } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
 
 const formSchema = z.object({
   title: z.string().min(1, "请输入标题"),
@@ -129,22 +130,21 @@ export function WorkItemFormDialog({
     },
     onSuccess: () => {
       toast.success(isEdit ? "工作项已更新" : "工作项已创建");
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
       form.reset();
       onOpenChange(false);
     },
     onError: (error) => {
       if (error instanceof ApiError && error.isVersionConflict) {
         toast.error(VERSION_CONFLICT_MESSAGE);
-        queryClient.invalidateQueries({ queryKey: ["work-items"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
         return;
       }
       toast.error(errorMessage(error, "保存工作项失败"));
     },
   });
 
-  // 管理员不参与工作协作：不出现在主执行人/协作者候选中
-  const activeMembers = members.filter((m) => m.is_active && m.role !== "admin");
+  const activeMembers = members.filter((m) => m.is_active);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -101,6 +101,15 @@ interface RequestOptions {
   retried?: boolean;
 }
 
+/**
+ * 当前项目的 X-Project-Id 请求头：选定项目时自动携带（业务接口按项目隔离）；
+ * 未选项目（全局 admin / 尚未分流）时不带。登录/刷新/me 等接口后端忽略该头。
+ */
+function projectHeader(): Record<string, string> {
+  const projectId = useAuthStore.getState().currentProject?.id;
+  return projectId ? { "X-Project-Id": projectId } : {};
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -109,6 +118,7 @@ async function request<T>(
   const token = useAuthStore.getState().accessToken;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...projectHeader(),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) {
@@ -206,6 +216,9 @@ function upload<T>(
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
+    for (const [name, value] of Object.entries(projectHeader())) {
+      xhr.setRequestHeader(name, value);
+    }
     if (options.idempotencyKey) {
       xhr.setRequestHeader("Idempotency-Key", options.idempotencyKey);
     }
@@ -280,7 +293,7 @@ async function downloadFile(
   retried = false,
 ): Promise<{ blob: Blob; filename: string }> {
   const token = useAuthStore.getState().accessToken;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...projectHeader() };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }

@@ -29,6 +29,7 @@ import { useEventStream } from "../services/events";
 import { NotificationBell } from "../features/notifications/NotificationBell";
 import { RequirementPipelineWizard } from "../features/agent-assistant/RequirementPipelineWizard";
 import type { AgentConfig, Member } from "../types";
+import { queryKeys } from "../lib/queryKeys";
 
 const navItems = [
   { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
@@ -52,7 +53,7 @@ export default function AppLayout() {
 
   // 顶栏「AI 需求拆解」向导所需数据（仅负责人可见该入口）
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
     enabled: isLeader,
   });

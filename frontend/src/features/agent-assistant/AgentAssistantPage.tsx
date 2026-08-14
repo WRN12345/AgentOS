@@ -46,6 +46,7 @@ import {
 } from "./constants";
 import { SuggestionContent } from "./SuggestionContent";
 import { RequirementPipelineWizard } from "./RequirementPipelineWizard";
+import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * Agent 建议中心（13.1 节，T5.7）：建议列表 + 过滤 + 采纳/忽略反馈 +
@@ -72,7 +73,7 @@ export default function AgentAssistantPage() {
   const queryString = params.toString();
 
   const { data: suggestions, isLoading } = useQuery({
-    queryKey: ["agent-suggestions", queryString],
+    queryKey: queryKeys.agentSuggestions(queryString),
     queryFn: () =>
       api.get<AgentSuggestion[]>(
         `/agent-suggestions${queryString ? `?${queryString}` : ""}`,
@@ -80,7 +81,7 @@ export default function AgentAssistantPage() {
   });
 
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
     enabled: isLeader,
   });
@@ -216,7 +217,7 @@ function SuggestionCard({
       ),
     onSuccess: (_data, action) => {
       toast.success(action === "accepted" ? "已采纳该建议" : "已忽略该建议");
-      queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
     },
     onError: (error) => toast.error(errorMessage(error, "反馈提交失败")),
   });
@@ -355,7 +356,7 @@ function AgentRunsCard() {
   const queryClient = useQueryClient();
 
   const { data: runs } = useQuery({
-    queryKey: ["agent-runs"],
+    queryKey: queryKeys.agentRuns(),
     queryFn: () => api.get<AgentRun[]>("/agent-runs?limit=20"),
   });
 
@@ -364,8 +365,8 @@ function AgentRunsCard() {
       api.post<AgentRun>(`/agent-runs/${runId}/retry`, {}, newIdempotencyKey()),
     onSuccess: () => {
       toast.success("已重新触发，请稍候查看结果");
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
-      queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
     },
     onError: (error) => toast.error(errorMessage(error, "重新触发失败")),
   });

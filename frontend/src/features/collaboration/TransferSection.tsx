@@ -57,6 +57,7 @@ import { useAuthStore } from "../../app/store";
 import type { Member, TransferRequestSummary, WorkItem } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { TRANSFER_STATUS_META } from "./constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   to_member_id: z.string().min(1, "请选择新主执行人"),
@@ -78,7 +79,7 @@ export function TransferSection({ workItem, members }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: transfers } = useQuery({
-    queryKey: ["transfer-requests", "work-item", workItem.id],
+    queryKey: queryKeys.transferRequests("work-item", workItem.id),
     queryFn: () =>
       api.get<TransferRequestSummary[]>(
         `/work-items/${workItem.id}/transfer-requests`,
@@ -86,10 +87,10 @@ export function TransferSection({ workItem, members }: Props) {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   const form = useForm<CreateValues>({
@@ -137,9 +138,8 @@ export function TransferSection({ workItem, members }: Props) {
 
   const isAssignee = selfMember?.id === workItem.assignee.id;
   const hasPending = (transfers ?? []).some((t) => t.status === "PENDING");
-  // 管理员不参与工作协作：不能作为转派目标
   const candidates = members.filter(
-    (m) => m.is_active && m.role !== "admin" && m.id !== selfMember?.id,
+    (m) => m.is_active && m.id !== selfMember?.id,
   );
 
   return (

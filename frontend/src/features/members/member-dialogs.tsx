@@ -33,12 +33,13 @@ import {
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import { useAuthStore } from "../../app/store";
 import type { Member, MemberWithPassword } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   username: z.string().min(1, "请输入用户名"),
   password: z.string().min(8, "密码至少 8 位"),
   display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member", "admin"]),
+  role: z.enum(["leader", "member"]),
   weekly_available_hours: z.string().optional(),
   git_username: z.string().optional(),
 });
@@ -91,7 +92,7 @@ export function CreateMemberDialog({
       ),
     onSuccess: (member) => {
       toast.success(`成员 ${member.display_name} 创建成功`);
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       form.reset();
       onOpenChange(false);
       onCreated(member);
@@ -171,7 +172,6 @@ export function CreateMemberDialog({
                     <SelectContent>
                       <SelectItem value="member">成员</SelectItem>
                       <SelectItem value="leader">负责人</SelectItem>
-                      <SelectItem value="admin">管理员</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -218,7 +218,7 @@ export function CreateMemberDialog({
 
 const editSchema = z.object({
   display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member", "admin"]),
+  role: z.enum(["leader", "member"]),
   weekly_available_hours: z.string().optional(),
   git_username: z.string().optional(),
 });
@@ -262,7 +262,7 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
       ),
     onSuccess: (updated) => {
       toast.success(`已更新成员 ${updated.display_name}`);
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       onClose();
     },
     onError: (error) => toast.error(errorMessage(error, "更新成员失败")),
@@ -307,7 +307,6 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
                     <SelectContent>
                       <SelectItem value="member">成员</SelectItem>
                       <SelectItem value="leader">负责人</SelectItem>
-                      <SelectItem value="admin">管理员</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -407,7 +406,7 @@ export function CapabilitiesDialog({
       if (auth.member?.id === updated.id) {
         auth.setMember(updated);
       }
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       onClose();
     },
     onError: (error) => toast.error(errorMessage(error, "提交能力失败")),

@@ -33,6 +33,7 @@ import {
   DEV_DOC_VERDICT_META,
   SuggestionContent,
 } from "../agent-assistant/SuggestionContent";
+import { queryKeys } from "../../lib/queryKeys";
 
 interface Props {
   workItem: WorkItem;
@@ -41,7 +42,7 @@ interface Props {
 /** AI 初审意见面板：按 latest_review_suggestion_id 从建议列表中定位；初审未产出（LLM 降级）时不渲染、不阻塞。 */
 export function DevDocReviewPanel({ suggestionId }: { suggestionId: string }) {
   const { data: suggestions } = useQuery({
-    queryKey: ["agent-suggestions", "dev-doc-review", suggestionId],
+    queryKey: queryKeys.agentSuggestions("dev-doc-review", suggestionId),
     queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),
   });
   const suggestion = suggestions?.find((s) => s.id === suggestionId);
@@ -91,7 +92,7 @@ export function DevDocSection({ workItem }: Props) {
   const [reviewNote, setReviewNote] = useState("");
 
   const { data: doc, isLoading, error } = useQuery({
-    queryKey: ["dev-doc", workItem.id],
+    queryKey: queryKeys.devDoc(workItem.id),
     queryFn: () => api.get<DevDoc>(`/work-items/${workItem.id}/dev-doc`),
     retry: false,
   });
@@ -103,10 +104,10 @@ export function DevDocSection({ workItem }: Props) {
   }, [doc?.id, doc?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["dev-doc", workItem.id] });
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.devDoc(workItem.id) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
   };
 
   const onError = (fallback: string) => (e: unknown) => {

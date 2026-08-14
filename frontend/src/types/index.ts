@@ -19,15 +19,25 @@ export interface TokenPair {
   expires_in: number;
 }
 
-/** GET /auth/me 返回的当前用户（不含角色，角色从成员记录获取）。 */
+/** GET /auth/me 返回的当前用户（含全局管理员标记；项目内角色从成员记录获取）。 */
 export interface UserMe {
   id: string;
   username: string;
   is_active: boolean;
+  is_admin: boolean;
   created_at: string;
 }
 
-export type MemberRole = "leader" | "member" | "admin";
+/** 项目成员角色：负责人全管，成员普通参与；管理员为全局角色，不再属于项目。 */
+export type MemberRole = "leader" | "member";
+
+/** GET /auth/me/projects 返回的用户参与项目摘要。 */
+export interface MyProject {
+  id: string;
+  name: string;
+  description: string | null;
+  role: MemberRole;
+}
 
 /** 成员能力标签（6.2 节）：熟练度 1-5，需负责人确认。 */
 export interface MemberCapability {
