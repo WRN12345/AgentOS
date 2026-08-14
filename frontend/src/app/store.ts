@@ -13,11 +13,16 @@ interface AuthState {
   currentProject: MyProject | null;
   /** 当前用户在 currentProject 下的成员记录（角色、能力等）。 */
   member: Member | null;
+  /** 上次选定项目的时间戳（ms）；ticket 09 用其判断 24h 记忆窗口是否过期。 */
+  projectSelectedAt: number | null;
   setTokens: (tokens: TokenPair) => void;
   setIdentity: (user: UserMe, member: Member | null) => void;
   setMember: (member: Member | null) => void;
   setProjects: (projects: MyProject[]) => void;
-  /** 切换当前项目；同时置空 member，避免残留上一项目的成员记录。 */
+  /**
+   * 切换当前项目；同时置空 member 并记录选择时间戳（选项目=开始记忆，
+   * 清空=取消记忆），避免残留上一项目的成员记录。
+   */
   setCurrentProject: (project: MyProject | null) => void;
   clear: () => void;
 }
@@ -32,6 +37,7 @@ export const useAuthStore = create<AuthState>()(
       projects: null,
       currentProject: null,
       member: null,
+      projectSelectedAt: null,
       setTokens: (tokens) =>
         set({
           accessToken: tokens.access_token,
@@ -41,7 +47,11 @@ export const useAuthStore = create<AuthState>()(
       setMember: (member) => set({ member }),
       setProjects: (projects) => set({ projects }),
       setCurrentProject: (project) =>
-        set({ currentProject: project, member: null }),
+        set({
+          currentProject: project,
+          member: null,
+          projectSelectedAt: project ? Date.now() : null,
+        }),
       clear: () =>
         set({
           accessToken: null,
@@ -50,6 +60,7 @@ export const useAuthStore = create<AuthState>()(
           projects: null,
           currentProject: null,
           member: null,
+          projectSelectedAt: null,
         }),
     }),
     { name: "agentos-auth" },

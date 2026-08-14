@@ -23,7 +23,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "../../services/api";
 import { useAuthStore } from "../../app/store";
-import { loadIdentity, loadProjects, selectProject } from "./session";
+import {
+  loadIdentity,
+  loadProjects,
+  pickRememberedProject,
+  selectProject,
+} from "./session";
 import type { TokenPair } from "../../types";
 
 const loginSchema = z.object({
@@ -49,17 +54,33 @@ export default function LoginPage() {
     try {
       const tokens = await api.post<TokenPair>("/auth/login", values);
       setTokens(tokens);
-      // 新时序：先拉项目列表决定分流，再加载当前项目下的成员身份
+      // 分流前先记住上次登录持久化的项目选择（loadProjects 会清空 currentProject）
+      const prev = useAuthStore.getState();
+      const rememberedProject = prev.currentProject;
+      const rememberedAt = prev.projectSelectedAt;
+
+      // 拉项目列表（含清空旧上下文），再加载用户身份决定分流
       const projects = await loadProjects();
-      if (projects.length === 1) {
-        // ticket 08：仅一个项目时自动选中；ticket 09 用项目选择器替代
-        await selectProject(projects[0]);
-      } else {
-        // 0 个项目（全局管理员）或待选择（ticket 09）：仅加载用户，member 留空
-        await loadIdentity();
-      }
+      await loadIdentity();
       toast.success("登录成功");
-      navigate("/", { replace: true });
+
+      // 管理员：进管理控制台，不参与业务项目
+      if (useAuthStore.getState().user?.is_admin) {
+        navigate("/console", { replace: true });
+        return;
+      }
+      // 普通用户：24h 记忆窗口内直接进入上次项目，否则进项目选择页
+      const remembered = pickRememberedProject(
+        projects,
+        rememberedProject,
+        rememberedAt,
+      );
+      if (remembered) {
+        await selectProject(remembered);
+        navigate("/", { replace: true });
+      } else {
+        navigate("/projects", { replace: true });
+      }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         toast.error("用户名或密码错误");

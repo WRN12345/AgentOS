@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowLeftRight,
   BarChart3,
   Bot,
   ChevronsUpDown,
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { roleBadgeVariant, roleLabel } from "@/lib/roles";
 import { api } from "../services/api";
 import { useAuthStore, useIsLeader } from "../app/store";
+import { logout } from "../features/auth/session";
 import { useEventStream } from "../services/events";
 import { NotificationBell } from "../features/notifications/NotificationBell";
 import { RequirementPipelineWizard } from "../features/agent-assistant/RequirementPipelineWizard";
@@ -45,7 +47,7 @@ const navItems = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const isLeader = useIsLeader();
-  const { user, member, refreshToken, clear } = useAuthStore();
+  const { user, member } = useAuthStore();
   const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
@@ -64,15 +66,8 @@ export default function AppLayout() {
   });
 
   const handleLogout = async () => {
-    // 登出即撤销 Refresh Token；失败也照常清空本地登录态
-    try {
-      if (refreshToken) {
-        await api.post("/auth/logout", { refresh_token: refreshToken });
-      }
-    } catch {
-      // 忽略登出接口错误
-    }
-    clear();
+    // 撤销 Refresh Token 并清空本地登录态（session.logout 统一实现）
+    await logout();
     toast.success("已登出");
     navigate("/login", { replace: true });
   };
@@ -147,6 +142,19 @@ export default function AppLayout() {
                     {user?.username ?? "当前用户"}
                   </div>
                   <div className="-mx-1 my-1 h-px bg-border" />
+                  {!user?.is_admin && (
+                    <button
+                      type="button"
+                      className={simpleMenuItemClass}
+                      onClick={() => {
+                        close();
+                        navigate("/projects");
+                      }}
+                    >
+                      <ArrowLeftRight className="size-4" />
+                      切换项目
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={simpleMenuItemClass}
