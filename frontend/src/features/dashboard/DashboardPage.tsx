@@ -40,6 +40,7 @@ import {
 import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
 import { TodoSection } from "./TodoSection";
 import { ACTIVE_STATUSES, StatCard, daysUntil } from "./shared";
+import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * 个人工作台：顶部统计卡 + 我的待办 + AI 动态（一屏内展示，列表内部滚动）。
@@ -54,22 +55,22 @@ export default function DashboardPage() {
   );
 
   const { data: members, isLoading: membersLoading } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
   const { data: items, isLoading: itemsLoading } = useQuery({
-    queryKey: ["work-items", ""],
+    queryKey: queryKeys.workItems(""),
     queryFn: () => api.get<WorkItemSummary[]>("/work-items"),
   });
   // 待我审批数（仅负责人有审批权限）
   const { data: approvals } = useQuery({
-    queryKey: ["approvals"],
+    queryKey: queryKeys.approvals(),
     queryFn: () => api.get<ApprovalItem[]>("/approvals"),
     enabled: isLeader,
   });
   // AI 动态 + 待反馈建议数（列表全员可读，反馈操作仅负责人）
   const { data: suggestions } = useQuery({
-    queryKey: ["agent-suggestions", "dashboard"],
+    queryKey: queryKeys.agentSuggestions("dashboard"),
     queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),
   });
   // 向导需要的外部模型提示配置

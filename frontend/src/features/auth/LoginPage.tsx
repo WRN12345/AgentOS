@@ -23,7 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "../../services/api";
 import { useAuthStore } from "../../app/store";
-import { loadIdentity } from "./session";
+import { loadIdentity, loadProjects, selectProject } from "./session";
 import type { TokenPair } from "../../types";
 
 const loginSchema = z.object({
@@ -49,7 +49,15 @@ export default function LoginPage() {
     try {
       const tokens = await api.post<TokenPair>("/auth/login", values);
       setTokens(tokens);
-      await loadIdentity();
+      // 新时序：先拉项目列表决定分流，再加载当前项目下的成员身份
+      const projects = await loadProjects();
+      if (projects.length === 1) {
+        // ticket 08：仅一个项目时自动选中；ticket 09 用项目选择器替代
+        await selectProject(projects[0]);
+      } else {
+        // 0 个项目（全局管理员）或待选择（ticket 09）：仅加载用户，member 留空
+        await loadIdentity();
+      }
       toast.success("登录成功");
       navigate("/", { replace: true });
     } catch (error) {

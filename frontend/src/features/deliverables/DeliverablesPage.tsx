@@ -21,6 +21,7 @@ import { api } from "../../services/api";
 import type { DeliverableListItem } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { DELIVERABLE_TYPE_META, REVIEW_DECISION_META } from "./constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * 交付物聚合页：负责人/管理员见全部交付物，普通成员见相关工作项
@@ -29,7 +30,7 @@ import { DELIVERABLE_TYPE_META, REVIEW_DECISION_META } from "./constants";
  */
 export default function DeliverablesPage() {
   const { data: deliveries, isLoading } = useQuery({
-    queryKey: ["deliverables", "visible"],
+    queryKey: queryKeys.deliverables("visible"),
     queryFn: () => api.get<DeliverableListItem[]>("/deliverables"),
   });
 

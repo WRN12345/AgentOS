@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../../services/api";
 import type { AppNotification, NotificationList } from "../../types";
 import { formatDateTime } from "../work-items/constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 /** 顶栏通知入口（12.6 节）：未读数徽标 + 下拉列表，点击已读并跳转关联页面。 */
 export function NotificationBell() {
@@ -15,7 +16,7 @@ export function NotificationBell() {
   const queryClient = useQueryClient();
 
   const { data } = useQuery({
-    queryKey: ["notifications"],
+    queryKey: queryKeys.notifications(),
     queryFn: () => api.get<NotificationList>("/notifications?limit=20"),
   });
 
@@ -24,7 +25,7 @@ export function NotificationBell() {
     mutationFn: (notification: AppNotification) =>
       api.post(`/notifications/${notification.id}/read`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
     },
   });
 

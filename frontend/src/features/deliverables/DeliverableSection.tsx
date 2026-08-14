@@ -50,6 +50,7 @@ import {
 } from "./constants";
 import { DeliverableBody } from "./DeliverableBody";
 import { FileUploadField } from "./FileUploadField";
+import { queryKeys } from "../../lib/queryKeys";
 
 interface Props {
   workItem: WorkItem;
@@ -66,7 +67,7 @@ export function DeliverableSection({ workItem }: Props) {
   const [submitOpen, setSubmitOpen] = useState(false);
 
   const { data: deliverables, isError: deliverablesForbidden } = useQuery({
-    queryKey: ["deliverables", workItem.id],
+    queryKey: queryKeys.deliverables(workItem.id),
     queryFn: () =>
       api.get<Deliverable[]>(`/work-items/${workItem.id}/deliverables`),
     retry: false,
@@ -74,7 +75,7 @@ export function DeliverableSection({ workItem }: Props) {
 
   // 审核反馈仅负责人与主执行人可见（16 节），其余 403 时静默不渲染
   const { data: reviews } = useQuery({
-    queryKey: ["reviews", workItem.id],
+    queryKey: queryKeys.reviews(workItem.id),
     queryFn: () => api.get<Review[]>(`/work-items/${workItem.id}/reviews`),
     retry: false,
   });
@@ -171,10 +172,10 @@ export function DeliverableSection({ workItem }: Props) {
           onOpenChange={setSubmitOpen}
           onSubmitted={() => {
             queryClient.invalidateQueries({
-              queryKey: ["deliverables", workItem.id],
+              queryKey: queryKeys.deliverables(workItem.id),
             });
-            queryClient.invalidateQueries({ queryKey: ["work-items"] });
-            queryClient.invalidateQueries({ queryKey: ["notifications"] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
           }}
         />
       )}

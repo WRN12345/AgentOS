@@ -63,6 +63,7 @@ import type {
 } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { COLLAB_STATUS_META } from "./constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   assignee_id: z.string().min(1, "请选择接收人"),
@@ -98,7 +99,7 @@ export function CollaborationSection({ workItem, members }: Props) {
     useState<CollaborationRequestSummary | null>(null);
 
   const { data: collabs } = useQuery({
-    queryKey: ["collaboration-requests", "work-item", workItem.id],
+    queryKey: queryKeys.collaborationRequests("work-item", workItem.id),
     queryFn: () =>
       api.get<CollaborationRequestSummary[]>(
         `/work-items/${workItem.id}/collaboration-requests`,
@@ -107,7 +108,7 @@ export function CollaborationSection({ workItem, members }: Props) {
 
   // 单条详情：列表摘要不含 goal/template/result_text，打开对话框时拉取
   const { data: detail } = useQuery({
-    queryKey: ["collaboration-requests", "detail", detailTarget?.id],
+    queryKey: queryKeys.collaborationRequests("detail", detailTarget?.id),
     queryFn: () =>
       api.get<CollaborationRequest>(
         `/collaboration-requests/${detailTarget!.id}`,
@@ -116,8 +117,8 @@ export function CollaborationSection({ workItem, members }: Props) {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["collaboration-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   // 状态机命令（accept/decline/start/complete/cancel）：仅携带 version
@@ -237,9 +238,8 @@ export function CollaborationSection({ workItem, members }: Props) {
   });
 
   const isWorkItemAssignee = selfMember?.id === workItem.assignee.id;
-  // 管理员不参与工作协作：不能作为协作接收人
   const candidates = members.filter(
-    (m) => m.is_active && m.role !== "admin" && m.id !== selfMember?.id,
+    (m) => m.is_active && m.id !== selfMember?.id,
   );
 
   /** 按当前用户身份（发起人/接收人）与状态计算可见操作（8.2 节状态机）。 */
