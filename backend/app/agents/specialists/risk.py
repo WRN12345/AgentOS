@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import risk as risk_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
 from app.core.config import settings
 from app.infrastructure.database.engine import async_session_factory
@@ -45,11 +45,20 @@ def split_by_due(
 
 async def workflow_risk_capability(state: "AgentGraphState") -> Any:
     """扫描逾期/阻塞/频繁转派/协作等待信号，产出风险建议。"""
+    project_id = context_project_id(state)
     async with async_session_factory() as session:
-        open_items = await TOOL_REGISTRY["list_open_work_items"].func(session)
-        blocked_items = await TOOL_REGISTRY["list_blocked_items"].func(session)
-        transfers = await TOOL_REGISTRY["list_transfer_history"].func(session)
-        waiting_collabs = await TOOL_REGISTRY["list_waiting_collaborations"].func(session)
+        open_items = await TOOL_REGISTRY["list_open_work_items"].func(
+            session, project_id=project_id
+        )
+        blocked_items = await TOOL_REGISTRY["list_blocked_items"].func(
+            session, project_id=project_id
+        )
+        transfers = await TOOL_REGISTRY["list_transfer_history"].func(
+            session, project_id=project_id
+        )
+        waiting_collabs = await TOOL_REGISTRY["list_waiting_collaborations"].func(
+            session, project_id=project_id
+        )
 
     now = datetime.now(UTC)
     overdue, due_soon = split_by_due(

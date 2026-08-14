@@ -29,6 +29,7 @@ if _rparts.path in ("", "/0"):
     os.environ["REDIS_URL"] = urlunsplit(_rparts._replace(path="/15"))
 
 import asyncio  # noqa: E402
+import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import asyncpg  # noqa: E402
@@ -42,6 +43,11 @@ from app.domains.identity.service import create_user  # noqa: E402
 from app.domains.project.models import Project, ProjectMember  # noqa: E402
 from app.infrastructure.database.engine import async_session_factory, engine  # noqa: E402
 from app.main import app  # noqa: E402
+
+# 本地 Windows：psycopg 异步连接不能用 ProactorEventLoop，需切 SelectorEventLoop。
+# 仅 win32 生效；Docker/Linux 下事件循环策略本来就合适，此处为 no-op。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 

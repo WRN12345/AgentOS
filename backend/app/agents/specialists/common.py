@@ -12,6 +12,7 @@
 
 import json
 import re
+import uuid
 from typing import Any
 
 from app.infrastructure.models.provider import get_model_provider
@@ -30,6 +31,17 @@ def strip_model_noise(raw: str) -> str:
     if fence:
         text = fence.group(1).strip()
     return text
+
+
+def context_project_id(state: dict[str, Any]) -> uuid.UUID | None:
+    """从图状态取当前项目 UUID（工具按项目过滤用，ticket 05）。
+
+    取自 load_context 填充的 context.project.id；缺失返回 None
+    （工具层按 project_id=None 视为无项目上下文，查询返回空集，fail-closed）。
+    """
+    project = (state.get("context") or {}).get("project")
+    project_id = project.get("id") if isinstance(project, dict) else None
+    return uuid.UUID(project_id) if project_id else None
 
 
 async def call_model_json(*, system: str, user_prompt: str) -> str:

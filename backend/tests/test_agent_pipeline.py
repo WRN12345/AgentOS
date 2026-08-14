@@ -80,7 +80,7 @@ async def _run_once(redis_client, run_id: uuid.UUID, prompt: str = "") -> None:
     )
 
 
-async def _trigger(redis_client, prompt: str) -> AgentRun:
+async def _trigger(redis_client, prompt: str, *, project_id: uuid.UUID) -> AgentRun:
     async with async_session_factory() as session:
         return await request_agent_analysis(
             session,
@@ -88,6 +88,7 @@ async def _trigger(redis_client, prompt: str) -> AgentRun:
             agent_type=pipeline.AGENT_TYPE,
             trigger_source="manual",
             work_item_id=None,  # 项目级触发（仅 leader，端点层权限沿用现有实现）
+            project_id=project_id,  # 项目级 run 必须带归属（ticket 05：工具按项目过滤）
             prompt=prompt,
         )
 
@@ -327,7 +328,7 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, requirement)
+        run = await _trigger(redis_client, requirement, project_id=project.id)
         await _run_once(redis_client, run.id, prompt=requirement)
 
         async with async_session_factory() as session:
@@ -395,7 +396,7 @@ async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "搭建 RAG 问答平台")
+        run = await _trigger(redis_client, "搭建 RAG 问答平台", project_id=project.id)
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:
@@ -431,7 +432,7 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "搭建 RAG 问答平台")
+        run = await _trigger(redis_client, "搭建 RAG 问答平台", project_id=project.id)
         await _run_once(redis_client, run.id, prompt="搭建 RAG 问答平台")
 
         async with async_session_factory() as session:
@@ -468,7 +469,7 @@ async def test_pipeline_schema_invalid_merge_fails_run(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "随便做点什么")
+        run = await _trigger(redis_client, "随便做点什么", project_id=project.id)
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:

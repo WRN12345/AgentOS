@@ -205,8 +205,8 @@ async def test_agent_tools_exclude_admin(project: Project) -> None:
         await session.commit()
 
     async with async_session_factory() as session:
-        caps = await list_member_capabilities(session)
-        workload = await get_member_workload(session)
+        caps = await list_member_capabilities(session, project_id=project.id)
+        workload = await get_member_workload(session, project_id=project.id)
 
     alice_id = str(alice.id)
     # admin 没有 member 记录，工具自然不返回

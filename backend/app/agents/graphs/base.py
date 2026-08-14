@@ -60,6 +60,8 @@ class AgentGraphState(TypedDict, total=False):
     run_id: Required[str]
     agent_type: Required[str]
     trigger_source: Required[str]
+    # 项目归属（worker 无请求头，由 agent_runs.project_id 经队列载荷注入）
+    project_id: Required[str | None]
     work_item_id: Required[str | None]
     request_id: Required[str | None]
     # 人工触发时携带的自然语言输入（如需求描述）
@@ -91,7 +93,7 @@ def _echo_capability(state: AgentGraphState) -> dict[str, Any]:
             "summary": f"echo 占位能力已接收输入：{state.get('prompt', '')[:200] or '(空)'}",
             "rationale": "T5.2 基础图链路自检：上下文加载、路由、校验、保存、通知全链路连通。",
             "echo": {
-                "project": context.get("project", {}).get("name"),
+                "project": (context.get("project") or {}).get("name"),
                 "work_item_title": work_item.get("title"),
             },
         },
@@ -138,16 +140,44 @@ AGENT_ROUTES: dict[str, str] = {
 
 
 async def load_context(state: AgentGraphState) -> dict[str, Any]:
-    """加载授权后的项目上下文（最小上下文原则：仅项目名 + 目标工作项标题/状态）。"""
+    """加载授权后的项目上下文（最小上下文原则：仅项目名 + 目标工作项标题/状态）。
+
+    项目归属解析顺序（ticket 05，替代此前硬编码取 DB 第一个项目）：
+    1. 优先取 state.project_id（worker 经 agent_runs.project_id 注入，权威来源）；
+    2. 无显式 project_id 时从目标工作项推导（work_items.project_id）。
+    3. 校验两者一致；work_item 与项目不匹配属链路不变量被破坏，直接抛错终止。
+    """
     async with async_session_factory() as session:
-        project = (
-            await session.execute(select(Project).order_by(Project.created_at).limit(1))
-        ).scalar_one_or_none()
+        project = None
+        work_item = None
+        if state.get("work_item_id"):
+            work_item = await session.get(WorkItem, uuid.UUID(state["work_item_id"]))
+
+        explicit_project_id = state.get("project_id")
+        if explicit_project_id:
+            project = await session.get(Project, uuid.UUID(explicit_project_id))
+        elif work_item is not None:
+            project = await session.get(Project, work_item.project_id)
+
         context: dict[str, Any] = {
             "project": {"id": str(project.id), "name": project.name} if project else None,
             "work_item": None,
             "leader_id": None,
         }
+        if work_item is not None:
+            if project is not None and work_item.project_id != project.id:
+                logger.error(
+                    "work_item project mismatch: work_item=%s item_project=%s run_project=%s",
+                    work_item.id,
+                    work_item.project_id,
+                    explicit_project_id,
+                )
+                raise RuntimeError("work_item.project_id != run.project_id，项目归属链路被破坏")
+            context["work_item"] = {
+                "id": str(work_item.id),
+                "title": work_item.title,
+                "status": work_item.status,
+            }
         if project is not None:
             leader = (
                 await session.execute(
@@ -158,14 +188,6 @@ async def load_context(state: AgentGraphState) -> dict[str, Any]:
                 )
             ).scalar_one_or_none()
             context["leader_id"] = str(leader.id) if leader else None
-        if state.get("work_item_id"):
-            item = await session.get(WorkItem, uuid.UUID(state["work_item_id"]))
-            if item is not None:
-                context["work_item"] = {
-                    "id": str(item.id),
-                    "title": item.title,
-                    "status": item.status,
-                }
     return {"context": context}
 
 
@@ -278,6 +300,7 @@ def initial_state(
     run_id: uuid.UUID,
     agent_type: str,
     trigger_source: str,
+    project_id: uuid.UUID | None,
     work_item_id: uuid.UUID | None,
     request_id: str | None,
     prompt: str,
@@ -287,6 +310,7 @@ def initial_state(
         run_id=str(run_id),
         agent_type=agent_type,
         trigger_source=trigger_source,
+        project_id=str(project_id) if project_id else None,
         work_item_id=str(work_item_id) if work_item_id else None,
         request_id=request_id,
         prompt=prompt,

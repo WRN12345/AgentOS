@@ -9,7 +9,7 @@ fact_refs 引用纳入考量的进行中工作项 ID。
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import planning as planning_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
@@ -23,9 +23,14 @@ PROMPT_VERSION = "planning_advisor.v1"
 
 async def planning_advisor_capability(state: "AgentGraphState") -> Any:
     """结合进行中工作项与负载，产出拆分/协作点/DDL 建议。"""
+    project_id = context_project_id(state)
     async with async_session_factory() as session:
-        open_work_items = await TOOL_REGISTRY["list_open_work_items"].func(session)
-        workload = await TOOL_REGISTRY["get_member_workload"].func(session)
+        open_work_items = await TOOL_REGISTRY["list_open_work_items"].func(
+            session, project_id=project_id
+        )
+        workload = await TOOL_REGISTRY["get_member_workload"].func(
+            session, project_id=project_id
+        )
 
     context = state.get("context", {})
     work_item = context.get("work_item") or {}
