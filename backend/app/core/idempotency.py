@@ -38,6 +38,7 @@ from starlette.responses import Response, StreamingResponse
 
 from app.core.errors import ApiException, ErrorCodes, IdempotentReplay
 from app.core.logging import setup_logging
+from app.core.request_context import project_id_from_header
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.models.idempotency import IdempotencyRecord
 
@@ -64,17 +65,6 @@ def _project_clause(project_id: uuid.UUID | None):  # noqa: ANN202
         if project_id is None
         else IdempotencyRecord.project_id == project_id
     )
-
-
-def _extract_project_id(request: Request) -> uuid.UUID | None:
-    """从 X-Project-Id 头快照项目归属；缺失/格式无效记为 None（全局接口）。"""
-    raw = request.headers.get("X-Project-Id", "").strip()
-    if not raw:
-        return None
-    try:
-        return uuid.UUID(raw)
-    except ValueError:
-        return None
 
 
 async def _find_record(
@@ -127,7 +117,7 @@ async def idempotency_guard(
         return
 
     user_id = getattr(request.state, "user_id", None)
-    project_id = _extract_project_id(request)
+    project_id = project_id_from_header(request)
     method, path = request.method, request.url.path
     deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
 
