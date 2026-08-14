@@ -49,18 +49,23 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
 
 async def _make_suggestion(
     *,
+    project_id: uuid.UUID,
     suggestion_type: str,
     work_item_id: str | None = None,
     review_status: str = "pending",
     model: str | None = "qwen2.5:7b",
 ) -> AgentSuggestion:
-    """直接造一条 run + suggestion（绕过 worker/模型，专注接口语义）。"""
+    """直接造一条 run + suggestion（绕过 worker/模型，专注接口语义）。
+
+    ticket 05：run 必须带项目归属，建议列表/反馈按 run.project_id 推导隔离。
+    """
     async with async_session_factory() as session:
         run = AgentRun(
             status="succeeded",
             agent_type=f"{suggestion_type}_agent",
             model=model,
             trigger_source="manual",
+            project_id=project_id,
             work_item_id=uuid.UUID(work_item_id) if work_item_id else None,
         )
         session.add(run)
@@ -90,7 +95,9 @@ async def test_member_can_list_suggestions_with_details(
     """成员可读；出参含关联 run 的 work_item_id/model 与信封字段。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(
-        suggestion_type="requirement", work_item_id=ctx["item_id"]  # type: ignore[arg-type]
+        project_id=project.id,
+        suggestion_type="requirement",
+        work_item_id=ctx["item_id"],  # type: ignore[arg-type]
     )
     resp = await client.get(
         "/api/v1/agent-suggestions", headers=ctx["alice_headers"]  # type: ignore[arg-type]
@@ -116,7 +123,7 @@ async def test_project_level_suggestion_has_null_work_item(
 ) -> None:
     """项目级建议（run 无 work_item_id）出参 work_item_id 为 null。"""
     ctx = await _setup(client, project)
-    await _make_suggestion(suggestion_type="risk")
+    await _make_suggestion(project_id=project.id, suggestion_type="risk")
     resp = await client.get(
         "/api/v1/agent-suggestions", headers=ctx["leader_headers"]  # type: ignore[arg-type]
     )
@@ -129,9 +136,9 @@ async def test_list_suggestions_filters(
 ) -> None:
     """按 suggestion_type / review_status / work_item_id 过滤。"""
     ctx = await _setup(client, project)
-    await _make_suggestion(suggestion_type="requirement", work_item_id=ctx["item_id"])  # type: ignore[arg-type]
-    await _make_suggestion(suggestion_type="risk")
-    await _make_suggestion(suggestion_type="summary", review_status="accepted")
+    await _make_suggestion(project_id=project.id, suggestion_type="requirement", work_item_id=ctx["item_id"])  # type: ignore[arg-type]
+    await _make_suggestion(project_id=project.id, suggestion_type="risk")
+    await _make_suggestion(project_id=project.id, suggestion_type="summary", review_status="accepted")
 
     headers = ctx["leader_headers"]  # type: ignore[assignment]
 
@@ -168,7 +175,7 @@ async def test_list_suggestions_pagination(
     """limit/offset 分页。"""
     ctx = await _setup(client, project)
     for i in range(3):
-        await _make_suggestion(suggestion_type=f"type{i}")
+        await _make_suggestion(project_id=project.id, suggestion_type=f"type{i}")
     headers = ctx["leader_headers"]  # type: ignore[assignment]
     page1 = await client.get("/api/v1/agent-suggestions?limit=2", headers=headers)
     assert len(page1.json()) == 2
@@ -192,7 +199,7 @@ async def test_leader_feedback_accepted_persisted_with_audit(
 ) -> None:
     """负责人采纳 → 200；review_status/reviewed_by/reviewed_at 落库 + 审计事件。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="planning")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="planning")
     leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
 
     resp = await client.post(
@@ -233,7 +240,7 @@ async def test_leader_feedback_ignored(
 ) -> None:
     """忽略反馈 → review_status=ignored。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="risk")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="risk")
     resp = await client.post(
         f"/api/v1/agent-suggestions/{suggestion.id}/feedback",
         json={"action": "ignored"},
@@ -248,7 +255,7 @@ async def test_feedback_non_leader_forbidden(
 ) -> None:
     """普通成员反馈 → 403。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="requirement")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="requirement")
     resp = await client.post(
         f"/api/v1/agent-suggestions/{suggestion.id}/feedback",
         json={"action": "accepted"},
@@ -274,7 +281,7 @@ async def test_feedback_duplicate_conflict(
 ) -> None:
     """已反馈的建议再次反馈 → 409 AGENT_SUGGESTION_ALREADY_REVIEWED。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="review", review_status="ignored")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="review", review_status="ignored")
     resp = await client.post(
         f"/api/v1/agent-suggestions/{suggestion.id}/feedback",
         json={"action": "accepted"},
@@ -289,7 +296,7 @@ async def test_feedback_invalid_action_rejected(
 ) -> None:
     """非法 action → 422（Literal 校验）。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="summary")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="summary")
     resp = await client.post(
         f"/api/v1/agent-suggestions/{suggestion.id}/feedback",
         json={"action": "maybe"},
@@ -306,12 +313,13 @@ async def test_list_and_get_agent_runs(
 ) -> None:
     """运行列表含状态/错误详情；status 过滤；单条 404。"""
     ctx = await _setup(client, project)
-    await _make_suggestion(suggestion_type="risk")
+    await _make_suggestion(project_id=project.id, suggestion_type="risk")
     async with async_session_factory() as session:
         failed = AgentRun(
             status="failed",
             agent_type="workflow_risk",
             trigger_source="scheduler",
+            project_id=project.id,  # ticket 05：run 列表按项目过滤
             error="ModelUnavailableError: timeout",
             duration_ms=1200,
             retry_count=3,
@@ -359,7 +367,7 @@ async def test_feedback_does_not_touch_business_state(
 ) -> None:
     """反馈审计 action 为 agent. 前缀，不产生业务状态类审计事件（10.3 节）。"""
     ctx = await _setup(client, project)
-    suggestion = await _make_suggestion(suggestion_type="assignment")
+    suggestion = await _make_suggestion(project_id=project.id, suggestion_type="assignment")
     await client.post(
         f"/api/v1/agent-suggestions/{suggestion.id}/feedback",
         json={"action": "accepted"},

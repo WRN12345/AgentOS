@@ -259,14 +259,22 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
 
 
 async def _make_failed_run(
-    redis_client, work_item_id: uuid.UUID | None, prompt: str = ""  # noqa: ANN001
+    redis_client,  # noqa: ANN001
+    work_item_id: uuid.UUID | None,
+    prompt: str = "",
+    *,
+    project_id: uuid.UUID | None,
 ) -> AgentRun:
-    """建 run 并让其直接终态 failed（max_retries=0 + echo 不可用）。"""
+    """建 run 并让其直接终态 failed（max_retries=0 + echo 不可用）。
+
+    ticket 05：run 必须带项目归属，否则重试端点按项目过滤时视为不存在。
+    """
     async with async_session_factory() as session:
         run = await request_agent_analysis(
             session,
             redis_client,
             agent_type="echo",
+            project_id=project_id,
             work_item_id=work_item_id,
             prompt=prompt,
         )
@@ -300,7 +308,9 @@ async def test_manual_retry_failed_run_succeeds(
             await session.commit()
             item_id = item.id
 
-        run = await _make_failed_run(redis_client, item_id, prompt="做一个 RAG 问答")
+        run = await _make_failed_run(
+            redis_client, item_id, prompt="做一个 RAG 问答", project_id=project.id
+        )
 
         headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         resp = await client.post(f"/api/v1/agent-runs/{run.id}/retry", headers=headers)
@@ -366,10 +376,14 @@ async def test_manual_retry_permissions_and_status(
             await session.commit()
             item_id = item.id
 
-        failed_run = await _make_failed_run(redis_client, item_id)
-        project_run = await _make_failed_run(redis_client, None)  # 项目级 run（无工作项）
+        failed_run = await _make_failed_run(redis_client, item_id, project_id=project.id)
+        project_run = await _make_failed_run(
+            redis_client, None, project_id=project.id
+        )  # 项目级 run（无工作项），归属显式指定
         async with async_session_factory() as session:
-            pending_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            pending_run = await request_agent_analysis(
+                session, redis_client, agent_type="echo", project_id=project.id
+            )
 
         leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         alice_headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))

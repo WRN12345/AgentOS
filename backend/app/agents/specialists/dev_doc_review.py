@@ -13,7 +13,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import dev_doc_review as dev_doc_review_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
@@ -29,10 +29,15 @@ async def dev_doc_review_capability(state: "AgentGraphState") -> Any:
     """对工作项当前开发文档做初审，产出负责人确认清单建议。"""
     assert state.get("work_item_id"), "dev_doc_review 需要 work_item_id"
     work_item_id = uuid.UUID(state["work_item_id"])
+    project_id = context_project_id(state)
 
     async with async_session_factory() as session:
-        overview = await TOOL_REGISTRY["get_work_item_overview"].func(session, work_item_id)
-        dev_doc = await TOOL_REGISTRY["get_dev_doc"].func(session, work_item_id)
+        overview = await TOOL_REGISTRY["get_work_item_overview"].func(
+            session, work_item_id, project_id=project_id
+        )
+        dev_doc = await TOOL_REGISTRY["get_dev_doc"].func(
+            session, work_item_id, project_id=project_id
+        )
 
     context = state.get("context", {})
     user_prompt = dev_doc_review_prompts.render_user_prompt(

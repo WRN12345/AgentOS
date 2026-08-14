@@ -58,10 +58,18 @@ class AgentTool:
 # ---------- 只读业务查询工具（read_query） ----------
 
 
-async def get_work_item_overview(session: AsyncSession, work_item_id: uuid.UUID) -> dict | None:
-    """工作项概览：标题、状态、负责人、DDL、优先级、验收标准。"""
+async def get_work_item_overview(
+    session: AsyncSession,
+    work_item_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID | None = None,
+) -> dict | None:
+    """工作项概览：标题、状态、负责人、DDL、优先级、验收标准。
+
+    项目归属校验：跨项目工作项视为不可见（返回 None，不泄漏其他项目上下文）。
+    """
     item = await session.get(WorkItem, work_item_id)
-    if item is None:
+    if item is None or item.project_id != project_id:
         return None
     return {
         "id": str(item.id),
@@ -75,10 +83,19 @@ async def get_work_item_overview(session: AsyncSession, work_item_id: uuid.UUID)
 
 
 async def list_open_work_items(
-    session: AsyncSession, *, status: str | None = None, limit: int = 50
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID | None = None,
+    status: str | None = None,
+    limit: int = 50,
 ) -> list[dict]:
-    """进行中工作项清单（默认全部活跃状态，供风险/规划类 Agent 扫描）。"""
+    """进行中工作项清单（默认全部活跃状态，供风险/规划类 Agent 扫描）。
+
+    project_id 限定当前项目（ticket 05）：不泄漏其他项目上下文。
+    """
     stmt = select(WorkItem).order_by(WorkItem.due_at.asc().nulls_last()).limit(limit)
+    if project_id is not None:
+        stmt = stmt.where(WorkItem.project_id == project_id)
     if status is not None:
         stmt = stmt.where(WorkItem.status == status)
     else:
@@ -97,13 +114,18 @@ async def list_open_work_items(
     ]
 
 
-async def list_member_capabilities(session: AsyncSession) -> list[dict]:
-    """成员能力清单：标签、熟练度、负责人确认状态（6.2 节，供分配建议引用）。"""
+async def list_member_capabilities(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[dict]:
+    """成员能力清单：标签、熟练度、负责人确认状态（6.2 节，供分配建议引用）。
+
+    project_id 限定当前项目（ticket 05）。
+    """
     rows = (
         await session.execute(
             select(ProjectMember, MemberCapability)
             .join(MemberCapability, MemberCapability.member_id == ProjectMember.id)
-            .where(ProjectMember.is_active.is_(True))
+            .where(ProjectMember.is_active.is_(True), ProjectMember.project_id == project_id)
             .order_by(ProjectMember.display_name, MemberCapability.tag)
         )
     ).all()
@@ -119,26 +141,39 @@ async def list_member_capabilities(session: AsyncSession) -> list[dict]:
     ]
 
 
-async def list_capability_tags(session: AsyncSession) -> list[str]:
+async def list_capability_tags(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[str]:
     """成员技能标签词表：member_capabilities.tag 去重集合（供需求流水线
-    约束 involved_aspects 的取值范围，保证分配匹配准确）。"""
+    约束 involved_aspects 的取值范围，保证分配匹配准确）。
+
+    project_id 限定当前项目（ticket 05）。
+    """
     rows = (
-        await session.execute(select(MemberCapability.tag).distinct().order_by(MemberCapability.tag))
+        await session.execute(
+            select(MemberCapability.tag)
+            .join(ProjectMember, ProjectMember.id == MemberCapability.member_id)
+            .where(ProjectMember.project_id == project_id)
+            .distinct()
+            .order_by(MemberCapability.tag)
+        )
     ).all()
     return [tag for (tag,) in rows]
 
 
-async def list_assignable_members(session: AsyncSession) -> list[dict]:
+async def list_assignable_members(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[dict]:
     """可分配成员清单：display_name / username（供需求流水线解析需求文本中
     点名的人选）。
 
-    停用成员不可分配，不进入清单。
+    停用成员不可分配，不进入清单。project_id 限定当前项目（ticket 05）。
     """
     rows = (
         await session.execute(
             select(ProjectMember.id, ProjectMember.display_name, User.username)
             .join(User, User.id == ProjectMember.user_id)
-            .where(ProjectMember.is_active.is_(True))
+            .where(ProjectMember.is_active.is_(True), ProjectMember.project_id == project_id)
             .order_by(ProjectMember.display_name)
         )
     ).all()
@@ -148,17 +183,24 @@ async def list_assignable_members(session: AsyncSession) -> list[dict]:
     ]
 
 
-async def get_member_workload(session: AsyncSession) -> list[dict]:
-    """成员当前负载：各活跃成员名下的活跃工作项数（6.2 节，供分配建议引用）。"""
+async def get_member_workload(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[dict]:
+    """成员当前负载：各活跃成员名下的活跃工作项数（6.2 节，供分配建议引用）。
+
+    project_id 限定当前项目（ticket 05）：成员与名下工作项都按项目过滤，
+    避免跨项目污染负载统计。
+    """
     rows = (
         await session.execute(
             select(ProjectMember.id, ProjectMember.display_name, func.count(WorkItem.id))
             .outerjoin(
                 WorkItem,
                 (WorkItem.assignee_id == ProjectMember.id)
+                & (WorkItem.project_id == project_id)
                 & (WorkItem.status.in_(ACTIVE_STATUSES)),
             )
-            .where(ProjectMember.is_active.is_(True))
+            .where(ProjectMember.is_active.is_(True), ProjectMember.project_id == project_id)
             .group_by(ProjectMember.id, ProjectMember.display_name)
             .order_by(ProjectMember.display_name)
         )
@@ -170,18 +212,25 @@ async def get_member_workload(session: AsyncSession) -> list[dict]:
 
 
 async def list_deliverable_metadata(
-    session: AsyncSession, work_item_id: uuid.UUID
+    session: AsyncSession,
+    work_item_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """交付物最小上下文（16 节）：文本正文 / Git 链接文本 / 文件元数据。
 
     text / git_link 类型的 content（正文、链接文本）属于初审最小上下文；
     file 类型只返回文件名 / 大小 / MIME / sha256 等元数据，绝不读取文件原文。
+    project_id 限定当前项目（deliverables 冗余 project_id，ticket 05）。
     """
     rows = (
         await session.execute(
             select(Deliverable, StoredFile)
             .outerjoin(StoredFile, Deliverable.stored_file_id == StoredFile.id)
-            .where(Deliverable.work_item_id == work_item_id)
+            .where(
+                Deliverable.work_item_id == work_item_id,
+                Deliverable.project_id == project_id,
+            )
             .order_by(Deliverable.version)
         )
     ).all()
@@ -213,10 +262,22 @@ async def list_deliverable_metadata(
 # ---------- 风险扫描只读工具（T5.5 Workflow Risk Agent） ----------
 
 
-async def get_dev_doc(session: AsyncSession, work_item_id: uuid.UUID) -> dict | None:
-    """工作项的开发文档（状态/提交次数/Markdown 正文，供 dev_doc_review 初审引用）。"""
+async def get_dev_doc(
+    session: AsyncSession,
+    work_item_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID | None = None,
+) -> dict | None:
+    """工作项的开发文档（状态/提交次数/Markdown 正文，供 dev_doc_review 初审引用）。
+
+    经 work_items 推导归属校验：跨项目文档视为不存在（ticket 05）。
+    """
     doc = (
-        await session.execute(select(DevDoc).where(DevDoc.work_item_id == work_item_id))
+        await session.execute(
+            select(DevDoc)
+            .join(WorkItem, WorkItem.id == DevDoc.work_item_id)
+            .where(DevDoc.work_item_id == work_item_id, WorkItem.project_id == project_id)
+        )
     ).scalar_one_or_none()
     if doc is None:
         return None
@@ -229,13 +290,21 @@ async def get_dev_doc(session: AsyncSession, work_item_id: uuid.UUID) -> dict | 
     }
 
 
-async def list_blocked_items(session: AsyncSession, *, limit: int = 50) -> list[dict]:
-    """阻塞中的工作项清单（含阻塞起始时间，供风险 Agent 评估阻塞时长）。"""
+async def list_blocked_items(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None, limit: int = 50
+) -> list[dict]:
+    """阻塞中的工作项清单（含阻塞起始时间，供风险 Agent 评估阻塞时长）。
+
+    project_id 限定当前项目（ticket 05）。
+    """
     items = (
         (
             await session.execute(
                 select(WorkItem)
-                .where(WorkItem.status == WorkItemStatus.BLOCKED.value)
+                .where(
+                    WorkItem.status == WorkItemStatus.BLOCKED.value,
+                    WorkItem.project_id == project_id,
+                )
                 .order_by(WorkItem.updated_at)
                 .limit(limit)
             )
@@ -258,15 +327,23 @@ async def list_blocked_items(session: AsyncSession, *, limit: int = 50) -> list[
 
 
 async def list_transfer_history(
-    session: AsyncSession, *, days: int = 30, limit: int = 100
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID | None = None,
+    days: int = 30,
+    limit: int = 100,
 ) -> list[dict]:
-    """近期转派申请记录（默认近 30 天，供风险 Agent 识别频繁转派）。"""
+    """近期转派申请记录（默认近 30 天，供风险 Agent 识别频繁转派）。
+
+    transfer_requests 无 project_id 冗余列，经关联工作项推导过滤（ticket 05）。
+    """
     since = datetime.now(UTC) - timedelta(days=days)
     rows = (
         (
             await session.execute(
                 select(TransferRequest)
-                .where(TransferRequest.created_at >= since)
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(TransferRequest.created_at >= since, WorkItem.project_id == project_id)
                 .order_by(TransferRequest.created_at.desc())
                 .limit(limit)
             )
@@ -287,8 +364,13 @@ async def list_transfer_history(
     ]
 
 
-async def list_waiting_collaborations(session: AsyncSession, *, limit: int = 50) -> list[dict]:
-    """等待中的协作请求（未终态：已请求/已接受/处理中/被要求修改），供识别协作等待风险。"""
+async def list_waiting_collaborations(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None, limit: int = 50
+) -> list[dict]:
+    """等待中的协作请求（未终态：已请求/已接受/处理中/被要求修改），供识别协作等待风险。
+
+    collaboration_requests 无 project_id 冗余列，经关联工作项推导过滤（ticket 05）。
+    """
     waiting = (
         CollaborationStatus.REQUESTED.value,
         CollaborationStatus.ACCEPTED.value,
@@ -299,7 +381,11 @@ async def list_waiting_collaborations(session: AsyncSession, *, limit: int = 50)
         (
             await session.execute(
                 select(CollaborationRequest)
-                .where(CollaborationRequest.status.in_(waiting))
+                .join(WorkItem, WorkItem.id == CollaborationRequest.work_item_id)
+                .where(
+                    CollaborationRequest.status.in_(waiting),
+                    WorkItem.project_id == project_id,
+                )
                 .order_by(CollaborationRequest.created_at)
                 .limit(limit)
             )
@@ -325,18 +411,34 @@ async def list_waiting_collaborations(session: AsyncSession, *, limit: int = 50)
 # ---------- 摘要统计只读工具（T5.5 Summary Agent） ----------
 
 
-async def get_work_item_status_counts(session: AsyncSession) -> dict[str, int]:
-    """各状态工作项数量（项目进展统计，供摘要 Agent 引用真实数据）。"""
+async def get_work_item_status_counts(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> dict[str, int]:
+    """各状态工作项数量（项目进展统计，供摘要 Agent 引用真实数据）。
+
+    project_id 限定当前项目（ticket 05）。
+    """
     rows = (
-        await session.execute(select(WorkItem.status, func.count()).group_by(WorkItem.status))
+        await session.execute(
+            select(WorkItem.status, func.count())
+            .where(WorkItem.project_id == project_id)
+            .group_by(WorkItem.status)
+        )
     ).all()
     return {status: count for status, count in rows}
 
 
 async def list_recently_completed_work_items(
-    session: AsyncSession, *, days: int = 7, limit: int = 20
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID | None = None,
+    days: int = 7,
+    limit: int = 20,
 ) -> list[dict]:
-    """近期完成的工作项（默认近 7 天，按完成时间倒序，供摘要 Agent 使用）。"""
+    """近期完成的工作项（默认近 7 天，按完成时间倒序，供摘要 Agent 使用）。
+
+    project_id 限定当前项目（ticket 05）。
+    """
     since = datetime.now(UTC) - timedelta(days=days)
     items = (
         (
@@ -345,6 +447,7 @@ async def list_recently_completed_work_items(
                 .where(
                     WorkItem.status == WorkItemStatus.COMPLETED.value,
                     WorkItem.updated_at >= since,
+                    WorkItem.project_id == project_id,
                 )
                 .order_by(WorkItem.updated_at.desc())
                 .limit(limit)
@@ -364,13 +467,22 @@ async def list_recently_completed_work_items(
     ]
 
 
-async def list_pending_approvals(session: AsyncSession) -> dict[str, list[dict]]:
-    """待负责人审批事项汇总：待审工作项（IN_REVIEW）、待批转派、待批 DDL 变更。"""
+async def list_pending_approvals(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> dict[str, list[dict]]:
+    """待负责人审批事项汇总：待审工作项（IN_REVIEW）、待批转派、待批 DDL 变更。
+
+    project_id 限定当前项目（ticket 05）：transfers / deadline_changes
+    无 project_id 冗余列，经关联工作项推导过滤。
+    """
     in_review = (
         (
             await session.execute(
                 select(WorkItem)
-                .where(WorkItem.status == WorkItemStatus.IN_REVIEW.value)
+                .where(
+                    WorkItem.status == WorkItemStatus.IN_REVIEW.value,
+                    WorkItem.project_id == project_id,
+                )
                 .order_by(WorkItem.updated_at)
             )
         )
@@ -381,7 +493,11 @@ async def list_pending_approvals(session: AsyncSession) -> dict[str, list[dict]]
         (
             await session.execute(
                 select(TransferRequest)
-                .where(TransferRequest.status == TransferStatus.PENDING.value)
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    TransferRequest.status == TransferStatus.PENDING.value,
+                    WorkItem.project_id == project_id,
+                )
                 .order_by(TransferRequest.created_at)
             )
         )
@@ -392,7 +508,11 @@ async def list_pending_approvals(session: AsyncSession) -> dict[str, list[dict]]
         (
             await session.execute(
                 select(DeadlineChangeRequest)
-                .where(DeadlineChangeRequest.status.in_(sorted(DEADLINE_PENDING_STATUSES)))
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    DeadlineChangeRequest.status.in_(sorted(DEADLINE_PENDING_STATUSES)),
+                    WorkItem.project_id == project_id,
+                )
                 .order_by(DeadlineChangeRequest.created_at)
             )
         )

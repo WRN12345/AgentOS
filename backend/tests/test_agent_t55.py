@@ -156,12 +156,16 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
 
         # 直接调 scheduler 周期任务的处理函数（worker 消费 agent.risk_scan 的入口）
         result = await run_risk_scan(redis_client)
-        assert result["status"] == "enqueued"
-        run_id = uuid.UUID(result["run_id"])
+        assert result["status"] == "done"
+        assert result["skipped"] == []  # 单项目：无活跃 run，正常投递
+        assert [e["project_id"] for e in result["enqueued"]] == [str(project.id)]
+        run_id = uuid.UUID(result["enqueued"][0]["run_id"])
 
-        # 去重：同类型 run 仍 pending 时，下一周期跳过投递
+        # 去重：同类型 run 仍 pending 时，下一周期按项目跳过投递
         again = await run_risk_scan(redis_client)
-        assert again["status"] == "skipped"
+        assert again["status"] == "done"
+        assert again["skipped"] == [str(project.id)]
+        assert again["enqueued"] == []
 
         # 消费投递出的 agent.run 任务
         task = await dequeue(redis_client, timeout=2)
@@ -403,6 +407,7 @@ async def test_summary_agent_uses_real_stats(
                 session,
                 redis_client,
                 agent_type=summary.AGENT_TYPE,
+                project_id=project.id,  # 项目级 run 必须带归属（工具按项目过滤）
                 trigger_source="manual",
             )
         await handle_task(
@@ -517,6 +522,7 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
     item = await _make_work_item(leader.id, "混合交付工作项", project_id=project.id, status="IN_PROGRESS")
     async with async_session_factory() as session:
         stored = StoredFile(
+            project_id=item.project_id,  # 0016 迁移后 project_id NOT NULL
             storage_key="2026/07/abc.pdf",
             original_filename="设计文档.pdf",
             size_bytes=12345,
@@ -551,7 +557,9 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
         await session.commit()
 
     async with async_session_factory() as session:
-        rows = await TOOL_REGISTRY["list_deliverable_metadata"].func(session, item.id)
+        rows = await TOOL_REGISTRY["list_deliverable_metadata"].func(
+            session, item.id, project_id=project.id
+        )
 
     assert [r["version"] for r in rows] == [1, 2]
     assert rows[0]["content"] == "阶段性实现说明"

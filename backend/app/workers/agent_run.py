@@ -84,6 +84,7 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
                     run_id=run.id,
                     agent_type=run.agent_type,
                     trigger_source=run.trigger_source,
+                    project_id=run.project_id,
                     work_item_id=run.work_item_id,
                     request_id=run.request_id,
                     prompt=payload.get("prompt") or "",
