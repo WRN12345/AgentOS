@@ -1,5 +1,7 @@
 import type {
+  AdminProject,
   Deliverable,
+  LeaderBrief,
   Member,
   MemberBrief,
   MyProject,
@@ -116,6 +118,34 @@ export function makeDeliverable(
     submitted_by: memberBrief(),
     created_at: "2026-01-02T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** 项目负责人摘要（管理控制台 /projects 内嵌）。 */
+export function makeLeaderBrief(
+  overrides: Partial<LeaderBrief> = {},
+): LeaderBrief {
+  return {
+    id: "member-leader-1",
+    user_id: "user-leader",
+    username: "leader",
+    display_name: "李四",
+    ...overrides,
+  };
+}
+
+/** 管理控制台项目摘要（GET /projects）。 */
+export function makeAdminProject(
+  overrides: Partial<AdminProject> = {},
+): AdminProject {
+  return {
+    id: "project-1",
+    name: "Alpha",
+    description: null,
+    leader: makeLeaderBrief(),
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
