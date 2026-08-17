@@ -67,6 +67,7 @@ async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMem
             run = await request_agent_analysis(
                 session,
                 redis_client,
+                project_id=project.id,
                 agent_type="echo",
                 trigger_source="manual",
                 work_item_id=item.id,
@@ -150,6 +151,7 @@ async def test_agent_run_failure_marks_failed(
             run = await request_agent_analysis(
                 session,
                 redis_client,
+                project_id=project.id,
                 agent_type="echo",
                 prompt="触发失败路径",
             )

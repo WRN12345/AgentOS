@@ -35,10 +35,9 @@ class AgentRun(CoreModel):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_items.id"), nullable=True, index=True
     )
-    # 项目归属（spec D1：有独立列表入口的表冗余 project_id；可空兼容历史数据，
-    # 新写入由服务层保证填写——worker 无请求头，须靠本列归属）
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True, index=True
+    # 项目归属：所有 Agent 运行均属于项目，worker 无请求头，须靠本列传递。
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
     )
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

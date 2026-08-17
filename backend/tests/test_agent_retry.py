@@ -123,7 +123,11 @@ async def test_model_timeout_retries_with_backoff_then_fails(
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
             run = await request_agent_analysis(
-                session, redis_client, agent_type="echo", prompt="重试我"
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="重试我",
             )
         # 初始投递的任务取回 payload（后续重投沿用同一 payload）
         first = await dequeue(redis_client, timeout=2)
@@ -178,7 +182,9 @@ async def test_validation_error_is_not_retried(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
 
         await handle_task(_run_task(run.id), redis_client)
 
@@ -217,7 +223,9 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            failed_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            failed_run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
 
         # 1) Agent 任务失败被捕获（safe_handle_task 不向上抛）
         await safe_handle_task(_run_task(failed_run.id), redis_client)
@@ -233,7 +241,9 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
 
         # 3) 后续任务照常处理：新的 Agent 运行成功，其他类型任务正常消费
         async with async_session_factory() as session:
-            ok_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            ok_run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
         await safe_handle_task(_run_task(ok_run.id), redis_client)
         assert (await _get_run(ok_run.id)).status == "succeeded"
         await safe_handle_task(

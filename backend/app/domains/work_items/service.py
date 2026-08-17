@@ -489,6 +489,7 @@ async def _dispatch_deliverable_review(session: AsyncSession, item: WorkItem) ->
             session,
             redis_client,
             agent_type=DELIVERABLE_REVIEW_AGENT_TYPE,
+            project_id=item.project_id,
             trigger_source="event",
             work_item_id=item.id,
         )

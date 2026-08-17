@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.request_context import get_client_ip, get_project_id, get_request_id
 from app.domains.audit.models import AuditEvent
 
+_PROJECT_FROM_CONTEXT = object()
+
 
 async def record_event(
     session: AsyncSession,
@@ -24,12 +26,16 @@ async def record_event(
     target_id: uuid.UUID | None = None,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
+    project_id: uuid.UUID | None | object = _PROJECT_FROM_CONTEXT,
 ) -> AuditEvent:
     """追加一条审计事件。只提供追加能力，不提供修改和删除路径。
 
-    project_id 从请求上下文快照捕获（ticket 07，spec D1 快照语义）；
-    全局动作（无项目上下文）记为 NULL。业务代码无需手传。
+    默认兼容既有项目接口，从已由门禁校验的请求上下文读取；admin/global
+    服务必须显式传目标项目或 None，避免客户端伪造请求头改变审计归属。
     """
+    resolved_project_id = (
+        get_project_id() if project_id is _PROJECT_FROM_CONTEXT else project_id
+    )
     event = AuditEvent(
         actor_id=actor_id,
         action=action,
@@ -39,7 +45,7 @@ async def record_event(
         after=after,
         request_id=get_request_id() or None,
         source_ip=get_client_ip() or None,
-        project_id=get_project_id() or None,
+        project_id=resolved_project_id,
     )
     session.add(event)
     await session.flush()  # flush 让写入失败（如约束违反）在 commit 前暴露，保证同生共死

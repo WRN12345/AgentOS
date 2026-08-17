@@ -209,8 +209,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             media_type=response.media_type,
         )
 
-        if response.status_code >= 500:
-            # 5xx 不落库：删除占位，允许客户端重试真正执行
+        if not 200 <= response.status_code < 300:
+            # 仅成功响应可重放；校验/权限/服务端错误均释放占位，修正后可同键重试。
             await _delete_reservation(**pending)
             return final
 

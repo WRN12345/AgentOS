@@ -103,8 +103,16 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str) -> Tok
 
 
 async def revoke_refresh_token(session: AsyncSession, refresh_token: str) -> None:
-    """登出：撤销 Refresh Token。未知或已撤销的令牌按 401 拒绝。"""
-    record = await _get_valid_refresh_token(session, refresh_token)
+    """登出：幂等撤销 Refresh Token；未知/已撤销令牌同样成功，避免令牌探测。"""
+    record = (
+        await session.execute(
+            select(RefreshToken).where(
+                RefreshToken.token_hash == hash_refresh_token(refresh_token)
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None or record.revoked_at is not None:
+        return
     record.revoked_at = datetime.now(UTC)
     await session.commit()
     logger.info("refresh token revoked: user_id=%s", record.user_id)

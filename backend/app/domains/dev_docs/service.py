@@ -348,6 +348,7 @@ async def _dispatch_dev_doc_review(session: AsyncSession, item: WorkItem) -> Non
             session,
             redis_client,
             agent_type=DEV_DOC_REVIEW_AGENT_TYPE,
+            project_id=item.project_id,
             trigger_source="event",
             work_item_id=item.id,
         )

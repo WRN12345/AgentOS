@@ -136,6 +136,7 @@ async def create_project(
         target_type="project",
         target_id=project.id,
         after={"name": project.name, "owner_user_id": str(owner.id)},
+        project_id=project.id,
     )
     await session.commit()
     await session.refresh(project)
@@ -189,6 +190,7 @@ async def update_user(
         target_id=user.id,
         before=before,
         after={"is_active": user.is_active},
+        project_id=None,
     )
     await session.commit()
     logger.info("user updated: user_id=%s, is_active=%s", user.id, user.is_active)
@@ -217,6 +219,7 @@ async def create_account(
         target_id=user.id,
         before=None,
         after={"username": user.username, "is_active": user.is_active},
+        project_id=None,
     )
     await session.commit()
     logger.info("user created by admin: user_id=%s, username=%s", user.id, user.username)
@@ -269,6 +272,12 @@ async def update_project_leader(
         target_member.capabilities = []  # 显式初始化集合，避免 commit 后访问触发异步懒加载
         session.add(target_member)
     else:
+        if not target_member.is_active:
+            raise ApiException(
+                409,
+                ErrorCodes.PROJECT_MEMBER_DISABLED,
+                "目标成员在本项目已被禁用，请先显式启用后再指定为负责人",
+            )
         target_member.role = ROLE_LEADER
 
     await session.flush()
@@ -280,6 +289,7 @@ async def update_project_leader(
         target_id=project.id,
         before={"leader_user_id": str(leaders[0].user_id) if leaders else None},
         after={"leader_user_id": str(target.id)},
+        project_id=project.id,
     )
     await session.commit()
     logger.info(
