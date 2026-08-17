@@ -8,7 +8,7 @@ import { useAuthStore } from "../app/store";
  * 切换项目即得到全新缓存条目，避免 A 项目数据串进 B 项目；失效也以该前缀为准，
  * 只刷新当前项目的数据。
  *
- * 全局数据（config、audit-events）不随项目变化，不经本工厂。
+ * 项目时间线审计数据按项目隔离；管理控制台审计数据使用独立的全局键。
  * 未选定项目时（登录分流前 / 全局管理员）不加前缀，键为 [root, ...suffix]，
  * 与选定项目后的键天然隔离，管理员视角不会误读某项目缓存。
  */
@@ -35,7 +35,9 @@ export const queryKeys = {
     scoped("agent-suggestions", ...suffix),
   agentRuns: (...suffix: unknown[]) => scoped("agent-runs", ...suffix),
   notifications: (...suffix: unknown[]) => scoped("notifications", ...suffix),
+  auditEvents: (...suffix: unknown[]) => scoped("audit-events", ...suffix),
   /** 管理控制台（ticket 10）：全局管理员无项目上下文，键不含项目前缀。 */
   adminProjects: (...suffix: unknown[]) => scoped("admin-projects", ...suffix),
   adminUsers: (...suffix: unknown[]) => scoped("admin-users", ...suffix),
+  adminAuditEvents: (...suffix: unknown[]) => ["admin-audit-events", ...suffix],
 };

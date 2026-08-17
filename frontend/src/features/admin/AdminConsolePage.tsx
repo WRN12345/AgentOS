@@ -65,7 +65,7 @@ export default function AdminConsolePage() {
 
   // 平台级审计：admin 可见全部事件（含 project_id=NULL 的全局事件）
   const { data: events } = useQuery({
-    queryKey: ["audit-events"],
+    queryKey: queryKeys.adminAuditEvents(),
     queryFn: () => api.get<AuditEvent[]>("/audit-events?limit=50"),
   });
 
@@ -84,7 +84,7 @@ export default function AdminConsolePage() {
           : `已禁用账号 ${updated.username}`,
       );
       queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
-      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
     },
     onError: (error) => toast.error(errorMessage(error, "账号状态变更失败")),
   });

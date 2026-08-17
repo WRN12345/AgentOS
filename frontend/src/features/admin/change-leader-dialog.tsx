@@ -64,7 +64,7 @@ export function ChangeLeaderDialog({
       );
       // 项目列表 + 平台审计（project.leader.updated）一并失效
       queryClient.invalidateQueries({ queryKey: queryKeys.adminProjects() });
-      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
       onClose();
     },
     onError: (error) => toast.error(errorMessage(error, "变更负责人失败")),

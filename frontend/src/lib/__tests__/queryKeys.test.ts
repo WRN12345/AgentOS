@@ -25,6 +25,7 @@ describe("queryKeys 项目感知键工厂", () => {
       "agent-suggestions",
       "dashboard",
     ]);
+    expect(queryKeys.auditEvents()).toEqual(["audit-events"]);
   });
 
   it("选定项目后键以项目 id 打头，隔离跨项目缓存", () => {
@@ -42,6 +43,7 @@ describe("queryKeys 项目感知键工厂", () => {
       "detail",
       "tr-1",
     ]);
+    expect(queryKeys.auditEvents()).toEqual(["project-1", "audit-events"]);
   });
 
   it("切换项目后得到全新键，与原项目键互不干扰", () => {

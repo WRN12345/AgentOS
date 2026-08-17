@@ -75,7 +75,7 @@ export function CreateProjectDialog({
       toast.success(`项目 ${project.name} 创建成功，负责人可进入工作台`);
       // 项目列表 + 平台审计（project.created）一并失效
       queryClient.invalidateQueries({ queryKey: queryKeys.adminProjects() });
-      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
       form.reset();
       onOpenChange(false);
     },
