@@ -298,6 +298,179 @@ async def test_disable_unknown_user_404(client: httpx.AsyncClient, project: Proj
     assert resp.status_code == 404
 
 
+# ---------- 建号（admin-only；建号收敛到 admin） ----------
+
+
+async def test_admin_creates_account(client: httpx.AsyncClient, project: Project) -> None:
+    """admin 创建账号 → 201，返回一次性初始密码；新账号可登录；列表不含密码。"""
+    ctx = await _make_ctx(client, project)
+    admin_headers = ctx["admin_headers"]
+
+    resp = await client.post(
+        "/api/v1/users",
+        json={"username": "carol", "password": "Carol123!"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["username"] == "carol"
+    assert body["is_admin"] is False
+    assert body["initial_password"] == "Carol123!"
+    assert "password_hash" not in body
+
+    # 账号列表不含初始密码（仅创建响应返回一次）
+    users = await client.get("/api/v1/users", headers=admin_headers)
+    carol = next(u for u in users.json() if u["username"] == "carol")
+    assert "initial_password" not in carol
+    assert "password" not in carol
+
+    # 新账号可登录
+    login = await client.post(
+        "/api/v1/auth/login", json={"username": "carol", "password": "Carol123!"}
+    )
+    assert login.status_code == 200
+
+
+async def test_admin_create_account_duplicate_username_409(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """建号重名 → 409（用户名全局唯一，跨项目同名也在此拦截）。"""
+    ctx = await _make_ctx(client, project)
+    admin_headers = ctx["admin_headers"]
+
+    resp = await client.post(
+        "/api/v1/users",
+        json={"username": "alice", "password": "Whatever123!"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "USERNAME_TAKEN"
+
+
+async def test_non_admin_cannot_create_account(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """负责人/成员 POST /users → 403。"""
+    ctx = await _make_ctx(client, project)
+    for headers in (ctx["leader_headers"], ctx["alice_headers"]):
+        resp = await client.post(
+            "/api/v1/users",
+            json={"username": "dave", "password": "Dave123!"},
+            headers=headers,
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "FORBIDDEN"
+
+
+async def test_create_account_weak_password_422(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """密码不足 8 位 → 422。"""
+    ctx = await _make_ctx(client, project)
+    admin_headers = ctx["admin_headers"]
+
+    resp = await client.post(
+        "/api/v1/users",
+        json={"username": "weakpw", "password": "short"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 422
+
+
+# ---------- 变更项目负责人（每项目仅一名，admin-only） ----------
+
+
+async def test_admin_changes_project_leader(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """admin 变更负责人：alice 升为负责人，原负责人降为成员，全项目仍仅一名负责人。"""
+    ctx = await _make_ctx(client, project)
+    admin_headers = ctx["admin_headers"]
+
+    resp = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(ctx["alice"].user_id)},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == str(project.id)
+    assert body["leader"]["user_id"] == str(ctx["alice"].user_id)
+
+    members = await client.get("/api/v1/members", headers=ctx["leader_headers"])
+    assert members.status_code == 200
+    roles = {m["username"]: m["role"] for m in members.json()}
+    assert roles["alice"] == "leader"
+    assert roles["leader"] == "member"
+    assert sum(1 for r in roles.values() if r == "leader") == 1
+
+
+async def test_change_leader_unknown_project_404(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """变更不存在项目的负责人 → 404。"""
+    ctx = await _make_ctx(client, project)
+    resp = await client.put(
+        f"/api/v1/projects/{uuid.uuid4()}/leader",
+        json={"user_id": str(ctx["alice"].user_id)},
+        headers=ctx["admin_headers"],
+    )
+    assert resp.status_code == 404
+
+
+async def test_change_leader_unknown_target_404(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """目标账号不存在 → 404。"""
+    ctx = await _make_ctx(client, project)
+    resp = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(uuid.uuid4())},
+        headers=ctx["admin_headers"],
+    )
+    assert resp.status_code == 404
+
+
+async def test_change_leader_to_admin_400(client: httpx.AsyncClient, project: Project) -> None:
+    """目标为全局管理员 → 400。"""
+    ctx = await _make_ctx(client, project)
+    resp = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(ctx["admin_user"].id)},
+        headers=ctx["admin_headers"],
+    )
+    assert resp.status_code == 400
+
+
+async def test_change_leader_to_disabled_400(client: httpx.AsyncClient, project: Project) -> None:
+    """目标账号已禁用 → 400。"""
+    ctx = await _make_ctx(client, project)
+    await client.patch(
+        f"/api/v1/users/{ctx['bob'].user_id}",
+        json={"is_active": False},
+        headers=ctx["admin_headers"],
+    )
+    resp = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(ctx["bob"].user_id)},
+        headers=ctx["admin_headers"],
+    )
+    assert resp.status_code == 400
+
+
+async def test_change_leader_non_admin_403(client: httpx.AsyncClient, project: Project) -> None:
+    """负责人/成员调用变更负责人接口 → 403。"""
+    ctx = await _make_ctx(client, project)
+    for headers in (ctx["leader_headers"], ctx["alice_headers"]):
+        resp = await client.put(
+            f"/api/v1/projects/{project.id}/leader",
+            json={"user_id": str(ctx["alice"].user_id)},
+            headers=headers,
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "FORBIDDEN"
+
+
 # ---------- 审计查看（admin 全量可见） ----------
 
 

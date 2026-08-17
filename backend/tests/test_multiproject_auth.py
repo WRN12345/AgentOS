@@ -171,6 +171,39 @@ async def test_me_endpoint_includes_is_admin(client, admin_user, leader):
     assert resp.json()["is_admin"] is False
 
 
+# ---------- API 不接受传入 project_id（D3：归属由服务层从上下文填充） ----------
+
+
+async def test_work_item_body_project_id_is_ignored(
+    client, project_a, project_b, leader
+):
+    """body 带 project_id 不被接受：落库归属 = X-Project-Id 头项目，而非 body 指定的项目。"""
+    from sqlalchemy import select
+
+    from app.domains.work_items.models import WorkItem
+    from app.infrastructure.database.engine import async_session_factory
+
+    headers = await _login(client, "leader", "Leader123!")
+    headers_a = {**headers, "X-Project-Id": str(project_a.id)}
+
+    resp = await client.post(
+        "/api/v1/work-items",
+        json={
+            "title": "带 project_id 的工作项",
+            "priority": "medium",
+            "assignee_id": str(leader.id),
+            "project_id": str(project_b.id),  # 恶意传入 B 的归属
+        },
+        headers=headers_a,
+    )
+    assert resp.status_code == 201, resp.text
+    item_id = resp.json()["id"]
+
+    async with async_session_factory() as session:
+        item = (await session.execute(select(WorkItem).where(WorkItem.id == item_id))).scalar_one()
+    assert item.project_id == project_a.id  # 归属只来自请求上下文，不接受 body 指定
+
+
 # ---------- helpers ----------
 
 

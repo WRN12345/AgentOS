@@ -60,41 +60,36 @@ describe("负责人核心路径", () => {
     vi.clearAllMocks();
   });
 
-  it("第 1 步：创建成员（POST /members），成功后展示一次性初始密码", async () => {
+  it("第 1 步：添加已有成员（POST /members，仅 username），复用账号无初始密码", async () => {
     const user = userEvent.setup();
     signInAs(leader);
     stubGet({ "/members": [leader] });
     mockApi.post.mockResolvedValue({
       ...alice,
       id: "member-new",
-      initial_password: "InitPass-2026!",
+      username: "alice",
     });
 
     renderWithProviders(<MembersPage />);
-    // 负责人可见「新建成员」入口
+    // 负责人可见「添加成员」入口（建号收敛到 admin，仅能复用已有账号）
     await user.click(
-      await screen.findByRole("button", { name: /新建成员/ }),
+      await screen.findByRole("button", { name: /添加成员/ }),
     );
 
     await user.type(screen.getByLabelText("用户名"), "alice");
-    await user.type(screen.getByLabelText("初始密码"), "password-123");
-    await user.type(screen.getByLabelText("显示名"), "爱丽丝");
-    await user.click(screen.getByRole("button", { name: "创建" }));
+    await user.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => {
       expect(mockApi.post).toHaveBeenCalledWith(
         "/members",
-        expect.objectContaining({
-          username: "alice",
-          password: "password-123",
-          display_name: "爱丽丝",
-          role: "member",
-        }),
+        expect.objectContaining({ username: "alice" }),
         expect.any(String),
       );
     });
-    // 一次性初始密码对话框
-    expect(await screen.findByText("InitPass-2026!")).toBeInTheDocument();
+    // 复用已有账号，无初始密码
+    expect(
+      await screen.findByText("（复用已有账号，无初始密码）"),
+    ).toBeInTheDocument();
   });
 
   it("第 2 步：创建工作项并指派主执行人（POST /work-items）", async () => {

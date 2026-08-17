@@ -74,9 +74,9 @@ describe("全局管理员页面可见性", () => {
     renderWithProviders(<MembersPage />);
 
     expect(await screen.findByText("爱丽丝")).toBeInTheDocument();
-    // 与 leader 同权的账号管理入口
+    // 与 leader 同权的成员管理入口
     expect(
-      screen.getByRole("button", { name: /新建成员/ }),
+      screen.getByRole("button", { name: /添加成员/ }),
     ).toBeInTheDocument();
     expect(
       screen.getAllByRole("button", { name: /编辑/ }).length,

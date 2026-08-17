@@ -1,9 +1,14 @@
-"""成员与能力管理集成测试（T2.3 验收，6.1、6.2、12.2、16 节）。"""
+"""成员与能力管理集成测试（T2.3 验收，6.1、6.2、12.2、16 节）。
+
+2026-08-17 规则调整：建号收敛到 admin（admin 控制台建号），
+POST /members 仅「添加已有账号」，固定为成员角色；角色由 admin 指定/变更。
+"""
 
 import httpx
 from sqlalchemy import select
 
 from app.domains.audit.models import AuditEvent
+from app.domains.identity.service import create_user
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
 from tests.conftest import add_member, auth_headers
@@ -12,52 +17,49 @@ LEADER_PW = "Leader123!"
 MEMBER_PW = "Member123!"
 
 
-async def _create_member_via_api(
-    client: httpx.AsyncClient,
-    headers: dict[str, str],
-    username: str = "alice",
-    password: str = MEMBER_PW,
-    **extra: object,
-) -> httpx.Response:
-    payload = {
-        "username": username,
-        "password": password,
-        "display_name": username,
-        "weekly_available_hours": 30,
-        "git_username": f"{username}-git",
-        **extra,
-    }
-    return await client.post("/api/v1/members", json=payload, headers=headers)
-
-
-async def test_member_cannot_create_member(
+async def test_member_cannot_add_member(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
-    """普通成员调用 POST /members → 403。"""
+    """普通成员调用 POST /members → 403；负责人可添加已有账号 → 201。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    created = await _create_member_via_api(client, leader_headers)
-    assert created.status_code == 201
+    # bob 是已有全局账号（无成员记录，建号收敛到 admin）
+    async with async_session_factory() as session:
+        await create_user(session, "bob", MEMBER_PW)
+        await session.commit()
 
+    added = await client.post("/api/v1/members", json={"username": "bob"}, headers=leader_headers)
+    assert added.status_code == 201
+
+    _, alice = await add_member(project, "alice", MEMBER_PW)
     member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
-    resp = await _create_member_via_api(client, member_headers, username="bob")
+    resp = await client.post("/api/v1/members", json={"username": "bob"}, headers=member_headers)
     assert resp.status_code == 403
     assert resp.json()["code"] == "FORBIDDEN"
 
 
-async def test_leader_creates_member_with_login_account(
+async def test_leader_adds_existing_account(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
-    """负责人创建成员并生成登录账号；初始密码仅创建响应返回一次，可登录。"""
+    """负责人添加已有账号：不建号、无初始密码；审计留痕；账号本身可登录。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    resp = await _create_member_via_api(client, leader_headers)
+    async with async_session_factory() as session:
+        await create_user(session, "alice", MEMBER_PW)
+        await session.commit()
+
+    resp = await client.post(
+        "/api/v1/members",
+        json={"username": "alice", "display_name": "爱丽丝"},
+        headers=leader_headers,
+    )
     assert resp.status_code == 201
     body = resp.json()
-    assert body["initial_password"] == MEMBER_PW
     assert body["role"] == "member"
-    assert body["capabilities"] == []
+    assert body["display_name"] == "爱丽丝"
+    assert "initial_password" not in body
     assert "password_hash" not in body
-    assert "password" not in {k for k in body if k != "initial_password"}
+    assert "password" not in {k for k in body}
 
+    # 账号本身存在且可登录（建号由 admin 负责，账号可用）
     login = await client.post(
         "/api/v1/auth/login", json={"username": "alice", "password": MEMBER_PW}
     )
@@ -76,13 +78,14 @@ async def test_leader_creates_member_with_login_account(
     assert events[0].after["username"] == "alice"
 
 
-async def test_create_member_username_conflict(
+async def test_add_member_already_in_project_409(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
+    """重复把同一账号添加到本项目 → 409。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    resp = await _create_member_via_api(client, leader_headers, username="leader")
+    resp = await client.post("/api/v1/members", json={"username": "leader"}, headers=leader_headers)
     assert resp.status_code == 409
-    assert resp.json()["code"] == "USERNAME_TAKEN"
+    assert resp.json()["code"] == "VALIDATION_ERROR"
 
 
 async def test_get_members_returns_summary_without_sensitive_fields(
@@ -90,7 +93,7 @@ async def test_get_members_returns_summary_without_sensitive_fields(
 ) -> None:
     """任何项目成员可查全员摘要；响应不含密码哈希/令牌等敏感字段。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    await _create_member_via_api(client, leader_headers)
+    await add_member(project, "alice", MEMBER_PW)
 
     member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
     resp = await client.get("/api/v1/members", headers=member_headers)
@@ -115,8 +118,6 @@ async def test_get_members_rejects_non_member_and_anonymous(
     assert anon.status_code == 401
 
     async with async_session_factory() as session:
-        from app.domains.identity.service import create_user
-
         await create_user(session, "outsider", "Outsider123!")
         await session.commit()
     outsider_headers = await auth_headers(client, "outsider", "Outsider123!", project_id=str(project.id))
@@ -130,8 +131,8 @@ async def test_capability_submit_and_confirm_flow(
 ) -> None:
     """成员填报能力后未确认；负责人确认后翻转，全程留痕。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    created = (await _create_member_via_api(client, leader_headers)).json()
-    member_id = created["id"]
+    _, alice = await add_member(project, "alice", MEMBER_PW)
+    member_id = alice.id
     member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
 
     # 成员填报自己的能力 → confirmed 全部 False
@@ -196,13 +197,13 @@ async def test_capability_submit_and_confirm_flow(
     assert confirm_event.actor_id == leader.user_id
 
 
-async def test_leader_updates_and_disables_member(
+async def test_leader_updates_and_disables_member_project_local(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
-    """负责人维护资料；禁用后成员账号无法登录，启用后恢复。"""
+    """负责人维护资料；项目内禁用仅停本项目成员身份（账号仍可登录，本项目业务 403），启用恢复。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
-    created = (await _create_member_via_api(client, leader_headers)).json()
-    member_id = created["id"]
+    _, alice = await add_member(project, "alice", MEMBER_PW)
+    member_id = alice.id
 
     patch = await client.patch(
         f"/api/v1/members/{member_id}",
@@ -213,7 +214,14 @@ async def test_leader_updates_and_disables_member(
     assert patch.json()["display_name"] == "爱丽丝"
     assert patch.json()["weekly_available_hours"] == 20
 
-    # 禁用 → 登录被拒（users.is_active 联动）
+    # 普通成员不能 PATCH（先验，此时 alice 仍启用）
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
+    resp = await client.patch(
+        f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
+    )
+    assert resp.status_code == 403
+
+    # 项目内禁用 → 仅停本项目：账号可登录（不联动 users.is_active），本项目业务 403
     disabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": False}, headers=leader_headers
     )
@@ -222,25 +230,19 @@ async def test_leader_updates_and_disables_member(
     login = await client.post(
         "/api/v1/auth/login", json={"username": "alice", "password": MEMBER_PW}
     )
-    assert login.status_code == 403
-    assert login.json()["code"] == "USER_DISABLED"
+    assert login.status_code == 200  # 账号未被全局禁用
+    blocked = await client.get("/api/v1/members", headers=member_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "NOT_PROJECT_MEMBER"
 
-    # 启用 → 恢复登录
+    # 启用 → 本项目访问恢复
     enabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": True}, headers=leader_headers
     )
     assert enabled.status_code == 200
-    login = await client.post(
-        "/api/v1/auth/login", json={"username": "alice", "password": MEMBER_PW}
-    )
-    assert login.status_code == 200
-
-    # 普通成员不能 PATCH
-    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
-    resp = await client.patch(
-        f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
-    )
-    assert resp.status_code == 403
+    restored_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
+    restored = await client.get("/api/v1/members", headers=restored_headers)
+    assert restored.status_code == 200
 
     # 审计：member.updated 事件含前后摘要
     async with async_session_factory() as session:
