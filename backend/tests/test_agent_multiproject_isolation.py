@@ -17,7 +17,9 @@ from sqlalchemy import select
 from app.agents.models import AgentRun, AgentSuggestion
 from app.agents.service import request_agent_analysis
 from app.agents.tools import TOOL_REGISTRY
+from app.domains.identity.models import User
 from app.domains.notifications.models import Notification
+from app.domains.notifications.service import notify
 from app.domains.project.models import Project, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.work_items.models import WorkItem
@@ -27,7 +29,7 @@ from app.infrastructure.queue.queue import QUEUE_KEY, dequeue
 from app.workers.due_scan import scan_due_reminders
 from app.workers.risk_scan import run_risk_scan
 from app.workers.worker import handle_task
-from tests.conftest import add_member, auth_headers
+from tests.conftest import add_member, add_member_for_existing_user, auth_headers
 
 
 async def _make_work_item(
@@ -351,3 +353,60 @@ async def test_risk_scan_skips_only_projects_with_active_runs(
         assert result["enqueued"] == []
     finally:
         await redis_client.aclose()
+
+
+# ---------- 评审 #5：通知读隔离（同一用户挂双项目） ----------
+
+
+async def test_notification_list_and_read_isolated_by_project(
+    client, project_a: Project, project_b: Project
+) -> None:
+    """同一全局账号挂 A/B：A 上下文只见 A 通知；B 上下文读 A 通知 → 404。"""
+    _, member_a = await add_member(project_a, "noti_user", "Noti123!", display_name="通知人")
+    async with async_session_factory() as session:
+        user = await session.get(User, member_a.user_id)
+    member_b = await add_member_for_existing_user(
+        async_session_factory, project_b, user, display_name="通知人-B"
+    )
+
+    async with async_session_factory() as session:
+        noti_a = await notify(
+            session,
+            project_id=project_a.id,
+            recipient_id=member_a.id,
+            type="test.event",
+            title="A 通知",
+            body="A 正文",
+        )
+        noti_b = await notify(
+            session,
+            project_id=project_b.id,
+            recipient_id=member_b.id,
+            type="test.event",
+            title="B 通知",
+            body="B 正文",
+        )
+        await session.commit()
+
+    headers_a = await auth_headers(client, "noti_user", "Noti123!", project_id=str(project_a.id))
+    headers_b = await auth_headers(client, "noti_user", "Noti123!", project_id=str(project_b.id))
+
+    # A 上下文：只见 A 通知
+    resp = await client.get("/api/v1/notifications", headers=headers_a)
+    assert resp.status_code == 200
+    assert [n["id"] for n in resp.json()["items"]] == [str(noti_a.id)]
+
+    # B 上下文：只见 B 通知
+    resp = await client.get("/api/v1/notifications", headers=headers_b)
+    assert resp.status_code == 200
+    assert [n["id"] for n in resp.json()["items"]] == [str(noti_b.id)]
+
+    # B 上下文读 A 通知 → 404（不暴露存在性）
+    resp = await client.post(f"/api/v1/notifications/{noti_a.id}/read", headers=headers_b)
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "NOT_FOUND"
+
+    # 对照：A 上下文读自己的 → 200
+    resp = await client.post(f"/api/v1/notifications/{noti_a.id}/read", headers=headers_a)
+    assert resp.status_code == 200
+    assert resp.json()["is_read"] is True

@@ -8,7 +8,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.domains.identity.schemas import UserOut
 
@@ -44,15 +44,51 @@ class ProjectCreateIn(BaseModel):
     负责人只能是普通用户（全局管理员不参与项目业务，16 节）。
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=1000)
     owner_user_id: uuid.UUID
 
 
+class AdminProjectLeaderIn(BaseModel):
+    """admin 变更项目负责人：目标账号（每项目仅一名负责人）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: uuid.UUID
+
+
+class AdminUserCreateIn(BaseModel):
+    """admin 创建账号（建号收敛到 admin；16 节不开放公开注册）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AdminUserCreatedOut(UserOut):
+    """建号响应：初始密码仅此一次返回，之后不可再查。"""
+
+    initial_password: str
+
+
 class AdminUserUpdateIn(BaseModel):
     """账号管理：启用/禁用（is_active 联动登录与项目业务访问）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     is_active: bool
 
 
-__all__ = ["AdminProjectOut", "AdminUserUpdateIn", "LeaderBrief", "ProjectCreateIn", "UserOut"]
+__all__ = [
+    "AdminProjectLeaderIn",
+    "AdminProjectOut",
+    "AdminUserCreatedOut",
+    "AdminUserCreateIn",
+    "AdminUserUpdateIn",
+    "LeaderBrief",
+    "ProjectCreateIn",
+    "UserOut",
+]

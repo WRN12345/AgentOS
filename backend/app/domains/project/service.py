@@ -17,9 +17,9 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.identity.models import User
-from app.domains.identity.service import create_user
 from app.domains.project.models import (
     ROLE_LEADER,
+    ROLE_MEMBER,
     MemberCapability,
     Project,
     ProjectMember,
@@ -48,14 +48,17 @@ async def get_default_project(session: AsyncSession) -> Project:
     return project
 
 
-async def get_member(session: AsyncSession, member_id: uuid.UUID) -> ProjectMember:
+async def get_member(
+    session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
+) -> ProjectMember:
     stmt = (
         select(ProjectMember)
         .where(ProjectMember.id == member_id)
         .options(selectinload(ProjectMember.capabilities))  # 预加载，避免异步懒加载
     )
     member = (await session.execute(stmt)).scalar_one_or_none()
-    if member is None:
+    if member is None or member.project_id != project_id:
+        # 墙外对象等同不存在（同 work_items 域 get_work_item 的越权 404 模式）
         raise ApiException(404, ErrorCodes.NOT_FOUND, "成员不存在")
     return member
 
@@ -111,11 +114,13 @@ def member_to_out(
     )
 
 
-async def _active_work_item_counts(session: AsyncSession) -> dict[uuid.UUID, int]:
-    """各成员当前负载：作为主执行人的进行中工作项数量（6.2 节"当前有效任务负载"）。"""
+async def _active_work_item_counts(
+    session: AsyncSession, project_id: uuid.UUID
+) -> dict[uuid.UUID, int]:
+    """本项目各成员当前负载：作为主执行人的进行中工作项数量（6.2 节"当前有效任务负载"）。"""
     stmt = (
         select(WorkItem.assignee_id, func.count())
-        .where(WorkItem.status.in_(ACTIVE_STATUSES))
+        .where(WorkItem.status.in_(ACTIVE_STATUSES), WorkItem.project_id == project_id)
         .group_by(WorkItem.assignee_id)
     )
     return {row[0]: row[1] for row in (await session.execute(stmt)).all()}
@@ -125,10 +130,14 @@ async def _active_work_item_counts(session: AsyncSession) -> dict[uuid.UUID, int
 
 
 async def list_members(session: AsyncSession, actor: ProjectMember) -> list[MemberOut]:
-    """全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。"""
-    stmt = select(ProjectMember).order_by(ProjectMember.created_at)
+    """本项目全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。"""
+    stmt = (
+        select(ProjectMember)
+        .where(ProjectMember.project_id == actor.project_id)
+        .order_by(ProjectMember.created_at)
+    )
     members = (await session.execute(stmt)).scalars().all()
-    counts = await _active_work_item_counts(session)
+    counts = await _active_work_item_counts(session, actor.project_id)
     out: list[MemberOut] = []
     for member in members:
         user = await session.get(User, member.user_id)
@@ -138,22 +147,34 @@ async def list_members(session: AsyncSession, actor: ProjectMember) -> list[Memb
 
 async def create_member(
     session: AsyncSession, actor: ProjectMember, payload: MemberCreateIn
-) -> tuple[MemberOut, str]:
-    """负责人创建成员并同时生成登录账号；初始密码随返回值仅此一次下发。"""
+) -> MemberOut:
+    """负责人添加已有账号成员（16 节，不开放公开注册）。
+
+    2026-08-17 规则调整：账号创建收敛到 admin（admin 控制台建号），本接口只按 username
+    （全局唯一）或 user_id 解析已有账号加入本项目，不建号、无初始密码，固定为「成员」角色
+    （每项目仅一名负责人，由 admin 指定/变更）。本函数只建本项目成员，账号建删走 identity/admin 域。
+    """
     require_leader(actor)
 
-    existing = (
-        await session.execute(select(User).where(User.username == payload.username))
-    ).scalar_one_or_none()
+    if payload.username is not None:
+        user = (
+            await session.execute(select(User).where(User.username == payload.username))
+        ).scalar_one_or_none()
+    else:
+        user = await session.get(User, payload.user_id)
+    if user is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "账号不存在")
+    if user.is_admin:
+        raise ApiException(400, ErrorCodes.VALIDATION_ERROR, "全局管理员不参与项目业务，不能加入项目")
+    existing = await get_member_by_user(session, actor.project_id, user.id)
     if existing is not None:
-        raise ApiException(409, ErrorCodes.USERNAME_TAKEN, "用户名已被占用")
+        raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "该用户已是本项目成员")
 
-    user = await create_user(session, payload.username, payload.password)
     member = ProjectMember(
         project_id=actor.project_id,
         user_id=user.id,
-        role=payload.role,
-        display_name=payload.display_name,
+        role=ROLE_MEMBER,
+        display_name=payload.display_name or user.username,
         weekly_available_hours=payload.weekly_available_hours,
         git_username=payload.git_username,
     )
@@ -168,27 +189,30 @@ async def create_member(
         target_id=member.id,
         before=None,
         after={
-            "username": payload.username,
+            "username": user.username,
             "display_name": member.display_name,
             "role": member.role,
         },
     )
     await session.commit()
-    logger.info("member created: member_id=%s, username=%s", member.id, payload.username)
-    return member_to_out(member, user.username), payload.password
+    logger.info("member created (existing user): member_id=%s, user_id=%s", member.id, user.id)
+    return member_to_out(member, user.username)
 
 
 
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
-    """负责人维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
+    """负责人维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录（T2.3 规则联动）。
+
+    2026-08-17 规则调整：角色仅由 admin 指定/变更（每项目一名负责人），本接口不再处理 role。
+    """
     require_leader(actor)
-    member = await get_member(session, member_id)
+    member = await get_member(session, member_id, project_id=actor.project_id)
 
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
-    for field in ("display_name", "role", "weekly_available_hours", "git_username", "is_active"):
+    for field in ("display_name", "weekly_available_hours", "git_username", "is_active"):
         new_value = getattr(payload, field)
         if new_value is None:
             continue
@@ -235,7 +259,7 @@ async def put_capabilities(
     if payload.confirm and not can_manage:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可确认能力")
 
-    member = await get_member(session, member_id)
+    member = await get_member(session, member_id, project_id=actor.project_id)
 
     before = sorted(f"{c.tag}:{c.proficiency}" for c in member.capabilities)
     after = sorted(f"{c.tag}:{c.proficiency}" for c in payload.capabilities)

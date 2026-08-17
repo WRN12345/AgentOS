@@ -167,16 +167,24 @@ async def test_member_list_does_not_contain_admin(
 # ---------- 成员账号管理：仅 leader 可操作 ----------
 
 
-async def test_only_leader_can_create_member(
+async def test_only_leader_can_add_member(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """普通成员不能创建新成员 → 403；leader 可以 → 201。"""
+    """普通成员不能添加成员 → 403；leader 可添加已有账号 → 201。"""
     ctx = await _make_ctx(client, project)
     leader_headers = ctx["leader_headers"]
     alice_headers = ctx["alice_headers"]
     assert isinstance(leader_headers, dict) and isinstance(alice_headers, dict)
 
-    payload = {"username": "carol", "password": "Carol123!", "display_name": "卡罗尔"}
+    # carol 是已有全局账号（无成员记录，建号收敛到 admin）
+    from app.domains.identity.service import create_user
+    from app.infrastructure.database.engine import async_session_factory
+
+    async with async_session_factory() as session:
+        await create_user(session, "carol", "Carol123!")
+        await session.commit()
+
+    payload = {"username": "carol"}
 
     # 普通成员 → 403
     resp = await client.post("/api/v1/members", json=payload, headers=alice_headers)
@@ -214,35 +222,35 @@ async def test_agent_tools_exclude_admin(project: Project) -> None:
     assert all(w["member_id"] == alice_id for w in workload)
 
 
-# ---------- MemberRole 不再包含 admin ----------
+# ---------- 角色仅由 admin 指定：成员接口不接受 role 字段 ----------
 
 
-async def test_cannot_create_member_with_admin_role(
+async def test_member_create_rejects_role_field(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """role 只能是 leader 或 member，传 admin → 422（Pydantic 校验）。"""
+    """POST /members 带 role → 422（角色仅由 admin 指定，每项目一名负责人）。"""
     ctx = await _make_ctx(client, project)
     leader_headers = ctx["leader_headers"]
     assert isinstance(leader_headers, dict)
 
     resp = await client.post(
         "/api/v1/members",
-        json={"username": "dave", "password": "Dave123!", "display_name": "戴夫", "role": "admin"},
+        json={"username": "alice", "role": "admin"},
         headers=leader_headers,
     )
     assert resp.status_code == 422, resp.text
 
 
-async def test_cannot_update_member_to_admin_role(
+async def test_member_update_rejects_role_field(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """不能将成员角色改为 admin（admin 不再是项目内角色）→ 422。"""
+    """PATCH /members 带 role → 422（角色仅由 admin 指定/变更）。"""
     ctx = await _make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     leader_headers = ctx["leader_headers"]
     assert isinstance(leader_headers, dict)
 
     resp = await client.patch(
-        f"/api/v1/members/{alice.id}", json={"role": "admin"}, headers=leader_headers
+        f"/api/v1/members/{alice.id}", json={"role": "leader"}, headers=leader_headers
     )
     assert resp.status_code == 422, resp.text
