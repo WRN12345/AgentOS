@@ -60,7 +60,7 @@ export default function MembersPage() {
       toast.success(
         updated.is_active
           ? `已启用成员 ${updated.display_name}`
-          : `已禁用成员 ${updated.display_name}`,
+          : `已禁用成员 ${updated.display_name}（仅本项目，账号仍可登录）`,
       );
       queryClient.invalidateQueries({ queryKey: queryKeys.members() });
     },
