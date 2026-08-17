@@ -22,21 +22,16 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import { queryKeys } from "../../lib/queryKeys";
+import { LeaderUsernameField } from "./leader-username-field";
+import { resolveUser } from "./resolve-user";
 import type { AdminProject, UserMe } from "../../types";
 
 const createSchema = z.object({
   name: z.string().min(1, "请输入项目名称").max(128),
   description: z.string().max(1000).optional(),
-  owner_user_id: z.string().min(1, "请选择负责人"),
+  owner_username: z.string().min(1, "请输入负责人用户名"),
 });
 
 type CreateValues = z.infer<typeof createSchema>;
@@ -48,7 +43,7 @@ interface CreateProjectDialogProps {
 
 /**
  * 管理控制台"新建项目"对话框（ticket 10）：
- * admin 指定负责人，创建后该负责人成为项目的 leader 成员，可立即进入项目工作台。
+ * admin 输入完整用户名解析指定负责人（无搜索端点），创建后该负责人成为项目的 leader 成员。
  */
 export function CreateProjectDialog({
   open,
@@ -60,18 +55,13 @@ export function CreateProjectDialog({
     queryFn: () => api.get<UserMe[]>("/users"),
   });
 
-  // 负责人只能是普通启用用户（全局管理员不参与项目业务，16 节）
-  const ownerCandidates = (users ?? []).filter(
-    (u) => !u.is_admin && u.is_active,
-  );
-
   const form = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: { name: "", description: "", owner_user_id: "" },
+    defaultValues: { name: "", description: "", owner_username: "" },
   });
 
   const mutation = useMutation({
-    mutationFn: (values: CreateValues) =>
+    mutationFn: (values: CreateValues & { owner_user_id: string }) =>
       api.post<AdminProject>(
         "/projects",
         {
@@ -92,6 +82,18 @@ export function CreateProjectDialog({
     onError: (error) => toast.error(errorMessage(error, "创建项目失败")),
   });
 
+  const onSubmit = (values: CreateValues) => {
+    const { resolved } = resolveUser(users, values.owner_username);
+    if (!resolved) {
+      form.setError("owner_username", {
+        type: "manual",
+        message: "请填写可担任负责人的已有账号（非 admin、已启用）",
+      });
+      return;
+    }
+    mutation.mutate({ ...values, owner_user_id: resolved.id });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -102,10 +104,7 @@ export function CreateProjectDialog({
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit((v) => mutation.mutate(v))}
-            className="space-y-4"
-          >
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
               name="name"
@@ -132,34 +131,11 @@ export function CreateProjectDialog({
                 </FormItem>
               )}
             />
-            <FormField
+            <LeaderUsernameField
               control={form.control}
-              name="owner_user_id"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>负责人</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="选择负责人账号" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {ownerCandidates.length === 0 && (
-                        <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                          暂无可用账号
-                        </div>
-                      )}
-                      {ownerCandidates.map((u) => (
-                        <SelectItem key={u.id} value={u.id}>
-                          {u.username}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
+              name="owner_username"
+              label="负责人用户名"
+              users={users}
             />
             <DialogFooter>
               <Button type="submit" disabled={mutation.isPending}>

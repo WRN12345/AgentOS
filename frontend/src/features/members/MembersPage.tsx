@@ -28,7 +28,7 @@ import {
   CapabilitiesDialog,
   CreateMemberDialog,
   EditMemberDialog,
-  InitialPasswordDialog,
+  MemberAddResultDialog,
 } from "./member-dialogs";
 import { queryKeys } from "../../lib/queryKeys";
 
@@ -116,7 +116,7 @@ export default function MembersPage() {
           {canManage && (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
-              新建成员
+              添加成员
             </Button>
           )}
         </div>
@@ -252,7 +252,7 @@ export default function MembersPage() {
         onOpenChange={setCreateOpen}
         onCreated={setCreated}
       />
-      <InitialPasswordDialog member={created} onClose={() => setCreated(null)} />
+      <MemberAddResultDialog member={created} onClose={() => setCreated(null)} />
       <EditMemberDialog member={editing} onClose={() => setEditing(null)} />
       <CapabilitiesDialog
         member={capEditing}

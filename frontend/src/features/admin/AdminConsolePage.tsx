@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, UserCheck, UserX } from "lucide-react";
+import { Plus, UserCheck, UserCog, UserX } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,8 @@ import { queryKeys } from "../../lib/queryKeys";
 import { ACTION_LABELS, TARGET_TYPE_LABELS } from "../../lib/auditLabels";
 import { formatDateTime } from "../work-items/constants";
 import type { AdminProject, AuditEvent, UserMe } from "../../types";
+import { ChangeLeaderDialog } from "./change-leader-dialog";
+import { CreateAccountDialog } from "./create-account-dialog";
 import { CreateProjectDialog } from "./create-project-dialog";
 
 /**
@@ -47,6 +49,9 @@ export default function AdminConsolePage() {
   const me = useAuthStore((s) => s.user);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createAccountOpen, setCreateAccountOpen] = useState(false);
+  const [leaderChangeTarget, setLeaderChangeTarget] =
+    useState<AdminProject | null>(null);
 
   const { data: projects, isLoading: projectsLoading } = useQuery({
     queryKey: queryKeys.adminProjects(),
@@ -146,13 +151,14 @@ export default function AdminConsolePage() {
                         <TableHead>负责人</TableHead>
                         <TableHead>描述</TableHead>
                         <TableHead className="text-right">创建时间</TableHead>
+                        <TableHead className="text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {(projects ?? []).length === 0 ? (
                         <TableRow>
                           <TableCell
-                            colSpan={4}
+                            colSpan={5}
                             className="text-center text-sm text-muted-foreground"
                           >
                             暂无项目，点击「新建项目」创建
@@ -182,6 +188,16 @@ export default function AdminConsolePage() {
                             <TableCell className="text-right text-muted-foreground">
                               {formatDateTime(p.created_at)}
                             </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setLeaderChangeTarget(p)}
+                              >
+                                <UserCog className="size-4" />
+                                变更负责人
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))
                       )}
@@ -194,11 +210,17 @@ export default function AdminConsolePage() {
 
           <TabsContent value="users" className="mt-4">
             <Card>
-              <CardHeader>
-                <CardTitle>账号管理</CardTitle>
-                <CardDescription>
-                  启用/禁用账号：禁用后立即无法登录与访问业务；不能禁用自己
-                </CardDescription>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle>账号管理</CardTitle>
+                  <CardDescription>
+                    admin 建号；启用/禁用账号（禁用后立即无法登录，不能禁用自己）
+                  </CardDescription>
+                </div>
+                <Button onClick={() => setCreateAccountOpen(true)}>
+                  <Plus className="size-4" />
+                  新建账号
+                </Button>
               </CardHeader>
               <CardContent>
                 {usersLoading ? (
@@ -313,6 +335,14 @@ export default function AdminConsolePage() {
       </div>
 
       <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <CreateAccountDialog
+        open={createAccountOpen}
+        onOpenChange={setCreateAccountOpen}
+      />
+      <ChangeLeaderDialog
+        project={leaderChangeTarget}
+        onClose={() => setLeaderChangeTarget(null)}
+      />
     </div>
   );
 }

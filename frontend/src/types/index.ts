@@ -65,9 +65,12 @@ export interface Member {
   updated_at: string;
 }
 
-/** POST /members 响应：额外携带仅返回一次的初始密码。 */
+/**
+ * 成员添加结果（POST /members 复用已有账号场景，无初始密码，恒为 null）。
+ * 建号收敛到 admin 后，一次性初始密码只在 admin 控制台新建账号时返回。
+ */
 export interface MemberWithPassword extends Member {
-  initial_password: string;
+  initial_password: string | null;
 }
 
 export type WorkItemPriority = "low" | "medium" | "high" | "urgent";
@@ -506,4 +509,9 @@ export interface AdminProject {
   leader: LeaderBrief | null;
   created_at: string;
   updated_at: string;
+}
+
+/** POST /admin/users 响应：全局账号 + 一次性初始密码（仅此一次返回，之后不可再查）。 */
+export interface CreatedAccount extends UserMe {
+  initial_password: string;
 }

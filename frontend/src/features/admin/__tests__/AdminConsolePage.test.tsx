@@ -33,17 +33,6 @@ function makeAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
   };
 }
 
-/** 点击 shadcn Select 触发器后从 listbox 选择选项。 */
-async function pickSelectOption(
-  user: ReturnType<typeof userEvent.setup>,
-  trigger: HTMLElement,
-  optionName: string,
-) {
-  await user.click(trigger);
-  const listbox = await screen.findByRole("listbox");
-  await user.click(within(listbox).getByText(optionName));
-}
-
 /**
  * 管理控制台（ticket 10）：项目列表/新建、账号管理、审计三块。
  * 全部接口为 admin-only，管理员无项目上下文，接口不携带 X-Project-Id。
@@ -103,7 +92,7 @@ describe("AdminConsolePage 管理控制台", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("新建项目：填名称、选负责人，提交 POST /projects 并携带幂等键", async () => {
+  it("新建项目：填名称、按完整用户名指定负责人，提交 POST /projects 并携带幂等键", async () => {
     const user = userEvent.setup();
     const owner = makeUser({
       id: "user-owner",
@@ -120,7 +109,7 @@ describe("AdminConsolePage 管理控制台", () => {
     await user.click(screen.getByRole("button", { name: "新建项目" }));
     await screen.findByRole("dialog");
     await user.type(screen.getByLabelText("项目名称"), "Gamma");
-    await pickSelectOption(user, screen.getByRole("combobox"), "leader");
+    await user.type(screen.getByLabelText("负责人用户名"), "leader");
     await user.click(screen.getByRole("button", { name: "创建项目" }));
 
     await waitFor(() => {
@@ -130,6 +119,82 @@ describe("AdminConsolePage 管理控制台", () => {
           name: "Gamma",
           owner_user_id: "user-owner",
         }),
+        expect.any(String),
+      );
+    });
+  });
+
+  it("账号管理：新建账号提交 POST /admin/users 并展示一次性初始密码", async () => {
+    const user = userEvent.setup();
+    signInAs(null, makeUser({ is_admin: true }));
+    stubGet({ "/projects": [], "/users": [] });
+    mockApi.post.mockResolvedValue({
+      id: "user-new",
+      username: "carol",
+      is_active: true,
+      is_admin: false,
+      created_at: "2026-01-03T00:00:00Z",
+      initial_password: "CarolInitial1",
+    });
+
+    renderConsole();
+
+    await user.click(screen.getByRole("tab", { name: "账号管理" }));
+    await user.click(screen.getByRole("button", { name: "新建账号" }));
+    await screen.findByRole("dialog");
+    await user.type(screen.getByLabelText("用户名"), "carol");
+    await user.type(screen.getByLabelText("初始密码"), "CarolInitial1");
+    await user.click(screen.getByRole("button", { name: "创建账号" }));
+
+    await waitFor(() => {
+      expect(mockApi.post).toHaveBeenCalledWith(
+        "/users",
+        { username: "carol", password: "CarolInitial1" },
+        expect.any(String),
+      );
+    });
+    // 一次性初始密码在成功视图展示
+    expect(await screen.findByText("CarolInitial1")).toBeInTheDocument();
+  });
+
+  it("变更负责人：按用户名解析目标账号，提交 PUT /admin/projects/{id}/leader", async () => {
+    const user = userEvent.setup();
+    const project = makeAdminProject({ id: "project-1", name: "Alpha" });
+    const newLeader = makeUser({
+      id: "user-new",
+      username: "carol",
+      is_active: true,
+      is_admin: false,
+    });
+    signInAs(null, makeUser({ is_admin: true }));
+    stubGet({ "/projects": [project], "/users": [newLeader] });
+    mockApi.put.mockResolvedValue({
+      ...project,
+      leader: {
+        id: "member-new",
+        user_id: "user-new",
+        username: "carol",
+        display_name: "carol",
+      },
+    });
+
+    renderConsole();
+
+    await user.click(
+      await screen.findByRole("button", { name: "变更负责人" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const leaderInput = within(dialog).getByLabelText("新负责人用户名");
+    await user.clear(leaderInput); // 预填了当前负责人用户名，先清空再输入新账号
+    await user.type(leaderInput, "carol");
+    await user.click(
+      within(dialog).getByRole("button", { name: "变更负责人" }),
+    );
+
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith(
+        "/projects/project-1/leader",
+        { user_id: "user-new" },
         expect.any(String),
       );
     });
