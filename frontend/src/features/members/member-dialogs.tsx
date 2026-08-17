@@ -37,9 +37,6 @@ import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   username: z.string().min(1, "请输入用户名"),
-  display_name: z.string().optional(),
-  weekly_available_hours: z.string().optional(),
-  git_username: z.string().optional(),
 });
 
 type CreateValues = z.infer<typeof createSchema>;
@@ -54,6 +51,7 @@ interface CreateMemberDialogProps {
 /**
  * 负责人添加已有账号成员对话框（建号收敛到 admin，16 节）：
  * 按全局唯一用户名解析已有账号加入本项目，不建号、无初始密码、固定为「成员」角色。
+ * 表单仅用户名一项；显示名/可投入时间/Git 用户名加入后可在「编辑」中维护。
  */
 export function CreateMemberDialog({
   open,
@@ -63,30 +61,14 @@ export function CreateMemberDialog({
   const queryClient = useQueryClient();
   const form = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: {
-      username: "",
-      display_name: "",
-      weekly_available_hours: "",
-      git_username: "",
-    },
+    defaultValues: { username: "" },
   });
 
   const mutation = useMutation({
     mutationFn: (values: CreateValues) =>
       api.post<Member>(
         "/members",
-        {
-          username: values.username,
-          ...(values.display_name
-            ? { display_name: values.display_name }
-            : {}),
-          ...(values.weekly_available_hours
-            ? { weekly_available_hours: Number(values.weekly_available_hours) }
-            : {}),
-          ...(values.git_username
-            ? { git_username: values.git_username }
-            : {}),
-        },
+        { username: values.username },
         newIdempotencyKey(),
       ),
     onSuccess: (member) => {
@@ -122,45 +104,6 @@ export function CreateMemberDialog({
                   <FormLabel>用户名</FormLabel>
                   <FormControl>
                     <Input autoComplete="off" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="display_name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>显示名（可选，默认取账号用户名）</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="weekly_available_hours"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>每周可投入时间（小时，可选）</FormLabel>
-                  <FormControl>
-                    <Input type="number" min={0} step={1} {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="git_username"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Git 用户名（可选）</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

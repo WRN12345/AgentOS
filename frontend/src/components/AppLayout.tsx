@@ -47,7 +47,7 @@ const navItems = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const isLeader = useIsLeader();
-  const { user, member } = useAuthStore();
+  const { user, member, currentProject } = useAuthStore();
   const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
@@ -106,8 +106,16 @@ export default function AppLayout() {
       {/* 主区域 */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b px-6">
-          <span className="text-sm text-muted-foreground">
-            Agent 协作工作流平台
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Agent 协作工作流平台</span>
+            {currentProject && (
+              <>
+                <Separator orientation="vertical" className="h-4" />
+                <span className="font-medium text-foreground">
+                  {currentProject.name}
+                </span>
+              </>
+            )}
           </span>
           <div className="flex items-center gap-1">
             {isLeader && (
