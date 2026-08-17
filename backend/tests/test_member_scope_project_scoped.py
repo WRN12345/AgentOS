@@ -139,6 +139,62 @@ async def test_cross_project_put_capabilities_returns_404(
     assert resp.json()["code"] == "NOT_FOUND"
 
 
+# ---------- 项目内禁用解耦（2026-08-17 并入本分支） ----------
+
+
+async def test_disable_member_project_local_across_projects(
+    client: httpx.AsyncClient, project_a: Project, project_b: Project
+) -> None:
+    """A 负责人禁用 a_alice 仅停 A 本项目：账号仍可登录、B 上下文照常、/me/projects 不再含 A。
+
+    全局禁用（账号无法登录）走 admin PATCH /users/{id}（见 test_admin_console），
+    此处验证项目内禁用是「项目局部」语义，不影响账号与其它项目。
+    """
+    ctx_a = await _setup_project(client, project_a, tag="a")
+    ctx_b = await _setup_project(client, project_b, tag="b")
+
+    # 同一全局账号 a_alice 复用加入第二项目 B（评审 #4 流程）
+    joined = await client.post(
+        "/api/v1/members",
+        json={"username": "a_alice"},
+        headers=ctx_b["leader_headers"],
+    )
+    assert joined.status_code == 201, joined.text
+
+    # A 负责人禁用 a_alice 在 A 的成员身份
+    disabled = await client.patch(
+        f"/api/v1/members/{ctx_a['alice'].id}",  # type: ignore[union-attr]
+        json={"is_active": False},
+        headers=ctx_a["leader_headers"],
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["is_active"] is False
+
+    # 账号仍可登录（未全局禁用）
+    login = await client.post(
+        "/api/v1/auth/login", json={"username": "a_alice", "password": ALICE_PW}
+    )
+    assert login.status_code == 200
+
+    # A 上下文业务 → 403（本项目已禁用）
+    blocked = await client.get("/api/v1/members", headers=ctx_a["alice_headers"])
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "NOT_PROJECT_MEMBER"
+
+    # B 上下文照常 → 200（项目内禁用不影响其他项目）
+    alice_b_headers = await auth_headers(
+        client, "a_alice", ALICE_PW, project_id=str(project_b.id)
+    )
+    ok = await client.get("/api/v1/members", headers=alice_b_headers)
+    assert ok.status_code == 200
+
+    # /me/projects 不再包含 A（member.is_active=False 被过滤），仅剩 B
+    alice_headers = await auth_headers(client, "a_alice", ALICE_PW)
+    me_projects = await client.get("/api/v1/auth/me/projects", headers=alice_headers)
+    assert me_projects.status_code == 200
+    assert {p["id"] for p in me_projects.json()} == {str(project_b.id)}
+
+
 # ---------- 添加已有账号：username 复用 ----------
 
 

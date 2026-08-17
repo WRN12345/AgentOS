@@ -197,10 +197,10 @@ async def test_capability_submit_and_confirm_flow(
     assert confirm_event.actor_id == leader.user_id
 
 
-async def test_leader_updates_and_disables_member(
+async def test_leader_updates_and_disables_member_project_local(
     client: httpx.AsyncClient, project: Project, leader: ProjectMember
 ) -> None:
-    """负责人维护资料；禁用后成员账号无法登录，启用后恢复。"""
+    """负责人维护资料；项目内禁用仅停本项目成员身份（账号仍可登录，本项目业务 403），启用恢复。"""
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     _, alice = await add_member(project, "alice", MEMBER_PW)
     member_id = alice.id
@@ -214,7 +214,14 @@ async def test_leader_updates_and_disables_member(
     assert patch.json()["display_name"] == "爱丽丝"
     assert patch.json()["weekly_available_hours"] == 20
 
-    # 禁用 → 登录被拒（users.is_active 联动）
+    # 普通成员不能 PATCH（先验，此时 alice 仍启用）
+    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
+    resp = await client.patch(
+        f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
+    )
+    assert resp.status_code == 403
+
+    # 项目内禁用 → 仅停本项目：账号可登录（不联动 users.is_active），本项目业务 403
     disabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": False}, headers=leader_headers
     )
@@ -223,25 +230,19 @@ async def test_leader_updates_and_disables_member(
     login = await client.post(
         "/api/v1/auth/login", json={"username": "alice", "password": MEMBER_PW}
     )
-    assert login.status_code == 403
-    assert login.json()["code"] == "USER_DISABLED"
+    assert login.status_code == 200  # 账号未被全局禁用
+    blocked = await client.get("/api/v1/members", headers=member_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "NOT_PROJECT_MEMBER"
 
-    # 启用 → 恢复登录
+    # 启用 → 本项目访问恢复
     enabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": True}, headers=leader_headers
     )
     assert enabled.status_code == 200
-    login = await client.post(
-        "/api/v1/auth/login", json={"username": "alice", "password": MEMBER_PW}
-    )
-    assert login.status_code == 200
-
-    # 普通成员不能 PATCH
-    member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
-    resp = await client.patch(
-        f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
-    )
-    assert resp.status_code == 403
+    restored_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
+    restored = await client.get("/api/v1/members", headers=restored_headers)
+    assert restored.status_code == 200
 
     # 审计：member.updated 事件含前后摘要
     async with async_session_factory() as session:

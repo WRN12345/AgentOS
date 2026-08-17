@@ -203,9 +203,11 @@ async def create_member(
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
-    """负责人维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录（T2.3 规则联动）。
+    """负责人维护成员资料 / 项目内禁用启用。
 
     2026-08-17 规则调整：角色仅由 admin 指定/变更（每项目一名负责人），本接口不再处理 role。
+    项目内禁用（is_active）只停本项目成员身份：该账号仍可登录、其他项目照常（get_current_member
+    按本项目 member.is_active 门禁 403）；全局禁用（账号无法登录）走 admin 控制台 PATCH /users/{id}。
     """
     require_leader(actor)
     member = await get_member(session, member_id, project_id=actor.project_id)
@@ -224,9 +226,8 @@ async def update_member(
         setattr(member, field, new_value)
 
     user = await session.get(User, member.user_id)
-    if "is_active" in after and user is not None:
-        # 成员禁用后账号无法登录（T2.3 权限规则联动）
-        user.is_active = bool(after["is_active"])
+    # 项目内禁用不再联动 users.is_active（2026-08-17 解耦）：账号仍可登录，
+    # 全局禁用由 admin 控制台 PATCH /users/{id} 单独管理。
 
     if after:
         await session.flush()
