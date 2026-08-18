@@ -77,6 +77,47 @@ describe("session 项目切换原子性", () => {
   });
 });
 
+describe("session 项目切换竞态", () => {
+  it("快速连续切换 B→A：过期的慢加载不得覆盖最后一次切换的身份", async () => {
+    const projectA = makeProject({ id: "project-a" });
+    const projectB = makeProject({ id: "project-b" });
+    const user = makeUser();
+    const memberA = makeMember({ id: "member-a", user_id: user.id });
+    const memberB = makeMember({ id: "member-b", user_id: user.id });
+
+    // B 切换的 /members 挂起（慢加载），其余请求按当前项目即时返回
+    let resolveSlowMembers: ((members: unknown[]) => void) | undefined;
+    const slowMembers = new Promise((resolve) => {
+      resolveSlowMembers = resolve;
+    });
+    vi.spyOn(api, "get").mockImplementation(((path: string) => {
+      if (path === "/auth/me") {
+        return Promise.resolve(user);
+      }
+      if (path === "/members") {
+        const pid = useAuthStore.getState().currentProject?.id;
+        if (pid === projectB.id) {
+          return slowMembers;
+        }
+        return Promise.resolve([memberA]);
+      }
+      return Promise.reject(new Error(`unexpected ${path}`));
+    }) as typeof api.get);
+
+    const slowB = selectProject(projectB); // 切 B：/members 挂起（慢加载）
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等慢加载进入 /members
+    await selectProject(projectA); // 最后一次切换 → memberA
+    // 放行慢加载：它返回的是"读取时刻"B 项目的成员
+    resolveSlowMembers!([memberB]);
+    await slowB;
+
+    const state = useAuthStore.getState();
+    expect(state.currentProject).toEqual(projectA);
+    // 关键断言：member 必须是最后一次切换（A）的成员，而非慢加载带回的 B 成员
+    expect(state.member).toEqual(memberA);
+  });
+});
+
 describe("session 登出隔离", () => {
   it("登出时清空 React Query 缓存", async () => {
     useAuthStore.getState().setTokens({

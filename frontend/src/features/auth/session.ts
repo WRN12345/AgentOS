@@ -42,22 +42,35 @@ export async function loadProjects(): Promise<MyProject[]> {
 }
 
 /**
+ * 身份加载序号：每次发起新的身份加载（selectProject / loadIdentity）即 +1。
+ * 并发在飞的旧加载在写 store 前比对序号，过期即丢弃结果——
+ * 快速连续切换 A→B→A 时以最后一次切换为准，
+ * 避免慢的一方把"它读取时刻"的项目成员写入已变更的 currentProject。
+ */
+let identityLoadSeq = 0;
+
+/**
  * 选定当前项目并加载该项目下的成员身份。
  * setCurrentProject 会清空上一项目的 member，随后 loadIdentity 重新加载本项目成员。
  */
 export async function selectProject(project: MyProject): Promise<void> {
   const previous = useAuthStore.getState();
   useAuthStore.getState().setCurrentProject(project);
+  const seq = ++identityLoadSeq;
   try {
-    await loadIdentity();
+    await loadIdentity(seq);
   } catch (error) {
     // 项目上下文与成员身份必须原子切换；加载失败时完整恢复上一份可用上下文。
-    useAuthStore.setState({
-      currentProject: previous.currentProject,
-      member: previous.member,
-      projectSelectedAt: previous.projectSelectedAt,
-      user: previous.user,
-    });
+    // 仅当本次切换仍是最新切换才回滚：若已有更新的切换在飞，
+    // 回滚会用旧快照覆盖新上下文，错误交由最新一次切换自身处理。
+    if (seq === identityLoadSeq) {
+      useAuthStore.setState({
+        currentProject: previous.currentProject,
+        member: previous.member,
+        projectSelectedAt: previous.projectSelectedAt,
+        user: previous.user,
+      });
+    }
     throw error;
   }
 }
@@ -81,14 +94,23 @@ export async function logout(): Promise<void> {
  * 仅当已选定项目时再 GET /members 匹配该项目下的成员记录。
  * 未选项目（全局管理员 / 多个项目待分流）时不打 /members——
  * 后端对该接口要求 X-Project-Id，缺 header 会报 400。
+ * seq 为调用方（selectProject）已分配的加载序号；缺省时本函数自取自增。
+ * 每个 await 之后比对序号：已有更新的加载在飞则本次结果过期，直接丢弃不写 store。
  */
-export async function loadIdentity(): Promise<void> {
+export async function loadIdentity(seq?: number): Promise<void> {
+  const mySeq = seq ?? ++identityLoadSeq;
   const { setIdentity } = useAuthStore.getState();
   const user = await api.get<UserMe>("/auth/me");
+  if (mySeq !== identityLoadSeq) {
+    return;
+  }
   const projectId = useAuthStore.getState().currentProject?.id;
   let member: Member | null = null;
   if (projectId) {
     const members = await api.get<Member[]>("/members");
+    if (mySeq !== identityLoadSeq) {
+      return;
+    }
     member = members.find((m) => m.user_id === user.id) ?? null;
   }
   setIdentity(user, member);
