@@ -14,6 +14,7 @@ import uuid
 from contextlib import suppress
 
 import httpx
+import pytest
 import redis.asyncio as redis
 
 from app.domains.project.models import Project, ProjectMember
@@ -181,6 +182,45 @@ async def test_sse_requires_valid_token(client: httpx.AsyncClient, project: Proj
 
     resp = await client.get("/api/v1/events/stream?token=not-a-token")
     assert resp.status_code == 401
+
+
+async def test_sse_generator_stops_after_member_is_disabled(monkeypatch) -> None:
+    """握手后成员资格失效时，生成器在下发下一条项目事件前关闭。"""
+    from app.domains.notifications import stream as stream_module
+
+    class FakeRequest:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    class FakePubSub:
+        async def subscribe(self, _channel) -> None:
+            return None
+
+        async def get_message(self, **_kwargs):
+            return {"data": '{"id":"evt-1","type":"work_item.updated"}'}
+
+        async def unsubscribe(self, _channel) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class FakeRedis:
+        def pubsub(self):
+            return FakePubSub()
+
+        async def aclose(self) -> None:
+            return None
+
+    async def inactive(_member_id) -> bool:
+        return False
+
+    monkeypatch.setattr(stream_module, "create_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(stream_module, "_stream_identity_is_active", inactive)
+    generator = stream_module._event_generator(FakeRequest(), uuid.uuid4())
+    assert await anext(generator) == ": connected\n\n"
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
 
 
 async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Project) -> None:

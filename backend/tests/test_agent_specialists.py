@@ -94,11 +94,18 @@ async def _make_work_item(
         return item
 
 
-async def _trigger(redis_client, agent_type: str, work_item_id: uuid.UUID, prompt: str) -> AgentRun:
+async def _trigger(
+    redis_client,
+    project_id: uuid.UUID,
+    agent_type: str,
+    work_item_id: uuid.UUID,
+    prompt: str,
+) -> AgentRun:
     async with async_session_factory() as session:
         return await request_agent_analysis(
             session,
             redis_client,
+            project_id=project_id,
             agent_type=agent_type,
             trigger_source="manual",
             work_item_id=work_item_id,
@@ -144,6 +151,7 @@ async def test_requirement_analyst_produces_structured_suggestion(
     try:
         run = await _trigger(
             redis_client,
+            project.id,
             requirement.AGENT_TYPE,
             item.id,
             "做一个账号密码登录，密码要安全存储",
@@ -238,7 +246,11 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
     redis_client = create_redis_client()
     try:
         run = await _trigger(
-            redis_client, assignment.AGENT_TYPE, item.id, "需要一个 RAG 问答功能"
+            redis_client,
+            project.id,
+            assignment.AGENT_TYPE,
+            item.id,
+            "需要一个 RAG 问答功能",
         )
         await _run_once(redis_client, run.id)
 
@@ -329,7 +341,9 @@ async def test_planning_advisor_basic_contract(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, planning.AGENT_TYPE, target.id, "搭建 RAG 平台")
+        run = await _trigger(
+            redis_client, project.id, planning.AGENT_TYPE, target.id, "搭建 RAG 平台"
+        )
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:
@@ -374,7 +388,9 @@ async def test_model_unavailable_marks_run_failed(
     item = await _make_work_item(leader, "实现用户登录")
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, requirement.AGENT_TYPE, item.id, "需求原文")
+        run = await _trigger(
+            redis_client, project.id, requirement.AGENT_TYPE, item.id, "需求原文"
+        )
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:

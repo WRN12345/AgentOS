@@ -458,6 +458,53 @@ async def test_change_leader_to_disabled_400(client: httpx.AsyncClient, project:
     assert resp.status_code == 400
 
 
+async def test_change_leader_to_project_disabled_member_409(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """账号全局可用但本项目成员已禁用时，不能直接提升为死负责人。"""
+    ctx = await _make_ctx(client, project)
+    disabled = await client.patch(
+        f"/api/v1/members/{ctx['alice'].id}",
+        json={"is_active": False},
+        headers=ctx["leader_headers"],
+    )
+    assert disabled.status_code == 200
+
+    response = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(ctx["alice"].user_id)},
+        headers=ctx["admin_headers"],
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROJECT_MEMBER_DISABLED"
+
+
+async def test_admin_project_audit_uses_target_not_forged_header(
+    client: httpx.AsyncClient, project: Project, project_b: Project
+) -> None:
+    """admin 项目动作的审计归属来自目标项目，不信任伪造 X-Project-Id。"""
+    from sqlalchemy import select
+
+    from app.domains.audit.models import AuditEvent
+    from app.infrastructure.database.engine import async_session_factory
+
+    ctx = await _make_ctx(client, project)
+    response = await client.put(
+        f"/api/v1/projects/{project.id}/leader",
+        json={"user_id": str(ctx["alice"].user_id)},
+        headers={**ctx["admin_headers"], "X-Project-Id": str(project_b.id)},
+    )
+    assert response.status_code == 200
+
+    async with async_session_factory() as session:
+        event = (
+            await session.execute(
+                select(AuditEvent).where(AuditEvent.action == "project.leader.updated")
+            )
+        ).scalar_one()
+    assert event.project_id == project.id
+
+
 async def test_change_leader_non_admin_403(client: httpx.AsyncClient, project: Project) -> None:
     """负责人/成员调用变更负责人接口 → 403。"""
     ctx = await _make_ctx(client, project)

@@ -10,8 +10,10 @@ workflow_risk run」为去重键——A 项目有活跃 run 不再跳过 B 项�
 避免周期触发跨项目互相 skip；同一项目内仍避免重复堆积。
 """
 
+from datetime import UTC, datetime, timedelta
+
 import redis.asyncio as redis
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.agents.models import AgentRun
 from app.agents.service import request_agent_analysis
@@ -24,6 +26,12 @@ logger = setup_logging("worker")
 
 #: scheduler 投递、worker 消费的任务类型
 RISK_SCAN_TASK_TYPE = "agent.risk_scan"
+RISK_SCAN_PENDING_LEASE = timedelta(minutes=30)
+
+
+def _project_lock_key(project_id) -> int:  # noqa: ANN001
+    """将项目 UUID 稳定映射为 PostgreSQL advisory lock 的正 63 位 key。"""
+    return project_id.int & 0x7FFF_FFFF_FFFF_FFFF
 
 
 async def run_risk_scan(client: redis.Redis) -> dict[str, object]:
@@ -34,6 +42,30 @@ async def run_risk_scan(client: redis.Redis) -> dict[str, object]:
     result: dict[str, object] = {"status": "done", "enqueued": [], "skipped": []}
     for project_id in project_ids:
         async with async_session_factory() as session:
+            locked = (
+                await session.execute(
+                    select(func.pg_try_advisory_xact_lock(_project_lock_key(project_id)))
+                )
+            ).scalar_one()
+            if not locked:
+                result["skipped"].append(str(project_id))
+                continue
+
+            stale_before = datetime.now(UTC) - RISK_SCAN_PENDING_LEASE
+            await session.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.agent_type == RISK_AGENT_TYPE,
+                    AgentRun.project_id == project_id,
+                    AgentRun.status == "pending",
+                    AgentRun.updated_at < stale_before,
+                )
+                .values(
+                    status="failed",
+                    error="Risk scan pending lease expired before worker execution",
+                )
+            )
+            await session.flush()
             active_run = (
                 await session.execute(
                     select(AgentRun.id)

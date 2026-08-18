@@ -8,8 +8,10 @@
 - 风险扫描的项目级分析带项目维度、去重键项目化，不跨项目互相 skip。
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -51,7 +53,35 @@ async def _make_work_item(
         item.collaborators = []
         session.add(item)
         await session.commit()
-        return item
+    return item
+
+
+async def test_event_triggered_runs_receive_work_item_project_id(monkeypatch) -> None:
+    """工作项提交与开发文档提交触发的 run 都必须显式继承工作项项目归属。"""
+    from app.domains.dev_docs import service as dev_doc_service
+    from app.domains.work_items import service as work_item_service
+
+    captured: list[uuid.UUID | None] = []
+
+    class FakeRedis:
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_request(*_args, **kwargs):
+        captured.append(kwargs.get("project_id"))
+        return SimpleNamespace(id=uuid.uuid4())
+
+    monkeypatch.setattr(work_item_service, "create_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(dev_doc_service, "create_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(work_item_service, "request_agent_analysis", fake_request)
+    monkeypatch.setattr(dev_doc_service, "request_agent_analysis", fake_request)
+
+    project_id = uuid.uuid4()
+    item = SimpleNamespace(id=uuid.uuid4(), project_id=project_id)
+    await work_item_service._dispatch_deliverable_review(object(), item)
+    await dev_doc_service._dispatch_dev_doc_review(object(), item)
+
+    assert captured == [project_id, project_id]
 
 
 # ---------- check ③：队列载荷显式携带项目上下文 ----------
@@ -272,6 +302,40 @@ async def test_agent_api_is_project_scoped(
     assert resp.status_code == 200
 
 
+async def test_agent_trigger_rejects_cross_project_work_item(
+    client, project_a: Project, project_b: Project, leader: ProjectMember
+) -> None:
+    """B 项目负责人引用 A 工作项时返回 404，且不创建失败 run。"""
+    _, leader_b = await add_member(
+        project_b, "lead_cross", "LeadCross1!", role="leader", display_name="负责人B"
+    )
+    item_a = await _make_work_item(leader.id, project_id=project_a.id)
+    headers_b = await auth_headers(
+        client, "lead_cross", "LeadCross1!", project_id=str(project_b.id)
+    )
+
+    before = None
+    async with async_session_factory() as session:
+        before = len((await session.execute(select(AgentRun))).scalars().all())
+
+    response = await client.post(
+        f"/api/v1/work-items/{item_a.id}/agent-analysis",
+        json={"agent_type": "echo"},
+        headers=headers_b,
+    )
+    assert response.status_code == 404
+
+    response = await client.post(
+        "/api/v1/agent-analysis",
+        json={"agent_type": "workflow_risk", "work_item_id": str(item_a.id)},
+        headers=headers_b,
+    )
+    assert response.status_code == 404
+    async with async_session_factory() as session:
+        after = len((await session.execute(select(AgentRun))).scalars().all())
+    assert after == before
+
+
 # ---------- check ④：到期扫描通知按工作项项目落库 ----------
 
 
@@ -351,6 +415,60 @@ async def test_risk_scan_skips_only_projects_with_active_runs(
 
         assert set(result["skipped"]) == {str(project_a.id), str(project_b.id)}
         assert result["enqueued"] == []
+    finally:
+        await redis_client.aclose()
+
+
+async def test_concurrent_risk_scans_create_one_run_per_project(project_a: Project) -> None:
+    """两个 worker 同时扫描时，advisory lock 将检查与创建串行化。"""
+    redis_client = create_redis_client()
+    try:
+        await redis_client.delete(QUEUE_KEY)
+        await asyncio.gather(run_risk_scan(redis_client), run_risk_scan(redis_client))
+        async with async_session_factory() as session:
+            runs = (
+                await session.execute(
+                    select(AgentRun).where(
+                        AgentRun.project_id == project_a.id,
+                        AgentRun.agent_type == "workflow_risk",
+                    )
+                )
+            ).scalars().all()
+        assert len(runs) == 1
+    finally:
+        await redis_client.aclose()
+
+
+async def test_stale_pending_risk_run_does_not_block_forever(project_a: Project) -> None:
+    """超过租约的 pending run 转为 failed，本轮扫描可创建新 run。"""
+    redis_client = create_redis_client()
+    try:
+        async with async_session_factory() as session:
+            stale = await request_agent_analysis(
+                session,
+                redis_client,
+                agent_type="workflow_risk",
+                project_id=project_a.id,
+                trigger_source="scheduler",
+            )
+            stale.updated_at = datetime.now(UTC) - timedelta(hours=1)
+            await session.commit()
+
+        result = await run_risk_scan(redis_client)
+        assert [entry["project_id"] for entry in result["enqueued"]] == [str(project_a.id)]
+        async with async_session_factory() as session:
+            runs = (
+                await session.execute(
+                    select(AgentRun)
+                    .where(
+                        AgentRun.project_id == project_a.id,
+                        AgentRun.agent_type == "workflow_risk",
+                    )
+                    .order_by(AgentRun.created_at)
+                )
+            ).scalars().all()
+        assert [run.status for run in runs] == ["failed", "pending"]
+        assert "lease expired" in (runs[0].error or "").lower()
     finally:
         await redis_client.aclose()
 

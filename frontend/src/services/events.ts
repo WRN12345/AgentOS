@@ -50,9 +50,9 @@ const EVENT_TYPES = [
  * 业务缓存键经 queryKeys 工厂生成、已含当前项目前缀，只失效当前项目的缓存。
  */
 function invalidateForEvent(queryClient: QueryClient, type: string) {
-  // 任何事件都可能伴随站内通知；audit-events 为全局键（管理视角，不经工厂）
+  // 任何事件都可能伴随站内通知与当前项目审计时间线变化。
   queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
-  queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+  queryClient.invalidateQueries({ queryKey: queryKeys.auditEvents() });
 
   const domain = type.split(".")[0];
   switch (domain) {

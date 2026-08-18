@@ -1,4 +1,5 @@
 import { useAuthStore } from "../../app/store";
+import { queryClient } from "../../app/queryClient";
 import { api } from "../../services/api";
 import type { Member, MyProject, UserMe } from "../../types";
 
@@ -45,8 +46,20 @@ export async function loadProjects(): Promise<MyProject[]> {
  * setCurrentProject 会清空上一项目的 member，随后 loadIdentity 重新加载本项目成员。
  */
 export async function selectProject(project: MyProject): Promise<void> {
+  const previous = useAuthStore.getState();
   useAuthStore.getState().setCurrentProject(project);
-  await loadIdentity();
+  try {
+    await loadIdentity();
+  } catch (error) {
+    // 项目上下文与成员身份必须原子切换；加载失败时完整恢复上一份可用上下文。
+    useAuthStore.setState({
+      currentProject: previous.currentProject,
+      member: previous.member,
+      projectSelectedAt: previous.projectSelectedAt,
+      user: previous.user,
+    });
+    throw error;
+  }
 }
 
 /** 登出：尽力撤销 Refresh Token 后清空本地登录态（接口失败也照常清空）。 */
@@ -59,6 +72,7 @@ export async function logout(): Promise<void> {
   } catch {
     // 忽略登出接口错误
   }
+  queryClient.clear();
   clear();
 }
 

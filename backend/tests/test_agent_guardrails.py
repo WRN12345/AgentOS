@@ -188,7 +188,11 @@ async def test_invalid_json_output_saves_diagnostics(
     try:
         async with async_session_factory() as session:
             run = await request_agent_analysis(
-                session, redis_client, agent_type="echo", prompt="触发非法 JSON 路径"
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="触发非法 JSON 路径",
             )
         await _run_agent_once(redis_client, run.id)
         await _assert_validation_failure(run.id, "json_parse")
@@ -208,7 +212,11 @@ async def test_missing_fields_output_saves_diagnostics(
     try:
         async with async_session_factory() as session:
             run = await request_agent_analysis(
-                session, redis_client, agent_type="echo", prompt="触发缺字段路径"
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="触发缺字段路径",
             )
         await _run_agent_once(redis_client, run.id)
         await _assert_validation_failure(run.id, "schema_validate")
@@ -227,7 +235,11 @@ async def test_agent_run_emits_no_business_audit_events(
     try:
         async with async_session_factory() as session:
             run = await request_agent_analysis(
-                session, redis_client, agent_type="echo", prompt="审计护栏验证"
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="审计护栏验证",
             )
         await _run_agent_once(redis_client, run.id)
 

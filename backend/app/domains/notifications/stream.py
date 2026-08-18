@@ -17,6 +17,7 @@
 """
 
 import json
+import time
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -26,8 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
 from app.domains.identity.security import decode_access_token
 from app.domains.identity.service import get_user_by_id
+from app.domains.identity.models import User
 from app.domains.project.models import ProjectMember
 from app.domains.project.service import get_member_by_user
 from app.infrastructure.cache.redis import create_redis_client
@@ -35,8 +38,10 @@ from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.events import channel_for
 
 router = APIRouter(prefix="/events", tags=["events"])
+logger = setup_logging("backend")
 
 HEARTBEAT_SECONDS = 15.0
+AUTH_RECHECK_SECONDS = 5.0
 
 
 async def _resolve_member(
@@ -95,6 +100,16 @@ def _format_sse(payload: dict) -> str:
     )
 
 
+async def _stream_identity_is_active(member_id: uuid.UUID) -> bool:
+    """流运行期间复验账号与成员状态，禁用/移除后不再继续推送。"""
+    async with async_session_factory() as session:
+        member = await session.get(ProjectMember, member_id)
+        if member is None or not member.is_active:
+            return False
+        user = await session.get(User, member.user_id)
+        return user is not None and user.is_active
+
+
 async def _event_generator(request: Request, member_id: uuid.UUID) -> AsyncGenerator[str, None]:
     redis_client = create_redis_client()
     pubsub = redis_client.pubsub()
@@ -102,19 +117,27 @@ async def _event_generator(request: Request, member_id: uuid.UUID) -> AsyncGener
     try:
         await pubsub.subscribe(channel)
         yield ": connected\n\n"
+        last_ping = time.monotonic()
         while True:
             if await request.is_disconnected():
                 break
+            if not await _stream_identity_is_active(member_id):
+                logger.info("event stream closed after identity revocation: member_id=%s", member_id)
+                break
             message = await pubsub.get_message(
-                ignore_subscribe_messages=True, timeout=HEARTBEAT_SECONDS
+                ignore_subscribe_messages=True, timeout=AUTH_RECHECK_SECONDS
             )
             if message is None:
-                yield ": ping\n\n"  # 心跳注释帧：防反代空闲超时
+                if time.monotonic() - last_ping >= HEARTBEAT_SECONDS:
+                    yield ": ping\n\n"  # 心跳注释帧：防反代空闲超时
+                    last_ping = time.monotonic()
                 continue
             try:
                 payload = json.loads(message["data"])
             except (TypeError, ValueError):
                 continue
+            if not await _stream_identity_is_active(member_id):
+                break
             yield _format_sse(payload)
     finally:
         await pubsub.unsubscribe(channel)

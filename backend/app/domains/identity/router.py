@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.idempotency import idempotency_guard
 from app.domains.identity.dependencies import get_current_user
 from app.domains.identity.models import User
 from app.domains.identity.schemas import (
@@ -43,9 +42,8 @@ async def refresh_endpoint(
 async def logout_endpoint(
     payload: LogoutRequest,
     session: AsyncSession = Depends(get_session),
-    _: None = Depends(idempotency_guard),
 ) -> dict[str, str]:
-    """登出：撤销 Refresh Token。支持 Idempotency-Key（重复登出返回首次结果）。"""
+    """登出：幂等撤销 Refresh Token，不暴露令牌是否曾存在。"""
     await revoke_refresh_token(session, payload.refresh_token)
     return {"status": "ok"}
 

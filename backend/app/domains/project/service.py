@@ -212,6 +212,13 @@ async def update_member(
     require_leader(actor)
     member = await get_member(session, member_id, project_id=actor.project_id)
 
+    if member.role == ROLE_LEADER and payload.is_active is False:
+        raise ApiException(
+            409,
+            ErrorCodes.PROJECT_LEADER_REQUIRED,
+            "现任负责人不能被禁用，请先由管理员变更项目负责人",
+        )
+
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     for field in ("display_name", "weekly_available_hours", "git_username", "is_active"):

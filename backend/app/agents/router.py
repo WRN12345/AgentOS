@@ -98,7 +98,7 @@ async def request_agent_analysis_endpoint(
             "未注册的 Agent 类型",
             details={"agent_type": payload.agent_type, "registered": sorted(AGENT_ROUTES)},
         )
-    item = await get_work_item(session, item_id)  # 不存在 → 404
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 墙外同样 404
     if actor.role != ROLE_LEADER and not await is_work_item_related(session, item.id, actor.id):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或工作项相关成员可触发 Agent 分析")
 
@@ -161,7 +161,9 @@ async def request_project_agent_analysis_endpoint(
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可触发项目级 Agent 分析")
     if payload.work_item_id is not None:
-        await get_work_item(session, payload.work_item_id)  # 不存在 → 404
+        await get_work_item(
+            session, payload.work_item_id, project_id=actor.project_id
+        )  # 不存在或跨项目 → 404
 
     redis_client = create_redis_client()
     try:

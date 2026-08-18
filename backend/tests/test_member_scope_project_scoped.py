@@ -142,6 +142,20 @@ async def test_cross_project_put_capabilities_returns_404(
 # ---------- 项目内禁用解耦（2026-08-17 并入本分支） ----------
 
 
+async def test_leader_cannot_disable_current_project_leader(
+    client: httpx.AsyncClient, project_a: Project
+) -> None:
+    """现任负责人不可被项目成员接口禁用，避免项目进入无人可管理状态。"""
+    ctx = await _setup_project(client, project_a, tag="guard")
+    response = await client.patch(
+        f"/api/v1/members/{ctx['leader'].id}",
+        json={"is_active": False},
+        headers=ctx["leader_headers"],
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROJECT_LEADER_REQUIRED"
+
+
 async def test_disable_member_project_local_across_projects(
     client: httpx.AsyncClient, project_a: Project, project_b: Project
 ) -> None:

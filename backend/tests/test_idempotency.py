@@ -38,7 +38,7 @@ async def test_example_task_replayed_only_written_once(client: httpx.AsyncClient
 
 
 async def test_logout_idempotent_replay(client: httpx.AsyncClient) -> None:
-    """登出携带幂等键：重复请求返回首次的 200，而不是已撤销后的 401。"""
+    """登出本身为幂等撤销，不依赖 user_id=NULL 的通用幂等桶。"""
     async with async_session_factory() as session:
         await create_user(session, "alice", "Secret123!")
         await session.commit()
@@ -56,12 +56,33 @@ async def test_logout_idempotent_replay(client: httpx.AsyncClient) -> None:
     r2 = await client.post("/api/v1/auth/logout", json=payload, headers=headers)
     assert r2.status_code == 200
     assert r2.json() == r1.json()
-    assert r2.headers.get("Idempotency-Replayed") == "true"
+    assert r2.headers.get("Idempotency-Replayed") is None
 
-    # 不带幂等键的第三次调用 → 401，证明第二次的 200 来自重放而非 logout 自身幂等
+    # 不带幂等键重复调用也保持 200，不泄漏 refresh token 是否曾存在。
     r3 = await client.post("/api/v1/auth/logout", json=payload)
-    assert r3.status_code == 401
-    assert r3.json()["code"] == "REFRESH_TOKEN_INVALID"
+    assert r3.status_code == 200
+
+
+async def test_validation_error_is_not_cached(client: httpx.AsyncClient, project_a) -> None:
+    """同键首次 422 后修正参数应真实执行，不能永久重放错误响应。"""
+    _, leader = await add_member(
+        project_a, "idem_leader", "Leader123!", role="leader", display_name="负责人"
+    )
+    _, alice = await add_member(project_a, "idem_alice", "Alice123!", display_name="爱丽丝")
+    headers = await auth_headers(
+        client, "idem_leader", "Leader123!", project_id=str(project_a.id)
+    )
+    headers["Idempotency-Key"] = "idem-fix-validation-0001"
+
+    invalid = await client.post("/api/v1/work-items", json={"title": "缺负责人"}, headers=headers)
+    assert invalid.status_code == 422
+    fixed = await client.post(
+        "/api/v1/work-items",
+        json={"title": "参数已修正", "assignee_id": str(alice.id)},
+        headers=headers,
+    )
+    assert fixed.status_code == 201, fixed.text
+    assert fixed.headers.get("Idempotency-Replayed") is None
 
 
 async def test_idempotency_key_scoped_per_project(

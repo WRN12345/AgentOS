@@ -41,7 +41,7 @@ async def request_agent_analysis(
     redis_client: redis.Redis,
     *,
     agent_type: str,
-    project_id: uuid.UUID | None = None,
+    project_id: uuid.UUID,
     trigger_source: str = "manual",
     work_item_id: uuid.UUID | None = None,
     prompt: str = "",
@@ -66,18 +66,25 @@ async def request_agent_analysis(
     await session.commit()
     await session.refresh(run)
 
-    task = await enqueue(
-        redis_client,
-        AGENT_RUN_TASK_TYPE,
-        {
-            "run_id": str(run.id),
-            "agent_type": agent_type,
-            "project_id": str(project_id) if project_id else None,
-            "work_item_id": str(work_item_id) if work_item_id else None,
-            "prompt": prompt,
-            "request_id": request_id,
-        },
-    )
+    try:
+        task = await enqueue(
+            redis_client,
+            AGENT_RUN_TASK_TYPE,
+            {
+                "run_id": str(run.id),
+                "agent_type": agent_type,
+                "project_id": str(project_id),
+                "work_item_id": str(work_item_id) if work_item_id else None,
+                "prompt": prompt,
+                "request_id": request_id,
+            },
+        )
+    except Exception as exc:
+        # 记录已提交但队列投递失败时立即终结，避免永久 pending 阻塞周期扫描。
+        run.status = "failed"
+        run.error = f"Queue dispatch failed: {type(exc).__name__}: {exc}"[:2000]
+        await session.commit()
+        raise
     logger.info("enqueued agent run: run_id=%s task_id=%s type=%s", run.id, task["id"], agent_type)
     return run
 

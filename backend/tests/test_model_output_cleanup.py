@@ -52,7 +52,9 @@ async def test_agent_run_with_think_wrapped_output(
     """集成回归：模型返回 <think> 包装的合法 JSON，Agent 运行应成功并产出建议。"""
     await make_ctx(client, project)
     stub_provider.set_script(f"<think>\n先分析需求再输出。\n</think>\n{VALID_REQUIREMENT_OUTPUT}")
-    run = await drive_agent_run(agent_type="requirement_analyst", prompt="测试 think 包装")
+    run = await drive_agent_run(
+        project_id=project.id, agent_type="requirement_analyst", prompt="测试 think 包装"
+    )
     assert run.status == "succeeded", run.error
     suggestions = await get_suggestions_for_run(run.id)
     assert len(suggestions) == 1

@@ -57,6 +57,7 @@ export function signInAs(
     expires_in: 1800,
   });
   store.setCurrentProject(project ?? null);
+  store.setProjects(project ? [project] : []);
   store.setIdentity(
     user ??
       makeUser(
