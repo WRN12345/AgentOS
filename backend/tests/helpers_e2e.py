@@ -88,6 +88,7 @@ def stub_provider(monkeypatch: pytest.MonkeyPatch) -> StubModelProvider:
 async def drive_agent_run(
     work_item_id: str | None = None,
     *,
+    project_id: uuid.UUID,
     agent_type: str = "requirement_analyst",
     prompt: str = "端到端场景：请给出分析建议",
 ) -> AgentRun:
@@ -101,6 +102,7 @@ async def drive_agent_run(
             run = await request_agent_analysis(
                 session,
                 redis_client,
+                project_id=project_id,
                 agent_type=agent_type,
                 prompt=prompt,
                 work_item_id=uuid.UUID(work_item_id) if work_item_id else None,

@@ -242,7 +242,7 @@ async def test_rag_serial_end_to_end(
     # ---- 步骤 8：场景中开启 Agent——建议生成，但不改变正式业务状态 ----
     before = await snapshot_business_state([item_id])
     stub_provider.set_script(VALID_REQUIREMENT_OUTPUT)
-    run = await drive_agent_run(item_id)
+    run = await drive_agent_run(item_id, project_id=project.id)
     assert run.status == "succeeded", run.error
     suggestions = await get_suggestions_for_run(run.id)
     assert len(suggestions) == 1  # Agent 建议已生成

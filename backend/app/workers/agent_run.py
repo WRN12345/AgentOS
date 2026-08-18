@@ -84,6 +84,7 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
                     run_id=run.id,
                     agent_type=run.agent_type,
                     trigger_source=run.trigger_source,
+                    project_id=run.project_id,
                     work_item_id=run.work_item_id,
                     request_id=run.request_id,
                     prompt=payload.get("prompt") or "",
@@ -128,11 +129,13 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
 
     # 建议已落库后再发 SSE 事件（4.3 节："Agent 分析完成"触发建议中心刷新，T5.7）
     recipient = final_state.get("notification_recipient_id")
-    if recipient:
+    project_id = final_state.get("notification_project_id")
+    if recipient and project_id:
         await publish_events(
             redis_client,
             [
                 OutgoingEvent(
+                    project_id=uuid.UUID(project_id),
                     recipient_id=uuid.UUID(recipient),
                     type="agent.suggestion_ready",
                     title=final_state.get("notification_title", "Agent 分析完成"),

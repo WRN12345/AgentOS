@@ -40,6 +40,7 @@ import type {
 import { PRIORITY_META, STATUS_META, formatDate } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
 import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
+import { queryKeys } from "../../lib/queryKeys";
 
 const STATUS_OPTIONS: WorkItemStatus[] = [
   "DRAFT",
@@ -64,7 +65,7 @@ export default function WorkItemsPage() {
   const [dueTo, setDueTo] = useState("");
 
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
 
@@ -83,7 +84,7 @@ export default function WorkItemsPage() {
   const queryString = params.toString();
 
   const { data: items, isLoading } = useQuery({
-    queryKey: ["work-items", queryString],
+    queryKey: queryKeys.workItems(queryString),
     queryFn: () =>
       api.get<WorkItemSummary[]>(
         `/work-items${queryString ? `?${queryString}` : ""}`,
@@ -121,10 +122,7 @@ export default function WorkItemsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部</SelectItem>
-                {/* 管理员不参与工作协作，不作为主执行人筛选项 */}
-                {(members ?? [])
-                  .filter((m) => m.role !== "admin")
-                  .map((m) => (
+                {(members ?? []).map((m) => (
                     <SelectItem key={m.id} value={m.id}>
                       {m.display_name}
                     </SelectItem>

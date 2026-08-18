@@ -98,6 +98,7 @@ async def scan_due_reminders(client: redis.Redis) -> dict[str, int]:
                 )
             await notify(
                 session,
+                project_id=item.project_id,
                 recipient_id=item.assignee_id,
                 type=reminder_type,
                 title=title,
@@ -122,6 +123,11 @@ async def scan_due_reminders(client: redis.Redis) -> dict[str, int]:
         )
         for collab in collabs:
             assert collab.due_at is not None
+            # 项目归属经关联工作项推导（collab 无 project_id 冗余列，spec D1）
+            work_item = await session.get(WorkItem, collab.work_item_id)
+            if work_item is None:
+                stats["skipped"] += 1
+                continue
             reminder_type = _reminder_type(collab.due_at, now)
             if not await _mark_reminded(client, reminder_type, collab.id, today):
                 stats["skipped"] += 1
@@ -138,6 +144,7 @@ async def scan_due_reminders(client: redis.Redis) -> dict[str, int]:
                 )
             await notify(
                 session,
+                project_id=work_item.project_id,
                 recipient_id=collab.assignee_id,
                 type=reminder_type,
                 title=title,

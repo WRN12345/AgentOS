@@ -17,6 +17,10 @@ from app.infrastructure.models.base import CoreModel
 class StoredFile(CoreModel):
     __tablename__ = "stored_files"
 
+    # 项目归属（独立列表入口冗余 project_id，spec D1）
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
+    )
     # 存储后端名（local；未来 s3，21.2 节）
     storage_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     # 后端内相对键，唯一；禁止绝对路径与 ".."（Provider 层强校验）

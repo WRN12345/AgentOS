@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { useAuthStore } from "../app/store";
-import type { Member, UserMe } from "../types";
+import type { Member, MyProject, UserMe } from "../types";
 import { makeUser } from "./fixtures";
 
 /** 构造测试用 QueryClient：关闭重试与垃圾回收延迟，避免异步噪音。 */
@@ -39,8 +39,16 @@ export function renderWithProviders(
   return { queryClient: client, ...render(ui, { wrapper }) };
 }
 
-/** 写入登录态：令牌 + 用户 + 成员身份（角色决定权限差异）。 */
-export function signInAs(member: Member, user?: UserMe): void {
+/**
+ * 写入登录态：令牌 + 用户 + 成员身份（角色决定权限差异）。
+ * 全局管理员（user.is_admin）不属于任何项目，member 传 null。
+ * 传入 project 可模拟已选定项目的上下文（测试项目感知的缓存键/请求头等）。
+ */
+export function signInAs(
+  member: Member | null,
+  user?: UserMe,
+  project?: MyProject,
+): void {
   const store = useAuthStore.getState();
   store.setTokens({
     access_token: "test-access-token",
@@ -48,8 +56,15 @@ export function signInAs(member: Member, user?: UserMe): void {
     token_type: "bearer",
     expires_in: 1800,
   });
+  store.setCurrentProject(project ?? null);
+  store.setProjects(project ? [project] : []);
   store.setIdentity(
-    user ?? makeUser({ id: member.user_id, username: member.username }),
+    user ??
+      makeUser(
+        member
+          ? { id: member.user_id, username: member.username }
+          : undefined,
+      ),
     member,
   );
 }

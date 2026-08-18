@@ -16,13 +16,10 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
-from app.domains.collaboration.models import CollaborationRequest
-from app.domains.collaboration.state_machine import CollaborationStatus
 from app.domains.identity.models import User
-from app.domains.identity.service import create_user
 from app.domains.project.models import (
-    ROLE_ADMIN,
     ROLE_LEADER,
+    ROLE_MEMBER,
     MemberCapability,
     Project,
     ProjectMember,
@@ -34,8 +31,6 @@ from app.domains.project.schemas import (
     MemberOut,
     MemberUpdateIn,
 )
-from app.domains.transfers.models import TransferRequest
-from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.state_machine import ACTIVE_STATUSES
 
@@ -53,14 +48,17 @@ async def get_default_project(session: AsyncSession) -> Project:
     return project
 
 
-async def get_member(session: AsyncSession, member_id: uuid.UUID) -> ProjectMember:
+async def get_member(
+    session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
+) -> ProjectMember:
     stmt = (
         select(ProjectMember)
         .where(ProjectMember.id == member_id)
         .options(selectinload(ProjectMember.capabilities))  # 预加载，避免异步懒加载
     )
     member = (await session.execute(stmt)).scalar_one_or_none()
-    if member is None:
+    if member is None or member.project_id != project_id:
+        # 墙外对象等同不存在（同 work_items 域 get_work_item 的越权 404 模式）
         raise ApiException(404, ErrorCodes.NOT_FOUND, "成员不存在")
     return member
 
@@ -74,16 +72,12 @@ async def get_member_by_user(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def require_leader_or_admin(member: ProjectMember) -> None:
-    """成员账号管理：负责人与管理员同权（创建/编辑/禁用成员、维护能力）。"""
-    if member.role not in (ROLE_LEADER, ROLE_ADMIN):
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可执行该操作")
-
-
-def require_admin_for_admin_target(actor: ProjectMember, target: ProjectMember) -> None:
-    """管理员账号保护：负责人/成员不能对管理员执行操作（编辑、禁用、维护能力）。"""
-    if target.role == ROLE_ADMIN and actor.role != ROLE_ADMIN:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "负责人和成员不能对管理员进行操作")
+def require_leader(member: ProjectMember) -> None:
+    """成员账号管理：仅项目负责人可操作（创建/编辑/禁用成员、维护能力）。
+    全局管理员（users.is_admin）不通过成员身份鉴权，由 get_current_admin 依赖单独校验。
+    """
+    if member.role != ROLE_LEADER:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可执行该操作")
 
 
 # ---------- 序列化 ----------
@@ -120,11 +114,13 @@ def member_to_out(
     )
 
 
-async def _active_work_item_counts(session: AsyncSession) -> dict[uuid.UUID, int]:
-    """各成员当前负载：作为主执行人的进行中工作项数量（6.2 节"当前有效任务负载"）。"""
+async def _active_work_item_counts(
+    session: AsyncSession, project_id: uuid.UUID
+) -> dict[uuid.UUID, int]:
+    """本项目各成员当前负载：作为主执行人的进行中工作项数量（6.2 节"当前有效任务负载"）。"""
     stmt = (
         select(WorkItem.assignee_id, func.count())
-        .where(WorkItem.status.in_(ACTIVE_STATUSES))
+        .where(WorkItem.status.in_(ACTIVE_STATUSES), WorkItem.project_id == project_id)
         .group_by(WorkItem.assignee_id)
     )
     return {row[0]: row[1] for row in (await session.execute(stmt)).all()}
@@ -134,15 +130,14 @@ async def _active_work_item_counts(session: AsyncSession) -> dict[uuid.UUID, int
 
 
 async def list_members(session: AsyncSession, actor: ProjectMember) -> list[MemberOut]:
-    """全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。
-
-    管理员账号仅管理员可见：负责人/成员的成员列表不含 admin。
-    """
-    stmt = select(ProjectMember).order_by(ProjectMember.created_at)
-    if actor.role != ROLE_ADMIN:
-        stmt = stmt.where(ProjectMember.role != ROLE_ADMIN)
+    """本项目全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。"""
+    stmt = (
+        select(ProjectMember)
+        .where(ProjectMember.project_id == actor.project_id)
+        .order_by(ProjectMember.created_at)
+    )
     members = (await session.execute(stmt)).scalars().all()
-    counts = await _active_work_item_counts(session)
+    counts = await _active_work_item_counts(session, actor.project_id)
     out: list[MemberOut] = []
     for member in members:
         user = await session.get(User, member.user_id)
@@ -152,23 +147,34 @@ async def list_members(session: AsyncSession, actor: ProjectMember) -> list[Memb
 
 async def create_member(
     session: AsyncSession, actor: ProjectMember, payload: MemberCreateIn
-) -> tuple[MemberOut, str]:
-    """负责人/管理员创建成员并同时生成登录账号；初始密码随返回值仅此一次下发。"""
-    require_leader_or_admin(actor)
+) -> MemberOut:
+    """负责人添加已有账号成员（16 节，不开放公开注册）。
 
-    existing = (
-        await session.execute(select(User).where(User.username == payload.username))
-    ).scalar_one_or_none()
+    2026-08-17 规则调整：账号创建收敛到 admin（admin 控制台建号），本接口只按 username
+    （全局唯一）或 user_id 解析已有账号加入本项目，不建号、无初始密码，固定为「成员」角色
+    （每项目仅一名负责人，由 admin 指定/变更）。本函数只建本项目成员，账号建删走 identity/admin 域。
+    """
+    require_leader(actor)
+
+    if payload.username is not None:
+        user = (
+            await session.execute(select(User).where(User.username == payload.username))
+        ).scalar_one_or_none()
+    else:
+        user = await session.get(User, payload.user_id)
+    if user is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "账号不存在")
+    if user.is_admin:
+        raise ApiException(400, ErrorCodes.VALIDATION_ERROR, "全局管理员不参与项目业务，不能加入项目")
+    existing = await get_member_by_user(session, actor.project_id, user.id)
     if existing is not None:
-        raise ApiException(409, ErrorCodes.USERNAME_TAKEN, "用户名已被占用")
+        raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "该用户已是本项目成员")
 
-    project = await get_default_project(session)
-    user = await create_user(session, payload.username, payload.password)
     member = ProjectMember(
-        project_id=project.id,
+        project_id=actor.project_id,
         user_id=user.id,
-        role=payload.role,
-        display_name=payload.display_name,
+        role=ROLE_MEMBER,
+        display_name=payload.display_name or user.username,
         weekly_available_hours=payload.weekly_available_hours,
         git_username=payload.git_username,
     )
@@ -183,82 +189,39 @@ async def create_member(
         target_id=member.id,
         before=None,
         after={
-            "username": payload.username,
+            "username": user.username,
             "display_name": member.display_name,
             "role": member.role,
         },
     )
     await session.commit()
-    logger.info("member created: member_id=%s, username=%s", member.id, payload.username)
-    return member_to_out(member, user.username), payload.password
+    logger.info("member created (existing user): member_id=%s, user_id=%s", member.id, user.id)
+    return member_to_out(member, user.username)
 
-
-# 协作请求未完结状态（排除 COMPLETED / CANCELLED）：成员仍有协作在身
-_ACTIVE_COLLABORATION_STATUSES = (
-    CollaborationStatus.REQUESTED,
-    CollaborationStatus.ACCEPTED,
-    CollaborationStatus.IN_PROGRESS,
-    CollaborationStatus.SUBMITTED,
-    CollaborationStatus.REVISION_REQUESTED,
-)
-
-
-async def _ensure_no_active_collaboration(session: AsyncSession, member: ProjectMember) -> None:
-    """改角色为管理员前的守卫：管理员不参与工作协作，有在办协作的成员须先办结/转派。"""
-    active_items = (
-        await session.execute(
-            select(func.count(WorkItem.id)).where(
-                WorkItem.assignee_id == member.id, WorkItem.status.in_(ACTIVE_STATUSES)
-            )
-        )
-    ).scalar_one()
-    pending_transfers = (
-        await session.execute(
-            select(func.count(TransferRequest.id)).where(
-                TransferRequest.status == TransferStatus.PENDING,
-                (TransferRequest.from_member_id == member.id)
-                | (TransferRequest.to_member_id == member.id),
-            )
-        )
-    ).scalar_one()
-    active_collaborations = (
-        await session.execute(
-            select(func.count(CollaborationRequest.id)).where(
-                CollaborationRequest.status.in_(_ACTIVE_COLLABORATION_STATUSES),
-                (CollaborationRequest.requester_id == member.id)
-                | (CollaborationRequest.assignee_id == member.id),
-            )
-        )
-    ).scalar_one()
-    if active_items or pending_transfers or active_collaborations:
-        raise ApiException(
-            422,
-            ErrorCodes.VALIDATION_ERROR,
-            "该成员仍有在办任务或未完结协作，请先办结或转派后再设为管理员",
-            {
-                "member_id": str(member.id),
-                "active_work_items": active_items,
-                "pending_transfers": pending_transfers,
-                "active_collaborations": active_collaborations,
-            },
-        )
 
 
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
-    """负责人/管理员维护成员资料 / 禁用启用。禁用时联动 users.is_active，账号立即无法登录。"""
-    require_leader_or_admin(actor)
-    member = await get_member(session, member_id)
-    require_admin_for_admin_target(actor, member)
+    """负责人维护成员资料 / 项目内禁用启用。
 
-    if payload.role == ROLE_ADMIN and member.role != ROLE_ADMIN:
-        # 管理员不参与工作协作：有在办协作的成员不能直接转为管理员
-        await _ensure_no_active_collaboration(session, member)
+    2026-08-17 规则调整：角色仅由 admin 指定/变更（每项目一名负责人），本接口不再处理 role。
+    项目内禁用（is_active）只停本项目成员身份：该账号仍可登录、其他项目照常（get_current_member
+    按本项目 member.is_active 门禁 403）；全局禁用（账号无法登录）走 admin 控制台 PATCH /users/{id}。
+    """
+    require_leader(actor)
+    member = await get_member(session, member_id, project_id=actor.project_id)
+
+    if member.role == ROLE_LEADER and payload.is_active is False:
+        raise ApiException(
+            409,
+            ErrorCodes.PROJECT_LEADER_REQUIRED,
+            "现任负责人不能被禁用，请先由管理员变更项目负责人",
+        )
 
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
-    for field in ("display_name", "role", "weekly_available_hours", "git_username", "is_active"):
+    for field in ("display_name", "weekly_available_hours", "git_username", "is_active"):
         new_value = getattr(payload, field)
         if new_value is None:
             continue
@@ -270,9 +233,8 @@ async def update_member(
         setattr(member, field, new_value)
 
     user = await session.get(User, member.user_id)
-    if "is_active" in after and user is not None:
-        # 成员禁用后账号无法登录（T2.3 权限规则联动）
-        user.is_active = bool(after["is_active"])
+    # 项目内禁用不再联动 users.is_active（2026-08-17 解耦）：账号仍可登录，
+    # 全局禁用由 admin 控制台 PATCH /users/{id} 单独管理。
 
     if after:
         await session.flush()
@@ -297,17 +259,15 @@ async def put_capabilities(
     """整体替换能力集（PUT 语义，6.2 节）。
 
     - 成员本人：只能操作自己的能力，提交后 confirmed 复位为未确认；
-    - 负责人/管理员：可对任意成员操作，confirm=true 时同时确认并留痕；
-    - 管理员账号的能力仅管理员本人可维护。
+    - 负责人：可对任意成员操作，confirm=true 时同时确认并留痕。
     """
-    can_manage = actor.role in (ROLE_LEADER, ROLE_ADMIN)
+    can_manage = actor.role == ROLE_LEADER
     if not can_manage and actor.id != member_id:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "只能填报自己的能力，或由负责人/管理员维护")
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "只能填报自己的能力，或由负责人维护")
     if payload.confirm and not can_manage:
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可确认能力")
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可确认能力")
 
-    member = await get_member(session, member_id)
-    require_admin_for_admin_target(actor, member)
+    member = await get_member(session, member_id, project_id=actor.project_id)
 
     before = sorted(f"{c.tag}:{c.proficiency}" for c in member.capabilities)
     after = sorted(f"{c.tag}:{c.proficiency}" for c in payload.capabilities)

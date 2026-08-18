@@ -22,6 +22,7 @@ import {
   makeDeliverable,
   makeLeader,
   makeMember,
+  makeProject,
   makeUser,
   makeWorkItem,
   makeWorkItemSummary,
@@ -36,7 +37,9 @@ import {
  *
  * 场景步骤（与后端 pytest 端到端场景 T6.3 一一对应，共用同一步骤编号）：
  *
- *   步骤 1  登录        POST /auth/login → GET /auth/me → GET /members
+ *   步骤 1  登录        POST /auth/login → GET /auth/me/projects（ticket 09：
+ *                      24h 记忆窗口内自动进入上次项目，否则进项目选择页）
+ *                      → GET /auth/me → GET /members
  *   步骤 2  分配        POST /work-items（负责人创建并指派主执行人，创建后为 DRAFT）
  *                      → POST /work-items/{id}/publish（发布，DRAFT → READY）
  *                      → 主执行人 POST /work-items/{id}/start（READY → IN_PROGRESS）
@@ -90,21 +93,24 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     vi.clearAllMocks();
   });
 
-  it("步骤 1（可跑）：负责人登录，写入令牌并加载身份", async () => {
+  it("步骤 1（可跑）：负责人登录，24h 记忆内自动进入上次项目并加载成员身份", async () => {
     const user = userEvent.setup();
     mockApi.post.mockResolvedValue(tokens);
     mockApi.get.mockImplementation((path: string) => {
+      if (path === "/auth/me/projects") return Promise.resolve([makeProject()]);
       if (path === "/auth/me") return Promise.resolve(leaderUser);
       if (path === "/members") return Promise.resolve(members);
       return Promise.reject(new Error(`未 mock 的 GET ${path}`));
     });
+    // 模拟上次登录选过该项目（24h 记忆窗口内）→ 登录后自动进入工作台
+    useAuthStore.getState().setCurrentProject(makeProject());
 
     renderWithProviders(<LoginPage />);
     await user.type(screen.getByLabelText("用户名"), "leader");
     await user.type(screen.getByLabelText("密码"), "leader-password");
     await user.click(screen.getByRole("button", { name: "登录" }));
 
-    // 接口约定：POST /auth/login → GET /auth/me → GET /members
+    // 接口约定：POST /auth/login → GET /auth/me/projects →（24h 记忆内自动进入）→ GET /auth/me → GET /members
     await waitFor(() => {
       expect(mockApi.post).toHaveBeenCalledWith("/auth/login", {
         username: "leader",
@@ -114,6 +120,7 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     await waitFor(() => {
       const state = useAuthStore.getState();
       expect(state.accessToken).toBe(tokens.access_token);
+      expect(state.currentProject?.id).toBe("project-1");
       expect(state.member?.role).toBe("leader");
     });
   });

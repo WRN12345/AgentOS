@@ -45,10 +45,9 @@ from app.domains.deadlines.state_machine import (
 )
 from app.domains.notifications.service import notify
 from app.domains.project.models import ROLE_LEADER, ProjectMember
-from app.domains.project.service import get_default_project
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.schemas import MemberBrief
-from app.domains.work_items.service import get_work_item
+from app.domains.work_items.service import get_work_item, get_work_item_project_id
 from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
@@ -129,12 +128,21 @@ async def generate_impact_analysis(
 
 
 async def get_request(
-    session: AsyncSession, request_id: uuid.UUID, *, for_update: bool = False
+    session: AsyncSession,
+    request_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+    project_id: uuid.UUID | None = None,
 ) -> DeadlineChangeRequest:
     # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
     # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
     request = await session.get(DeadlineChangeRequest, request_id, with_for_update=for_update)
     if request is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "DDL 变更申请不存在")
+    if project_id is not None and (
+        await get_work_item_project_id(session, request.work_item_id) != project_id
+    ):
+        # 越权 404：项目墙外的申请与不存在等价（spec D3），不泄露存在性信息
         raise ApiException(404, ErrorCodes.NOT_FOUND, "DDL 变更申请不存在")
     return request
 
@@ -252,17 +260,19 @@ async def request_to_out(
     return _to_out(request, item_titles, target_titles, briefs)
 
 
-async def get_detail(session: AsyncSession, request_id: uuid.UUID) -> DeadlineChangeRequestOut:
+async def get_detail(
+    session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> DeadlineChangeRequestOut:
     """单条详情（含 reason 与 impact_analysis 正文，项目成员可查，原则 6 透明）。"""
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, project_id=project_id)
     return await request_to_out(session, request)
 
 
 async def list_for_work_item(
-    session: AsyncSession, item_id: uuid.UUID
+    session: AsyncSession, item_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> list[DeadlineChangeSummaryOut]:
     """某工作项的 DDL 变更申请历史（项目成员可查，原则 6 透明）。"""
-    await get_work_item(session, item_id)  # 工作项不存在 → 404
+    await get_work_item(session, item_id, project_id=project_id)  # 越权 → 404
     requests = list(
         (
             await session.execute(
@@ -281,12 +291,16 @@ async def list_for_work_item(
 async def list_mine(
     session: AsyncSession, actor: ProjectMember
 ) -> list[DeadlineChangeSummaryOut]:
-    """我发起的 DDL 变更申请（13.2 节）。"""
+    """我发起的 DDL 变更申请（13.2 节），限定当前项目（spec D2 经工作项推导）。"""
     requests = list(
         (
             await session.execute(
                 select(DeadlineChangeRequest)
-                .where(DeadlineChangeRequest.requested_by == actor.id)
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    DeadlineChangeRequest.requested_by == actor.id,
+                    WorkItem.project_id == actor.project_id,
+                )
                 .order_by(DeadlineChangeRequest.created_at.desc())
             )
         )
@@ -297,21 +311,19 @@ async def list_mine(
     return [_to_summary(r, item_titles, target_titles, briefs) for r in requests]
 
 
-async def list_pending_approval(session: AsyncSession) -> list[DeadlineChangeRequest]:
-    """负责人待审批聚合用：全部 PENDING_APPROVAL 的 DDL 变更申请（12.6 节）。"""
-    return list(
-        (
-            await session.execute(
-                select(DeadlineChangeRequest)
-                .where(
-                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value
-                )
-                .order_by(DeadlineChangeRequest.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
+async def list_pending_approval(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[DeadlineChangeRequest]:
+    """负责人待审批聚合用：当前项目全部 PENDING_APPROVAL 的 DDL 变更申请（12.6 节）。"""
+    stmt = (
+        select(DeadlineChangeRequest)
+        .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+        .where(DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value)
+        .order_by(DeadlineChangeRequest.created_at.desc())
     )
+    if project_id is not None:
+        stmt = stmt.where(WorkItem.project_id == project_id)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 # ---------- 内部工具 ----------
@@ -331,19 +343,19 @@ def _check_version(request: DeadlineChangeRequest, version: int) -> None:
 async def _notify_leaders(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     type: str,
     title: str,
     body: str,
     link: str,
     outbox: list[OutgoingEvent] | None = None,
 ) -> None:
-    """通知全体活跃项目负责人（待审批事项）。"""
-    project = await get_default_project(session)
+    """通知指定项目的全体活跃负责人（待审批事项）。"""
     leaders = (
         (
             await session.execute(
                 select(ProjectMember).where(
-                    ProjectMember.project_id == project.id,
+                    ProjectMember.project_id == project_id,
                     ProjectMember.role == ROLE_LEADER,
                     ProjectMember.is_active.is_(True),
                 )
@@ -355,6 +367,7 @@ async def _notify_leaders(
     for leader in leaders:
         await notify(
             session,
+            project_id=project_id,
             recipient_id=leader.id,
             type=type,
             title=title,
@@ -395,7 +408,7 @@ async def create_deadline_change_request(
     commit 成功后发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
 
     collab: CollaborationRequest | None = None
     if payload.target_type == DeadlineTargetType.WORK_ITEM:
@@ -523,6 +536,7 @@ async def create_deadline_change_request(
         other_id = collab.assignee_id if actor.id == collab.requester_id else collab.requester_id
         await notify(
             session,
+            project_id=actor.project_id,
             recipient_id=other_id,
             type="deadline_change.approved",
             title="协作 DDL 已变更",
@@ -534,6 +548,7 @@ async def create_deadline_change_request(
     else:
         await _notify_leaders(
             session,
+            project_id=item.project_id,
             type="deadline_change.requested",
             title="新的 DDL 变更申请待审批",
             body=f"{actor.display_name} 申请变更工作项「{item.title}」的截止时间",
@@ -563,7 +578,7 @@ async def approve_deadline_change(
 ) -> DeadlineChangeRequestOut:
     """负责人审批通过：同事务更新目标 DDL（version+1）+ 申请状态 + 审计 + 通知；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
     new_status = transition(request.status, "approve")
 
@@ -591,6 +606,7 @@ async def approve_deadline_change(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.requested_by,
         type="deadline_change.approved",
         title="DDL 变更已通过",
@@ -615,7 +631,7 @@ async def reject_deadline_change(
 ) -> DeadlineChangeRequestOut:
     """负责人驳回：目标 DDL 不变化，同事务审计 + 通知发起人；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
     new_status = transition(request.status, "reject")
 
@@ -642,6 +658,7 @@ async def reject_deadline_change(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.requested_by,
         type="deadline_change.rejected",
         title="DDL 变更被驳回",
@@ -663,7 +680,7 @@ async def cancel_deadline_change(
     version: int,
 ) -> DeadlineChangeRequestOut:
     """发起人取消自己的待审批申请，同事务审计。"""
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     if request.requested_by != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅 DDL 变更申请人可取消")
     _check_version(request, version)

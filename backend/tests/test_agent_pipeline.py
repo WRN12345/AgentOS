@@ -80,7 +80,7 @@ async def _run_once(redis_client, run_id: uuid.UUID, prompt: str = "") -> None:
     )
 
 
-async def _trigger(redis_client, prompt: str) -> AgentRun:
+async def _trigger(redis_client, prompt: str, *, project_id: uuid.UUID) -> AgentRun:
     async with async_session_factory() as session:
         return await request_agent_analysis(
             session,
@@ -88,6 +88,7 @@ async def _trigger(redis_client, prompt: str) -> AgentRun:
             agent_type=pipeline.AGENT_TYPE,
             trigger_source="manual",
             work_item_id=None,  # 项目级触发（仅 leader，端点层权限沿用现有实现）
+            project_id=project_id,  # 项目级 run 必须带归属（ticket 05：工具按项目过滤）
             prompt=prompt,
         )
 
@@ -286,10 +287,12 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """合法三段输出 → 建议入库且符合 §4.2；指定人选 user_specified=true；
-    管理员/停用成员/未匹配名字落入 unresolved_mentions，不会被推荐。"""
+    停用成员/未匹配名字落入 unresolved_mentions，不会被推荐。
+    （多项目后管理员升级为全局角色，不再以成员身份存在，无需单独排除。）"""
     _, zhangsan = await add_member(project, "zhangsan", "Zhang123!", display_name="张三")
     _, lisi = await add_member(project, "lisi", "Li123!", display_name="李四")
-    await add_member(project, "wangguanli", "Wang123!", role="admin", display_name="王管理")
+    # 管理员不再以成员身份存在（全局 is_admin），此成员仅用于测试未匹配名字
+    await add_member(project, "wangguanli", "Wang123!", display_name="王管理")
     _, laoqian = await add_member(project, "laoqian", "Qian123!", display_name="老钱")
     async with async_session_factory() as session:
         session.add_all(
@@ -302,8 +305,8 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert member is not None
         member.is_active = False  # 停用成员不可分配
         # 张三名下 1 个进行中工作项 → 负载/进行中清单数据
-        item = WorkItem(title="检索模块", description="描述", assignee_id=zhangsan.id,
-                        status="IN_PROGRESS")
+        item = WorkItem(title="检索模块", description="描述", project_id=zhangsan.project_id,
+                        assignee_id=zhangsan.id, status="IN_PROGRESS")
         item.collaborators = []
         session.add(item)
         await session.commit()
@@ -325,7 +328,7 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, requirement)
+        run = await _trigger(redis_client, requirement, project_id=project.id)
         await _run_once(redis_client, run.id, prompt=requirement)
 
         async with async_session_factory() as session:
@@ -355,8 +358,9 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert second["recommended_assignee"]["member_id"] == str(lisi.id)
         assert second["user_specified"] is True
         assert "技能" in second["notes"]
-        # 未匹配点名：赵六不存在、王管理是管理员、老钱已停用 → 全部进 unresolved
-        assert sorted(content["unresolved_mentions"]) == sorted(["赵六", "王管理", "老钱"])
+        # 未匹配点名：赵六不存在、老钱已停用 → 进 unresolved
+        # 王管理是普通成员，可被正确匹配，不进入 unresolved
+        assert sorted(content["unresolved_mentions"]) == sorted(["赵六", "老钱"])
         # fact_refs 引用真实成员 ID
         assert str(zhangsan.id) in suggestion.fact_refs["member_ids"]
         assert str(lisi.id) in suggestion.fact_refs["member_ids"]
@@ -392,7 +396,7 @@ async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "搭建 RAG 问答平台")
+        run = await _trigger(redis_client, "搭建 RAG 问答平台", project_id=project.id)
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:
@@ -428,7 +432,7 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "搭建 RAG 问答平台")
+        run = await _trigger(redis_client, "搭建 RAG 问答平台", project_id=project.id)
         await _run_once(redis_client, run.id, prompt="搭建 RAG 问答平台")
 
         async with async_session_factory() as session:
@@ -465,7 +469,7 @@ async def test_pipeline_schema_invalid_merge_fails_run(
 
     redis_client = create_redis_client()
     try:
-        run = await _trigger(redis_client, "随便做点什么")
+        run = await _trigger(redis_client, "随便做点什么", project_id=project.id)
         await _run_once(redis_client, run.id)
 
         async with async_session_factory() as session:

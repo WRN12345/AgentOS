@@ -33,14 +33,10 @@ import {
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import { useAuthStore } from "../../app/store";
 import type { Member, MemberWithPassword } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   username: z.string().min(1, "请输入用户名"),
-  password: z.string().min(8, "密码至少 8 位"),
-  display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member", "admin"]),
-  weekly_available_hours: z.string().optional(),
-  git_username: z.string().optional(),
 });
 
 type CreateValues = z.infer<typeof createSchema>;
@@ -48,11 +44,15 @@ type CreateValues = z.infer<typeof createSchema>;
 interface CreateMemberDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 创建成功后回调，用于展示一次性初始密码。 */
+  /** 添加成功后回调；复用已有账号、无初始密码（initial_password 恒为 null）。 */
   onCreated: (member: MemberWithPassword) => void;
 }
 
-/** 负责人/管理员创建成员对话框：成功后后端返回一次性初始密码。 */
+/**
+ * 负责人添加已有账号成员对话框（建号收敛到 admin，16 节）：
+ * 按全局唯一用户名解析已有账号加入本项目，不建号、无初始密码、固定为「成员」角色。
+ * 表单仅用户名一项；显示名/可投入时间/Git 用户名加入后可在「编辑」中维护。
+ */
 export function CreateMemberDialog({
   open,
   onOpenChange,
@@ -61,51 +61,34 @@ export function CreateMemberDialog({
   const queryClient = useQueryClient();
   const form = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: {
-      username: "",
-      password: "",
-      display_name: "",
-      role: "member",
-      weekly_available_hours: "",
-      git_username: "",
-    },
+    defaultValues: { username: "" },
   });
 
   const mutation = useMutation({
     mutationFn: (values: CreateValues) =>
-      api.post<MemberWithPassword>(
+      api.post<Member>(
         "/members",
-        {
-          username: values.username,
-          password: values.password,
-          display_name: values.display_name,
-          role: values.role,
-          ...(values.weekly_available_hours
-            ? { weekly_available_hours: Number(values.weekly_available_hours) }
-            : {}),
-          ...(values.git_username
-            ? { git_username: values.git_username }
-            : {}),
-        },
+        { username: values.username },
         newIdempotencyKey(),
       ),
     onSuccess: (member) => {
-      toast.success(`成员 ${member.display_name} 创建成功`);
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      toast.success(`已添加成员 ${member.display_name}`);
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       form.reset();
       onOpenChange(false);
-      onCreated(member);
+      // 复用已有账号，无初始密码（响应本身不含该字段，显式置 null）
+      onCreated({ ...member, initial_password: null });
     },
-    onError: (error) => toast.error(errorMessage(error, "创建成员失败")),
+    onError: (error) => toast.error(errorMessage(error, "添加成员失败")),
   });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建成员</DialogTitle>
+          <DialogTitle>添加已有成员</DialogTitle>
           <DialogDescription>
-            创建成员账号，初始密码仅展示一次，请转交本人。
+            按全局唯一用户名将已有账号加入本项目；不新建账号、无初始密码，角色固定为成员。
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -126,87 +109,9 @@ export function CreateMemberDialog({
                 </FormItem>
               )}
             />
-            <FormField
-              control={form.control}
-              name="password"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>初始密码</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="password"
-                      autoComplete="new-password"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="display_name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>显示名</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="role"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>角色</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="member">成员</SelectItem>
-                      <SelectItem value="leader">负责人</SelectItem>
-                      <SelectItem value="admin">管理员</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="weekly_available_hours"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>每周可投入时间（小时，可选）</FormLabel>
-                  <FormControl>
-                    <Input type="number" min={0} step={1} {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="git_username"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Git 用户名（可选）</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
             <DialogFooter>
               <Button type="submit" disabled={mutation.isPending}>
-                {mutation.isPending ? "创建中…" : "创建"}
+                {mutation.isPending ? "添加中…" : "添加"}
               </Button>
             </DialogFooter>
           </form>
@@ -218,7 +123,6 @@ export function CreateMemberDialog({
 
 const editSchema = z.object({
   display_name: z.string().min(1, "请输入显示名"),
-  role: z.enum(["leader", "member", "admin"]),
   weekly_available_hours: z.string().optional(),
   git_username: z.string().optional(),
 });
@@ -230,7 +134,7 @@ interface EditMemberDialogProps {
   onClose: () => void;
 }
 
-/** 负责人/管理员编辑成员对话框：显示名、角色、可投入时间与 Git 用户名。 */
+/** 负责人编辑成员对话框：显示名、可投入时间与 Git 用户名（角色仅 admin 指定，不在此维护）。 */
 export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
   const queryClient = useQueryClient();
   const form = useForm<EditValues>({
@@ -238,7 +142,6 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
     values: member
       ? {
           display_name: member.display_name,
-          role: member.role,
           weekly_available_hours:
             member.weekly_available_hours?.toString() ?? "",
           git_username: member.git_username ?? "",
@@ -252,7 +155,6 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
         `/members/${member!.id}`,
         {
           display_name: values.display_name,
-          role: values.role,
           weekly_available_hours: values.weekly_available_hours
             ? Number(values.weekly_available_hours)
             : null,
@@ -262,7 +164,7 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
       ),
     onSuccess: (updated) => {
       toast.success(`已更新成员 ${updated.display_name}`);
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       onClose();
     },
     onError: (error) => toast.error(errorMessage(error, "更新成员失败")),
@@ -288,28 +190,6 @@ export function EditMemberDialog({ member, onClose }: EditMemberDialogProps) {
                   <FormControl>
                     <Input {...field} />
                   </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="role"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>角色</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="member">成员</SelectItem>
-                      <SelectItem value="leader">负责人</SelectItem>
-                      <SelectItem value="admin">管理员</SelectItem>
-                    </SelectContent>
-                  </Select>
                   <FormMessage />
                 </FormItem>
               )}
@@ -407,7 +287,7 @@ export function CapabilitiesDialog({
       if (auth.member?.id === updated.id) {
         auth.setMember(updated);
       }
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       onClose();
     },
     onError: (error) => toast.error(errorMessage(error, "提交能力失败")),
@@ -500,35 +380,41 @@ export function CapabilitiesDialog({
   );
 }
 
-interface InitialPasswordDialogProps {
+interface MemberAddResultDialogProps {
   member: MemberWithPassword | null;
   onClose: () => void;
 }
 
-/** 创建成功后展示一次性初始密码的对话框。 */
-export function InitialPasswordDialog({
+/** 添加成员结果对话框：复用已有账号时无初始密码（一次性密码由 admin 控制台建号时展示）。 */
+export function MemberAddResultDialog({
   member,
   onClose,
-}: InitialPasswordDialogProps) {
+}: MemberAddResultDialogProps) {
   const [copied, setCopied] = useState(false);
+  const password = member?.initial_password ?? null;
   return (
     <Dialog open={member !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>成员创建成功</DialogTitle>
+          <DialogTitle>
+            {password === null ? "已添加成员" : "成员创建成功"}
+          </DialogTitle>
           <DialogDescription>
-            初始密码仅展示一次，请立即复制并转交 {member?.display_name}。
+            {password === null
+              ? "该账号为复用已有账号，无需初始密码。"
+              : `初始密码仅展示一次，请立即复制并转交 ${member?.display_name}。`}
           </DialogDescription>
         </DialogHeader>
         <div className="rounded-md bg-muted p-4 text-center font-mono text-lg">
-          {member?.initial_password}
+          {password ?? "（复用已有账号，无初始密码）"}
         </div>
         <DialogFooter>
           <Button
             variant="outline"
+            disabled={password === null}
             onClick={() => {
-              if (member) {
-                navigator.clipboard.writeText(member.initial_password);
+              if (password !== null) {
+                navigator.clipboard.writeText(password);
                 setCopied(true);
               }
             }}

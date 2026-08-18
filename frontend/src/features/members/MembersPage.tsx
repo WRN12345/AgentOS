@@ -21,21 +21,21 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
-import { useAuthStore, useCanManageMembers, useIsAdmin } from "../../app/store";
+import { useAuthStore, useCanManageMembers } from "../../app/store";
 import { roleBadgeVariant, roleLabel } from "../../lib/roles";
 import type { Member, MemberWithPassword } from "../../types";
 import {
   CapabilitiesDialog,
   CreateMemberDialog,
   EditMemberDialog,
-  InitialPasswordDialog,
+  MemberAddResultDialog,
 } from "./member-dialogs";
+import { queryKeys } from "../../lib/queryKeys";
 
 /** 成员与能力页：全员摘要列表；负责人/管理员可创建/编辑/禁用/确认能力，成员可填报自己的能力。 */
 export default function MembersPage() {
   const queryClient = useQueryClient();
   const canManage = useCanManageMembers();
-  const isAdmin = useIsAdmin();
   const selfMember = useAuthStore((s) => s.member);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -44,7 +44,7 @@ export default function MembersPage() {
   const [capEditing, setCapEditing] = useState<Member | null>(null);
 
   const { data: members, isLoading } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
 
@@ -60,9 +60,9 @@ export default function MembersPage() {
       toast.success(
         updated.is_active
           ? `已启用成员 ${updated.display_name}`
-          : `已禁用成员 ${updated.display_name}`,
+          : `已禁用成员 ${updated.display_name}（仅本项目，账号仍可登录）`,
       );
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
     },
     onError: (error) => toast.error(errorMessage(error, "操作失败")),
   });
@@ -83,7 +83,7 @@ export default function MembersPage() {
       ),
     onSuccess: (updated) => {
       toast.success(`已确认 ${updated.display_name} 的能力`);
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
     },
     onError: (error) => toast.error(errorMessage(error, "确认能力失败")),
   });
@@ -92,10 +92,8 @@ export default function MembersPage() {
   const freshSelf =
     members?.find((m) => m.id === selfMember?.id) ?? selfMember;
 
-  // 负责人/成员的列表不出现管理员；管理员可见所有人（后端同样过滤，此处兜底）
-  const visibleMembers = isAdmin
-    ? (members ?? [])
-    : (members ?? []).filter((m) => m.role !== "admin");
+  // 管理员为全局角色、不再是成员，列表无需按角色过滤
+  const visibleMembers = members ?? [];
 
   return (
     <Card>
@@ -118,7 +116,7 @@ export default function MembersPage() {
           {canManage && (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
-              新建成员
+              添加成员
             </Button>
           )}
         </div>
@@ -149,8 +147,7 @@ export default function MembersPage() {
                 const hasUnconfirmed = m.capabilities.some(
                   (c) => !c.confirmed,
                 );
-                // 负责人/成员不能对管理员进行操作：admin 行仅管理员本人可见操作按钮
-                const canOperateRow = canManage && (m.role !== "admin" || isAdmin);
+                const canOperateRow = canManage;
                 return (
                   <TableRow key={m.id}>
                     <TableCell>
@@ -255,7 +252,7 @@ export default function MembersPage() {
         onOpenChange={setCreateOpen}
         onCreated={setCreated}
       />
-      <InitialPasswordDialog member={created} onClose={() => setCreated(null)} />
+      <MemberAddResultDialog member={created} onClose={() => setCreated(null)} />
       <EditMemberDialog member={editing} onClose={() => setEditing(null)} />
       <CapabilitiesDialog
         member={capEditing}

@@ -7,11 +7,16 @@
 机制分两半：
 - `idempotency_guard` 依赖项：先查 `idempotency_records`，命中已完成记录则抛
   `IdempotentReplay`（由全局异常处理返回首次响应）；未命中则以"占位记录"
-  （response_status=0）抢占执行权——唯一索引 ux_idempotency_records_user_key_endpoint
+  （response_status=0）抢占执行权——唯一索引 ux_idempotency_records_project_user_key_endpoint
   保证并发下同键只有一个请求占位成功，其余请求转入等待，待首个请求响应
   落库后按首次结果重放（17.2 节：并发重复请求也只生效一次）；
 - `IdempotencyMiddleware`：请求结束后把首次响应（状态码 + body）写回占位
   记录；响应为 5xx 或抛出未处理异常时删除占位，允许后续请求重新执行。
+
+项目维度（ticket 06）：幂等唯一键纳入项目维度。项目归属从 `X-Project-Id`
+请求头快照捕获（与 ticket 01 的"请求头即项目上下文事实源"一致），无项目
+上下文的全局接口（登录/登出/任务示例等）project_id 记为 NULL，唯一约束按
+COALESCE(project_id, 零值 UUID) 处理。同一键在 A/B 不同项目下视为不同请求。
 
 注意：若接口同时使用 get_current_user，需把它声明在 idempotency_guard 之前，
 以便守卫能取到 request.state.user_id（未登录接口 user_id 记为 NULL，
@@ -33,6 +38,7 @@ from starlette.responses import Response, StreamingResponse
 
 from app.core.errors import ApiException, ErrorCodes, IdempotentReplay
 from app.core.logging import setup_logging
+from app.core.request_context import project_id_from_header
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.models.idempotency import IdempotencyRecord
 
@@ -53,24 +59,46 @@ def _user_clause(user_id: uuid.UUID | None):  # noqa: ANN202
     )
 
 
+def _project_clause(project_id: uuid.UUID | None):  # noqa: ANN202
+    return (
+        IdempotencyRecord.project_id.is_(None)
+        if project_id is None
+        else IdempotencyRecord.project_id == project_id
+    )
+
+
 async def _find_record(
-    session: AsyncSession, *, key: str, method: str, path: str, user_id: uuid.UUID | None
+    session: AsyncSession,
+    *,
+    key: str,
+    method: str,
+    path: str,
+    user_id: uuid.UUID | None,
+    project_id: uuid.UUID | None,
 ) -> IdempotencyRecord | None:
     stmt = select(IdempotencyRecord).where(
         IdempotencyRecord.key == key,
         IdempotencyRecord.method == method,
         IdempotencyRecord.path == path,
+        _project_clause(project_id),
         _user_clause(user_id),
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def _delete_reservation(
-    *, key: str, method: str, path: str, user_id: uuid.UUID | None
+    *,
+    key: str,
+    method: str,
+    path: str,
+    user_id: uuid.UUID | None,
+    project_id: uuid.UUID | None,
 ) -> None:
     """删除占位记录（请求 5xx / 未处理异常时调用），允许后续请求重新执行。"""
     async with async_session_factory() as session:
-        record = await _find_record(session, key=key, method=method, path=path, user_id=user_id)
+        record = await _find_record(
+            session, key=key, method=method, path=path, user_id=user_id, project_id=project_id
+        )
         if record is not None and record.response_status == RESERVED_STATUS:
             await session.delete(record)
             await session.commit()
@@ -89,13 +117,19 @@ async def idempotency_guard(
         return
 
     user_id = getattr(request.state, "user_id", None)
+    project_id = project_id_from_header(request)
     method, path = request.method, request.url.path
     deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
 
     while True:
         async with async_session_factory() as query_session:
             record = await _find_record(
-                query_session, key=key, method=method, path=path, user_id=user_id
+                query_session,
+                key=key,
+                method=method,
+                path=path,
+                user_id=user_id,
+                project_id=project_id,
             )
         if record is not None and record.response_status != RESERVED_STATUS:
             # 已完成记录：直接重放首次响应
@@ -108,6 +142,7 @@ async def idempotency_guard(
                     claim_session.add(
                         IdempotencyRecord(
                             key=key,
+                            project_id=project_id,
                             user_id=user_id,
                             method=method,
                             path=path,
@@ -121,6 +156,7 @@ async def idempotency_guard(
             else:
                 request.state.idempotency_pending = {
                     "key": key,
+                    "project_id": project_id,
                     "user_id": user_id,
                     "method": method,
                     "path": path,
@@ -156,7 +192,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             async for chunk in response.body_iterator:
                 body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
         else:
-            body = bytes(response.body)
+            try:
+                body = bytes(response.body)  # type: ignore[arg-type]
+            except AttributeError:
+                # 某些响应类型（如 _StreamingResponse）没有 body 属性，
+                # 退而迭代 body_iterator
+                async for chunk in response.body_iterator:
+                    body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
 
         headers = dict(response.headers)
         headers.pop("content-length", None)
@@ -167,8 +209,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             media_type=response.media_type,
         )
 
-        if response.status_code >= 500:
-            # 5xx 不落库：删除占位，允许客户端重试真正执行
+        if not 200 <= response.status_code < 300:
+            # 仅成功响应可重放；校验/权限/服务端错误均释放占位，修正后可同键重试。
             await _delete_reservation(**pending)
             return final
 
@@ -185,6 +227,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     IdempotencyRecord.key == pending["key"],
                     IdempotencyRecord.method == pending["method"],
                     IdempotencyRecord.path == pending["path"],
+                    _project_clause(pending["project_id"]),
                     _user_clause(pending["user_id"]),
                 )
                 .values(response_status=response.status_code, response_body=parsed)

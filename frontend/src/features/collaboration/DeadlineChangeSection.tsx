@@ -62,6 +62,7 @@ import type {
 } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { DEADLINE_CHANGE_STATUS_META } from "./constants";
+import { queryKeys } from "../../lib/queryKeys";
 
 const createSchema = z.object({
   target: z.string().min(1, "请选择变更目标"),
@@ -91,7 +92,7 @@ export function DeadlineChangeSection({ workItem }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: changes } = useQuery({
-    queryKey: ["deadline-change-requests", "work-item", workItem.id],
+    queryKey: queryKeys.deadlineChangeRequests("work-item", workItem.id),
     queryFn: () =>
       api.get<DeadlineChangeSummary[]>(
         `/work-items/${workItem.id}/deadline-change-requests`,
@@ -100,7 +101,7 @@ export function DeadlineChangeSection({ workItem }: Props) {
 
   // 协作级 DDL 变更需要关联协作请求：复用协作区同一查询缓存
   const { data: collabs } = useQuery({
-    queryKey: ["collaboration-requests", "work-item", workItem.id],
+    queryKey: queryKeys.collaborationRequests("work-item", workItem.id),
     queryFn: () =>
       api.get<CollaborationRequestSummary[]>(
         `/work-items/${workItem.id}/collaboration-requests`,
@@ -108,11 +109,11 @@ export function DeadlineChangeSection({ workItem }: Props) {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["collaboration-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deadlineChangeRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   const form = useForm<CreateValues>({

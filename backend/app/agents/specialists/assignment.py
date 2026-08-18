@@ -11,7 +11,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import assignment as assignment_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
@@ -25,13 +25,18 @@ PROMPT_VERSION = "assignment_advisor.v1"
 
 async def assignment_advisor_capability(state: "AgentGraphState") -> Any:
     """拉取真实成员能力/负载喂给模型，产出分配建议（含能力修正建议）。"""
+    project_id = context_project_id(state)
     async with async_session_factory() as session:
-        capabilities = await TOOL_REGISTRY["list_member_capabilities"].func(session)
-        workload = await TOOL_REGISTRY["get_member_workload"].func(session)
+        capabilities = await TOOL_REGISTRY["list_member_capabilities"].func(
+            session, project_id=project_id
+        )
+        workload = await TOOL_REGISTRY["get_member_workload"].func(
+            session, project_id=project_id
+        )
         overview = None
         if state.get("work_item_id"):
             overview = await TOOL_REGISTRY["get_work_item_overview"].func(
-                session, uuid.UUID(state["work_item_id"])
+                session, uuid.UUID(state["work_item_id"]), project_id=project_id
             )
 
     context = state.get("context", {})

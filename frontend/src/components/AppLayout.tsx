@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowLeftRight,
   BarChart3,
   Bot,
   ChevronsUpDown,
@@ -25,10 +26,12 @@ import { cn } from "@/lib/utils";
 import { roleBadgeVariant, roleLabel } from "@/lib/roles";
 import { api } from "../services/api";
 import { useAuthStore, useIsLeader } from "../app/store";
+import { logout } from "../features/auth/session";
 import { useEventStream } from "../services/events";
 import { NotificationBell } from "../features/notifications/NotificationBell";
 import { RequirementPipelineWizard } from "../features/agent-assistant/RequirementPipelineWizard";
 import type { AgentConfig, Member } from "../types";
+import { queryKeys } from "../lib/queryKeys";
 
 const navItems = [
   { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
@@ -44,7 +47,7 @@ const navItems = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const isLeader = useIsLeader();
-  const { user, member, refreshToken, clear } = useAuthStore();
+  const { user, member, currentProject } = useAuthStore();
   const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
@@ -52,7 +55,7 @@ export default function AppLayout() {
 
   // 顶栏「AI 需求拆解」向导所需数据（仅负责人可见该入口）
   const { data: members } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
     enabled: isLeader,
   });
@@ -63,15 +66,8 @@ export default function AppLayout() {
   });
 
   const handleLogout = async () => {
-    // 登出即撤销 Refresh Token；失败也照常清空本地登录态
-    try {
-      if (refreshToken) {
-        await api.post("/auth/logout", { refresh_token: refreshToken });
-      }
-    } catch {
-      // 忽略登出接口错误
-    }
-    clear();
+    // 撤销 Refresh Token 并清空本地登录态（session.logout 统一实现）
+    await logout();
     toast.success("已登出");
     navigate("/login", { replace: true });
   };
@@ -110,8 +106,16 @@ export default function AppLayout() {
       {/* 主区域 */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b px-6">
-          <span className="text-sm text-muted-foreground">
-            Agent 协作工作流平台
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Agent 协作工作流平台</span>
+            {currentProject && (
+              <>
+                <Separator orientation="vertical" className="h-4" />
+                <span className="font-medium text-foreground">
+                  {currentProject.name}
+                </span>
+              </>
+            )}
           </span>
           <div className="flex items-center gap-1">
             {isLeader && (
@@ -146,6 +150,19 @@ export default function AppLayout() {
                     {user?.username ?? "当前用户"}
                   </div>
                   <div className="-mx-1 my-1 h-px bg-border" />
+                  {!user?.is_admin && (
+                    <button
+                      type="button"
+                      className={simpleMenuItemClass}
+                      onClick={() => {
+                        close();
+                        navigate("/projects");
+                      }}
+                    >
+                      <ArrowLeftRight className="size-4" />
+                      切换项目
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={simpleMenuItemClass}

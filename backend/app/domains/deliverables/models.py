@@ -24,6 +24,11 @@ class Deliverable(CoreModel):
         UniqueConstraint("work_item_id", "version", name="uq_deliverables_item_version"),
     )
 
+    # 项目归属（spec D1：有独立列表入口的表冗余 project_id，NOT NULL；
+    # 落库时经所属工作项推导填充，API 不接受传入）
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
+    )
     work_item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_items.id"), index=True, nullable=False
     )

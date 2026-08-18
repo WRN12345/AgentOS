@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -27,7 +27,18 @@ class TokenPairResponse(BaseModel):
 
 
 class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  # 兼容 ORM 直接校验（如 admin 建号响应构造）
+
     id: uuid.UUID
     username: str
     is_active: bool
+    is_admin: bool
     created_at: datetime
+
+
+class MyProjectOut(BaseModel):
+    """用户参与的项目摘要（GET /me/projects）。"""
+    id: uuid.UUID
+    name: str
+    description: str | None
+    role: str  # "leader" | "member"

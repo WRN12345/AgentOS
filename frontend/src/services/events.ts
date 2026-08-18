@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuthStore } from "../app/store";
+import { queryKeys } from "../lib/queryKeys";
 import type { RealtimeEvent } from "../types";
 
 /** 后端会推送的事件类型（4.3 节，T3.6）：EventSource 对命名事件需逐一监听。 */
@@ -44,74 +45,81 @@ const EVENT_TYPES = [
   // 后端不发布对应 SSE（以 domains/deliverables、domains/files 代码为准），无需监听。
 ] as const;
 
-/** 按事件类型失效对应 TanStack Query 缓存（queryKey 前缀匹配，覆盖列表与详情）。 */
+/**
+ * 按事件类型失效对应 TanStack Query 缓存（queryKey 前缀匹配，覆盖列表与详情）。
+ * 业务缓存键经 queryKeys 工厂生成、已含当前项目前缀，只失效当前项目的缓存。
+ */
 function invalidateForEvent(queryClient: QueryClient, type: string) {
-  // 任何事件都可能伴随站内通知与审计留痕
-  queryClient.invalidateQueries({ queryKey: ["notifications"] });
-  queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+  // 任何事件都可能伴随站内通知与当前项目审计时间线变化。
+  queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
+  queryClient.invalidateQueries({ queryKey: queryKeys.auditEvents() });
 
   const domain = type.split(".")[0];
   switch (domain) {
     case "work_item":
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
       break;
     case "collaboration":
-      queryClient.invalidateQueries({ queryKey: ["collaboration-requests"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
       break;
     case "transfer":
-      queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       // 转派通过会变更主执行人
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
       break;
     case "deadline_change":
-      queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.deadlineChangeRequests() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       // DDL 变更通过会更新工作项/协作的截止时间
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
-      queryClient.invalidateQueries({ queryKey: ["collaboration-requests"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
       break;
     case "reminder":
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
-      queryClient.invalidateQueries({ queryKey: ["collaboration-requests"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
       break;
     case "member":
-      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       break;
     case "review":
       // 审核结论推进工作项状态，并产生新的 reviews 记录与审批中心变化
-      queryClient.invalidateQueries({ queryKey: ["work-items"] });
-      queryClient.invalidateQueries({ queryKey: ["reviews"] });
-      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.reviews() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       break;
     case "agent":
       // Agent 分析完成：刷新建议中心与运行记录（4.3 节，T5.7）
-      queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns() });
       break;
   }
 }
 
 /**
- * 全局 SSE 接入（4.3、12.6 节）：AppLayout 层建立 EventSource，
+ * 项目 SSE 接入（4.3、12.6 节）：AppLayout 层建立 EventSource，
  * 收到事件后失效对应查询缓存实现自动刷新；reminder.* 弹 Sonner 提示。
  *
- * - EventSource 无法自定义请求头，token 走查询参数（nginx 已配流式转发）；
- * - accessToken 变化（登录/刷新/登出）时自动重连或关闭；
+ * - EventSource 无法自定义请求头，token 与项目上下文走查询参数（nginx 已配流式转发）；
+ * - accessToken / currentProject 变化（登录/刷新/登出/切换项目）时自动重连或关闭；
+ * - 未选定项目（全局管理员 / 登录分流前）不建立连接，全局流属管理控制台（ticket 10）；
  * - 断线由浏览器 EventSource 自动重连，重连期间漏发的事件
  *   由"收到任意事件即失效相关缓存"兜底（与后端约定一致）。
  */
 export function useEventStream() {
   const queryClient = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const projectId = useAuthStore((s) => s.currentProject?.id);
 
   useEffect(() => {
-    if (!accessToken) {
+    if (!accessToken || !projectId) {
       return;
     }
-    const source = new EventSource(
-      `/api/v1/events/stream?token=${encodeURIComponent(accessToken)}`,
-    );
+    const params = new URLSearchParams({
+      token: accessToken,
+      project_id: projectId,
+    });
+    const source = new EventSource(`/api/v1/events/stream?${params.toString()}`);
 
     const handle = (message: MessageEvent<string>) => {
       let event: RealtimeEvent;
@@ -139,5 +147,5 @@ export function useEventStream() {
       }
       source.close();
     };
-  }, [accessToken, queryClient]);
+  }, [accessToken, projectId, queryClient]);
 }

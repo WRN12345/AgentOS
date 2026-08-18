@@ -131,10 +131,10 @@ async def _to_out(session: AsyncSession, doc: DevDoc) -> DevDocOut:
 
 
 async def get_dev_doc_for_work_item(
-    session: AsyncSession, item_id: uuid.UUID
+    session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID
 ) -> DevDocOut:
     """任务相关成员可读（含最近一次 AI 初审建议关联）；无文档 404。"""
-    await get_work_item(session, item_id)  # 不存在 → 404
+    await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id)
     if doc is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "该任务还没有开发文档")
@@ -148,7 +148,7 @@ async def upsert_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, payload: DevDocUpdateIn
 ) -> DevDocOut:
     """撰写/编辑草稿（upsert）：仅主执行人；DRAFT/RETURNED 可编辑（乐观锁）。"""
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     _require_assignee(actor, item)
     doc = await get_doc(session, item_id, for_update=True)
 
@@ -203,7 +203,7 @@ async def submit_dev_doc(
 
     业务事务 commit 后触发 dev_doc_review Agent 初审（event 触发，尽力而为）。
     """
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     _require_assignee(actor, item)
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
@@ -244,7 +244,7 @@ async def confirm_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int
 ) -> DevDocOut:
     """确认通过：仅负责人；SUBMITTED → CONFIRMED（记录确认人/时间，写审计）。"""
-    await get_work_item(session, item_id)
+    await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "该任务还没有开发文档")
@@ -279,7 +279,7 @@ async def return_dev_doc(
     review_note: str,
 ) -> DevDocOut:
     """打回：仅负责人；SUBMITTED → RETURNED，附理由（写审计），成员修改后可重交。"""
-    await get_work_item(session, item_id)
+    await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "该任务还没有开发文档")
@@ -309,7 +309,7 @@ async def waive_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int | None
 ) -> DevDocOut:
     """豁免文档要求：仅负责人；独立标记不改变状态机（写审计）。"""
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
         # 无文档任务直接豁免：创建占位行（尚无撰写人）
@@ -348,6 +348,7 @@ async def _dispatch_dev_doc_review(session: AsyncSession, item: WorkItem) -> Non
             session,
             redis_client,
             agent_type=DEV_DOC_REVIEW_AGENT_TYPE,
+            project_id=item.project_id,
             trigger_source="event",
             work_item_id=item.id,
         )

@@ -19,15 +19,25 @@ export interface TokenPair {
   expires_in: number;
 }
 
-/** GET /auth/me 返回的当前用户（不含角色，角色从成员记录获取）。 */
+/** GET /auth/me 返回的当前用户（含全局管理员标记；项目内角色从成员记录获取）。 */
 export interface UserMe {
   id: string;
   username: string;
   is_active: boolean;
+  is_admin: boolean;
   created_at: string;
 }
 
-export type MemberRole = "leader" | "member" | "admin";
+/** 项目成员角色：负责人全管，成员普通参与；管理员为全局角色，不再属于项目。 */
+export type MemberRole = "leader" | "member";
+
+/** GET /auth/me/projects 返回的用户参与项目摘要。 */
+export interface MyProject {
+  id: string;
+  name: string;
+  description: string | null;
+  role: MemberRole;
+}
 
 /** 成员能力标签（6.2 节）：熟练度 1-5，需负责人确认。 */
 export interface MemberCapability {
@@ -55,9 +65,12 @@ export interface Member {
   updated_at: string;
 }
 
-/** POST /members 响应：额外携带仅返回一次的初始密码。 */
+/**
+ * 成员添加结果（POST /members 复用已有账号场景，无初始密码，恒为 null）。
+ * 建号收敛到 admin 后，一次性初始密码只在 admin 控制台新建账号时返回。
+ */
 export interface MemberWithPassword extends Member {
-  initial_password: string;
+  initial_password: string | null;
 }
 
 export type WorkItemPriority = "low" | "medium" | "high" | "urgent";
@@ -475,4 +488,30 @@ export interface AgentRun {
 export interface AgentConfig {
   llm_provider: string;
   llm_is_external: boolean;
+}
+
+/* ---------- 管理控制台（ticket 10，仅全局管理员） ---------- */
+
+/** 项目负责人摘要（GET /projects 内嵌；管理员视角，非成员记录）。 */
+export interface LeaderBrief {
+  id: string;
+  user_id: string;
+  username: string;
+  display_name: string;
+}
+
+/** GET /projects 返回的项目摘要（全局管理员视角，含负责人）。 */
+export interface AdminProject {
+  id: string;
+  name: string;
+  description: string | null;
+  /** 创建项目即指定的唯一负责人；历史数据可能为 null。 */
+  leader: LeaderBrief | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** POST /admin/users 响应：全局账号 + 一次性初始密码（仅此一次返回，之后不可再查）。 */
+export interface CreatedAccount extends UserMe {
+  initial_password: string;
 }

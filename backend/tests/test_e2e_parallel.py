@@ -181,7 +181,7 @@ async def test_dual_items_parallel_end_to_end(
     # ---- 步骤 5：并行推进中开启 Agent——建议生成，不改变正式业务状态 ----
     before = await snapshot_business_state([item_a_id, item_b_id])
     stub_provider.set_script(VALID_REQUIREMENT_OUTPUT)
-    run = await drive_agent_run(item_a_id)
+    run = await drive_agent_run(item_a_id, project_id=project.id)
     assert run.status == "succeeded", run.error
     assert len(await get_suggestions_for_run(run.id)) == 1
     after = await snapshot_business_state([item_a_id, item_b_id])

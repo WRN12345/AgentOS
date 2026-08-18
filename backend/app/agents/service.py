@@ -41,18 +41,24 @@ async def request_agent_analysis(
     redis_client: redis.Redis,
     *,
     agent_type: str,
+    project_id: uuid.UUID,
     trigger_source: str = "manual",
     work_item_id: uuid.UUID | None = None,
     prompt: str = "",
     request_id: str | None = None,
 ) -> AgentRun:
-    """创建一条 agent_runs(pending) 并投递 agent.run 队列任务，返回运行记录。"""
+    """创建一条 agent_runs(pending) 并投递 agent.run 队列任务，返回运行记录。
+
+    project_id 显式传参：worker 进程无请求头，项目上下文必须经队列载荷 +
+    agent_runs.project_id 传递，绝不靠 X-Project-Id 推导（ticket 05 硬约束）。
+    """
     run = AgentRun(
         status="pending",
         agent_type=agent_type,
         model=settings.llm_model or None,
         trigger_source=trigger_source,
         work_item_id=work_item_id,
+        project_id=project_id,
         prompt=prompt,
         request_id=request_id,
     )
@@ -60,17 +66,25 @@ async def request_agent_analysis(
     await session.commit()
     await session.refresh(run)
 
-    task = await enqueue(
-        redis_client,
-        AGENT_RUN_TASK_TYPE,
-        {
-            "run_id": str(run.id),
-            "agent_type": agent_type,
-            "work_item_id": str(work_item_id) if work_item_id else None,
-            "prompt": prompt,
-            "request_id": request_id,
-        },
-    )
+    try:
+        task = await enqueue(
+            redis_client,
+            AGENT_RUN_TASK_TYPE,
+            {
+                "run_id": str(run.id),
+                "agent_type": agent_type,
+                "project_id": str(project_id),
+                "work_item_id": str(work_item_id) if work_item_id else None,
+                "prompt": prompt,
+                "request_id": request_id,
+            },
+        )
+    except Exception as exc:
+        # 记录已提交但队列投递失败时立即终结，避免永久 pending 阻塞周期扫描。
+        run.status = "failed"
+        run.error = f"Queue dispatch failed: {type(exc).__name__}: {exc}"[:2000]
+        await session.commit()
+        raise
     logger.info("enqueued agent run: run_id=%s task_id=%s type=%s", run.id, task["id"], agent_type)
     return run
 
@@ -100,6 +114,7 @@ async def retry_agent_run(
         {
             "run_id": str(run.id),
             "agent_type": run.agent_type,
+            "project_id": str(run.project_id) if run.project_id else None,
             "work_item_id": str(run.work_item_id) if run.work_item_id else None,
             "prompt": run.prompt,
             "request_id": run.request_id,
@@ -112,6 +127,7 @@ async def retry_agent_run(
 async def list_suggestions(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID | None = None,
     suggestion_type: str | None = None,
     review_status: str | None = None,
     work_item_id: uuid.UUID | None = None,
@@ -122,6 +138,8 @@ async def list_suggestions(
 
     join agent_runs：关联工作项挂在 run 上（项目级建议为 NULL），
     列表出参同时需要 run 的 model 供前端展示。
+    project_id 必填（路由层传 actor.project_id）：建议经 run 推导归属，
+    agent_suggestions 不冗余 project_id（ticket 05）。
     """
     stmt = (
         select(AgentSuggestion, AgentRun)
@@ -130,6 +148,8 @@ async def list_suggestions(
         .limit(limit)
         .offset(offset)
     )
+    if project_id is not None:
+        stmt = stmt.where(AgentRun.project_id == project_id)
     if suggestion_type:
         stmt = stmt.where(AgentSuggestion.suggestion_type == suggestion_type)
     if review_status:

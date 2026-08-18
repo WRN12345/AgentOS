@@ -63,6 +63,17 @@ def _run_out(run: AgentRun, *, with_details: bool = False) -> AgentRunOut:
     )
 
 
+async def _get_run_in_project(
+    session: AsyncSession, run_id: uuid.UUID, project_id: uuid.UUID
+) -> AgentRun | None:
+    """按项目取运行记录（ticket 05）：跨项目或不存在都返回 None，调用方统一 404，
+    不泄漏其他项目资源的存在性。"""
+    run = await session.get(AgentRun, run_id)
+    if run is None or run.project_id != project_id:
+        return None
+    return run
+
+
 @router.post(
     "/work-items/{item_id}/agent-analysis",
     response_model=AgentRunOut,
@@ -87,7 +98,7 @@ async def request_agent_analysis_endpoint(
             "未注册的 Agent 类型",
             details={"agent_type": payload.agent_type, "registered": sorted(AGENT_ROUTES)},
         )
-    item = await get_work_item(session, item_id)  # 不存在 → 404
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 墙外同样 404
     if actor.role != ROLE_LEADER and not await is_work_item_related(session, item.id, actor.id):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或工作项相关成员可触发 Agent 分析")
 
@@ -97,6 +108,7 @@ async def request_agent_analysis_endpoint(
             session,
             redis_client,
             agent_type=payload.agent_type,
+            project_id=actor.project_id,
             trigger_source="manual",
             work_item_id=item.id,
             prompt=payload.prompt,
@@ -149,7 +161,9 @@ async def request_project_agent_analysis_endpoint(
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可触发项目级 Agent 分析")
     if payload.work_item_id is not None:
-        await get_work_item(session, payload.work_item_id)  # 不存在 → 404
+        await get_work_item(
+            session, payload.work_item_id, project_id=actor.project_id
+        )  # 不存在或跨项目 → 404
 
     redis_client = create_redis_client()
     try:
@@ -157,6 +171,7 @@ async def request_project_agent_analysis_endpoint(
             session,
             redis_client,
             agent_type=payload.agent_type,
+            project_id=actor.project_id,
             trigger_source="manual",
             work_item_id=payload.work_item_id,
             prompt=payload.prompt,
@@ -200,7 +215,7 @@ async def retry_agent_run_endpoint(
     仅 failed 状态可重试（其余 409）；重置为 pending 按原输入重新投递，
     202 返回运行信息。
     """
-    run = await session.get(AgentRun, run_id)
+    run = await _get_run_in_project(session, run_id, actor.project_id)
     if run is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 运行不存在")
     if actor.role != ROLE_LEADER:
@@ -247,7 +262,7 @@ async def list_agent_suggestions_endpoint(
     work_item_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[AgentSuggestionOut]:
     """建议查询（12.5 节，T5.7）。
@@ -255,10 +270,13 @@ async def list_agent_suggestions_endpoint(
     权限：登录项目成员均可读——建议不含敏感信息（内容与理由面向全员透明），
     反馈操作限负责人（见 feedback 端点）；13.1 节建议中心虽以负责人为主，
     成员查看建议与团队透明看板语义一致。
+    项目隔离（ticket 05）：只返回当前项目（actor.project_id）的建议，
+    经 run 推导归属，agent_suggestions 不冗余 project_id。
     分页与现有列表接口一致（limit/offset，返回当前页数组）。
     """
     rows = await list_suggestions(
         session,
+        project_id=actor.project_id,
         suggestion_type=suggestion_type,
         review_status=review_status,
         work_item_id=work_item_id,
@@ -303,6 +321,10 @@ async def submit_suggestion_feedback_endpoint(
     suggestion = await session.get(AgentSuggestion, suggestion_id)
     if suggestion is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
+    # 项目归属校验（ticket 05）：建议经 run 推导归属，跨项目视为不存在 → 404
+    run = await session.get(AgentRun, suggestion.run_id)
+    if run is None or run.project_id != actor.project_id:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
     raise_if_suggestion_reviewed(suggestion)
     suggestion = await submit_suggestion_feedback(
         session, suggestion, action=payload.action, actor_id=actor.id
@@ -331,15 +353,17 @@ async def list_agent_runs_endpoint(
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[AgentRunOut]:
     """运行记录列表（T5.7）：建议中心展示运行状态，failed 供人工重新触发。
 
     权限：登录成员可读（与建议查询同策略：无敏感信息，反馈/触发仍限权）。
+    项目隔离（ticket 05）：只返回当前项目（actor.project_id）的运行记录。
     """
     stmt = (
         select(AgentRun)
+        .where(AgentRun.project_id == actor.project_id)
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(limit)
         .offset(offset)
@@ -353,11 +377,14 @@ async def list_agent_runs_endpoint(
 @router.get("/agent-runs/{run_id}", response_model=AgentRunOut)
 async def get_agent_run_endpoint(
     run_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> AgentRunOut:
-    """单个运行记录（创建工作项引导等场景轮询运行状态用）。"""
-    run = await session.get(AgentRun, run_id)
+    """单个运行记录（创建工作项引导等场景轮询运行状态用）。
+
+    项目隔离（ticket 05）：跨项目运行视为不存在 → 404。
+    """
+    run = await _get_run_in_project(session, run_id, actor.project_id)
     if run is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 运行不存在")
     return _run_out(run, with_details=True)

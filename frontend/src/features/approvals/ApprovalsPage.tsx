@@ -71,6 +71,7 @@ import {
 } from "../deliverables/constants";
 import { DeliveryReviewSection } from "./DeliveryReviewSection";
 import { DevDocReviewPanel } from "../work-items/DevDocSection";
+import { queryKeys } from "../../lib/queryKeys";
 
 /** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更并可查已处理记录；管理员只读待审批列表与审批记录；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
@@ -136,19 +137,19 @@ function PendingApprovals() {
   const [detailItem, setDetailItem] = useState<ApprovalItem | null>(null);
 
   const { data: approvals, isLoading } = useQuery({
-    queryKey: ["approvals"],
+    queryKey: queryKeys.approvals(),
     queryFn: () => api.get<ApprovalItem[]>("/approvals"),
   });
 
   // 单条详情：审批聚合项不含 reason/impact_note/impact_analysis，打开对话框时拉取
   const { data: transferDetail } = useQuery({
-    queryKey: ["transfer-requests", "detail", detailItem?.id],
+    queryKey: queryKeys.transferRequests("detail", detailItem?.id),
     queryFn: () =>
       api.get<TransferRequest>(`/transfer-requests/${detailItem!.id}`),
     enabled: detailItem?.kind === "transfer",
   });
   const { data: deadlineDetail } = useQuery({
-    queryKey: ["deadline-change-requests", "detail", detailItem?.id],
+    queryKey: queryKeys.deadlineChangeRequests("detail", detailItem?.id),
     queryFn: () =>
       api.get<DeadlineChangeRequest>(
         `/deadline-change-requests/${detailItem!.id}`,
@@ -157,22 +158,22 @@ function PendingApprovals() {
   });
   // 开发文档详情：展开时按任务拉取（含 AI 初审建议关联）
   const { data: devDocDetail } = useQuery({
-    queryKey: ["dev-doc", detailItem?.work_item_id],
+    queryKey: queryKeys.devDoc(detailItem?.work_item_id),
     queryFn: () =>
       api.get<DevDoc>(`/work-items/${detailItem!.work_item_id}/dev-doc`),
     enabled: detailItem?.kind === "dev_doc",
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
     // 审批通过后该申请会进入「审批记录」列表，同步失效
-    queryClient.invalidateQueries({ queryKey: ["approvals", "processed"] });
-    queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["dev-doc"] });
-    queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals("processed") });
+    queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deadlineChangeRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.devDoc() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   const decisionForm = useForm<{ decision_note: string }>({
@@ -637,7 +638,7 @@ function PendingApprovals() {
 /** 已处理审批记录（GET /approvals/processed，leader/admin 可见）：按处理时间倒序，只读。 */
 function ProcessedApprovals() {
   const { data: processed, isLoading } = useQuery({
-    queryKey: ["approvals", "processed"],
+    queryKey: queryKeys.approvals("processed"),
     queryFn: () => api.get<ApprovalItem[]>("/approvals/processed"),
   });
 
@@ -745,28 +746,28 @@ function MyRequests() {
   const selfMember = useAuthStore((s) => s.member);
 
   const { data: transfers } = useQuery({
-    queryKey: ["transfer-requests", "mine"],
+    queryKey: queryKeys.transferRequests("mine"),
     queryFn: () =>
       api.get<TransferRequestSummary[]>("/transfer-requests?role=mine"),
   });
 
   const { data: deadlineChanges } = useQuery({
-    queryKey: ["deadline-change-requests", "mine"],
+    queryKey: queryKeys.deadlineChangeRequests("mine"),
     queryFn: () =>
       api.get<DeadlineChangeSummary[]>("/deadline-change-requests?role=mine"),
   });
 
   const { data: deliveries } = useQuery({
-    queryKey: ["deliverables", "mine"],
+    queryKey: queryKeys.deliverables("mine"),
     queryFn: () => api.get<DeliverableListItem[]>("/deliverables?role=mine"),
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["transfer-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["deadline-change-requests"] });
-    queryClient.invalidateQueries({ queryKey: ["deliverables"] });
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deadlineChangeRequests() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deliverables() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   const cancelTransfer = useMutation({

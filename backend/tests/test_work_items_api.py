@@ -22,9 +22,9 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
         "leader": leader,
         "alice": alice,
         "bob": bob,
-        "leader_headers": await auth_headers(client, "leader", LEADER_PW),
-        "alice_headers": await auth_headers(client, "alice", ALICE_PW),
-        "bob_headers": await auth_headers(client, "bob", BOB_PW),
+        "leader_headers": await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id)),
+        "alice_headers": await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id)),
+        "bob_headers": await auth_headers(client, "bob", BOB_PW, project_id=str(project.id)),
     }
 
 

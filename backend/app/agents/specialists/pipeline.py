@@ -24,7 +24,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import pipeline as pipeline_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
@@ -115,12 +115,23 @@ def _stage_parse_error(raw: str) -> str:
 
 async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     """顺序执行 需求分析 → 拆解 → 分配 三段，合并为一条 pipeline 建议。"""
+    project_id = context_project_id(state)
     async with async_session_factory() as session:
-        capability_tags = await TOOL_REGISTRY["list_capability_tags"].func(session)
-        capabilities = await TOOL_REGISTRY["list_member_capabilities"].func(session)
-        workload = await TOOL_REGISTRY["get_member_workload"].func(session)
-        open_work_items = await TOOL_REGISTRY["list_open_work_items"].func(session)
-        assignable = await TOOL_REGISTRY["list_assignable_members"].func(session)
+        capability_tags = await TOOL_REGISTRY["list_capability_tags"].func(
+            session, project_id=project_id
+        )
+        capabilities = await TOOL_REGISTRY["list_member_capabilities"].func(
+            session, project_id=project_id
+        )
+        workload = await TOOL_REGISTRY["get_member_workload"].func(
+            session, project_id=project_id
+        )
+        open_work_items = await TOOL_REGISTRY["list_open_work_items"].func(
+            session, project_id=project_id
+        )
+        assignable = await TOOL_REGISTRY["list_assignable_members"].func(
+            session, project_id=project_id
+        )
 
     context = state.get("context", {})
     project_name = (context.get("project") or {}).get("name") or ""

@@ -105,6 +105,7 @@ async def _make_item_with_doc(leader: ProjectMember, alice: ProjectMember) -> tu
         item = WorkItem(
             title="RAG 工作项",
             description="实现 RAG",
+            project_id=leader.project_id,
             assignee_id=alice.id,
             status="READY",
             acceptance_criteria="评估集准确率 ≥ 80%",
@@ -191,6 +192,7 @@ async def test_dev_doc_review_produces_contract_suggestion(
             run = await request_agent_analysis(
                 session,
                 redis_client,
+                project_id=project.id,
                 agent_type=dev_doc_review.AGENT_TYPE,
                 trigger_source="event",
                 work_item_id=item_id,
@@ -253,6 +255,7 @@ async def test_dev_doc_review_invalid_json_fails_run(
             run = await request_agent_analysis(
                 session,
                 redis_client,
+                project_id=project.id,
                 agent_type=dev_doc_review.AGENT_TYPE,
                 trigger_source="event",
                 work_item_id=item_id,

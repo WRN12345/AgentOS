@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 class StoredFileOut(BaseModel):
     id: uuid.UUID
+    project_id: uuid.UUID
     original_filename: str
     size_bytes: int
     mime_type: str

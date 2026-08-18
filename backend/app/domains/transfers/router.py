@@ -63,10 +63,10 @@ async def create_transfer_request_endpoint(
 )
 async def list_work_item_transfer_requests_endpoint(
     item_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[TransferRequestSummaryOut]:
-    return await list_for_work_item(session, item_id)
+    return await list_for_work_item(session, item_id, project_id=actor.project_id)
 
 
 @router.get("/transfer-requests", response_model=list[TransferRequestSummaryOut])
@@ -81,10 +81,10 @@ async def list_my_transfer_requests_endpoint(
 @router.get("/transfer-requests/{request_id}", response_model=TransferRequestOut)
 async def get_transfer_request_endpoint(
     request_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> TransferRequestOut:
-    return await get_detail(session, request_id)
+    return await get_detail(session, request_id, project_id=actor.project_id)
 
 
 @router.post("/transfer-requests/{request_id}/approve", response_model=TransferRequestOut)

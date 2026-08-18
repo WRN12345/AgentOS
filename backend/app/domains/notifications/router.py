@@ -27,7 +27,12 @@ async def list_notifications_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> NotificationListOut:
     items, unread_count = await list_mine(
-        session, actor.id, unread_only=unread_only, limit=limit, offset=offset
+        session,
+        actor.id,
+        project_id=actor.project_id,
+        unread_only=unread_only,
+        limit=limit,
+        offset=offset,
     )
     return NotificationListOut(items=[to_out(n) for n in items], unread_count=unread_count)
 
@@ -38,4 +43,4 @@ async def mark_read_endpoint(
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> NotificationOut:
-    return to_out(await mark_read(session, actor.id, notification_id))
+    return to_out(await mark_read(session, actor.id, notification_id, project_id=actor.project_id))

@@ -17,6 +17,7 @@ import type {
   TransferRequestSummary,
   WorkItemSummary,
 } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
 
 interface TodoEntry {
   key: string;
@@ -31,7 +32,7 @@ export function TodoSection() {
   const selfMember = useAuthStore((s) => s.member);
 
   const { data: received } = useQuery({
-    queryKey: ["collaboration-requests", "received"],
+    queryKey: queryKeys.collaborationRequests("received"),
     queryFn: () =>
       api.get<CollaborationRequestSummary[]>(
         "/collaboration-requests?role=received",
@@ -39,7 +40,7 @@ export function TodoSection() {
   });
 
   const { data: sent } = useQuery({
-    queryKey: ["collaboration-requests", "sent"],
+    queryKey: queryKeys.collaborationRequests("sent"),
     queryFn: () =>
       api.get<CollaborationRequestSummary[]>(
         "/collaboration-requests?role=sent",
@@ -47,18 +48,18 @@ export function TodoSection() {
   });
 
   const { data: items } = useQuery({
-    queryKey: ["work-items", ""],
+    queryKey: queryKeys.workItems(""),
     queryFn: () => api.get<WorkItemSummary[]>("/work-items"),
   });
 
   const { data: myTransfers } = useQuery({
-    queryKey: ["transfer-requests", "mine"],
+    queryKey: queryKeys.transferRequests("mine"),
     queryFn: () =>
       api.get<TransferRequestSummary[]>("/transfer-requests?role=mine"),
   });
 
   const { data: myDeadlineChanges } = useQuery({
-    queryKey: ["deadline-change-requests", "mine"],
+    queryKey: queryKeys.deadlineChangeRequests("mine"),
     queryFn: () =>
       api.get<DeadlineChangeSummary[]>("/deadline-change-requests?role=mine"),
   });

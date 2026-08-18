@@ -84,6 +84,7 @@ def stub_provider(monkeypatch: pytest.MonkeyPatch) -> StubModelProvider:
 async def _start_run(
     redis_client,
     *,
+    project_id: uuid.UUID,
     agent_type: str = "requirement_analyst",
     prompt: str = "把这份需求整理成结构化建议",
     work_item_id: uuid.UUID | None = None,
@@ -92,6 +93,7 @@ async def _start_run(
         return await request_agent_analysis(
             session,
             redis_client,
+            project_id=project_id,
             agent_type=agent_type,
             prompt=prompt,
             work_item_id=work_item_id,
@@ -181,7 +183,7 @@ async def test_valid_structured_output_succeeds_with_authoritative_fields(
 
     redis_client = create_redis_client()
     try:
-        run = await _start_run(redis_client, work_item_id=uuid.UUID(item["id"]))
+        run = await _start_run(redis_client, project_id=project.id, work_item_id=uuid.UUID(item["id"]))
         await run_agent_once(redis_client, run.id)
 
         final = await _get_run(run.id)
@@ -241,7 +243,7 @@ async def test_schema_invalid_output_fails_run_with_diagnostics(
 
     redis_client = create_redis_client()
     try:
-        run = await _start_run(redis_client, work_item_id=uuid.UUID(item["id"]))
+        run = await _start_run(redis_client, project_id=project.id, work_item_id=uuid.UUID(item["id"]))
         baseline = await _audit_id_snapshot()
         await run_agent_once(redis_client, run.id)
 
@@ -271,7 +273,7 @@ async def test_non_json_output_fails_run_with_json_parse_diagnostics(
 
     redis_client = create_redis_client()
     try:
-        run = await _start_run(redis_client, work_item_id=uuid.UUID(item["id"]))
+        run = await _start_run(redis_client, project_id=project.id, work_item_id=uuid.UUID(item["id"]))
         baseline = await _audit_id_snapshot()
         await run_agent_once(redis_client, run.id)
 
@@ -297,7 +299,7 @@ async def test_json_array_output_fails_run_with_schema_validate(
 
     redis_client = create_redis_client()
     try:
-        run = await _start_run(redis_client)
+        run = await _start_run(redis_client, project_id=project.id)
         baseline = await _audit_id_snapshot()
         await run_agent_once(redis_client, run.id)
 
@@ -338,7 +340,7 @@ async def test_model_failure_marks_run_failed_without_polluting_business_state(
 
     redis_client = create_redis_client()
     try:
-        run = await _start_run(redis_client, work_item_id=uuid.UUID(item["id"]))
+        run = await _start_run(redis_client, project_id=project.id, work_item_id=uuid.UUID(item["id"]))
         baseline = await _audit_id_snapshot()
         await run_agent_once(redis_client, run.id)
 

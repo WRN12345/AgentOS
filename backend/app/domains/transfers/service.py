@@ -25,8 +25,7 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.notifications.service import notify
-from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
-from app.domains.project.service import get_default_project
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.schemas import (
     TransferRequestCreateIn,
@@ -36,7 +35,7 @@ from app.domains.transfers.schemas import (
 from app.domains.transfers.state_machine import TransferStatus, transition
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.schemas import MemberBrief
-from app.domains.work_items.service import get_work_item
+from app.domains.work_items.service import get_work_item, get_work_item_project_id
 from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
@@ -46,12 +45,21 @@ logger = setup_logging("backend")
 
 
 async def get_request(
-    session: AsyncSession, request_id: uuid.UUID, *, for_update: bool = False
+    session: AsyncSession,
+    request_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+    project_id: uuid.UUID | None = None,
 ) -> TransferRequest:
     # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
     # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
     request = await session.get(TransferRequest, request_id, with_for_update=for_update)
     if request is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "转派申请不存在")
+    if project_id is not None and (
+        await get_work_item_project_id(session, request.work_item_id) != project_id
+    ):
+        # 越权 404：项目墙外的申请与不存在等价（spec D3），不泄露存在性信息
         raise ApiException(404, ErrorCodes.NOT_FOUND, "转派申请不存在")
     return request
 
@@ -137,17 +145,19 @@ async def request_to_out(session: AsyncSession, request: TransferRequest) -> Tra
     return _to_out(request, item_titles, briefs)
 
 
-async def get_detail(session: AsyncSession, request_id: uuid.UUID) -> TransferRequestOut:
+async def get_detail(
+    session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
+) -> TransferRequestOut:
     """单条详情（含 reason/impact_note 正文，项目成员可查，原则 6 透明）。"""
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, project_id=project_id)
     return await request_to_out(session, request)
 
 
 async def list_for_work_item(
-    session: AsyncSession, item_id: uuid.UUID
+    session: AsyncSession, item_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> list[TransferRequestSummaryOut]:
     """某工作项的转派申请历史（项目成员可查，原则 6 透明）。"""
-    await get_work_item(session, item_id)  # 工作项不存在 → 404
+    await get_work_item(session, item_id, project_id=project_id)  # 越权 → 404
     requests = list(
         (
             await session.execute(
@@ -164,12 +174,16 @@ async def list_for_work_item(
 
 
 async def list_mine(session: AsyncSession, actor: ProjectMember) -> list[TransferRequestSummaryOut]:
-    """我发起的转派申请（13.2 节）。"""
+    """我发起的转派申请（13.2 节），限定当前项目（spec D2 经工作项推导）。"""
     requests = list(
         (
             await session.execute(
                 select(TransferRequest)
-                .where(TransferRequest.from_member_id == actor.id)
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    TransferRequest.from_member_id == actor.id,
+                    WorkItem.project_id == actor.project_id,
+                )
                 .order_by(TransferRequest.created_at.desc())
             )
         )
@@ -180,19 +194,19 @@ async def list_mine(session: AsyncSession, actor: ProjectMember) -> list[Transfe
     return [_to_summary(r, item_titles, briefs) for r in requests]
 
 
-async def list_pending(session: AsyncSession) -> list[TransferRequest]:
-    """负责人待审批聚合用：全部 PENDING 转派申请（12.6 节）。"""
-    return list(
-        (
-            await session.execute(
-                select(TransferRequest)
-                .where(TransferRequest.status == TransferStatus.PENDING.value)
-                .order_by(TransferRequest.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
+async def list_pending(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[TransferRequest]:
+    """负责人待审批聚合用：当前项目全部 PENDING 转派申请（12.6 节）。"""
+    stmt = (
+        select(TransferRequest)
+        .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+        .where(TransferRequest.status == TransferStatus.PENDING.value)
+        .order_by(TransferRequest.created_at.desc())
     )
+    if project_id is not None:
+        stmt = stmt.where(WorkItem.project_id == project_id)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 # ---------- 内部工具 ----------
@@ -209,16 +223,21 @@ def _check_version(request: TransferRequest, version: int) -> None:
         )
 
 
-async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> ProjectMember:
+async def _get_active_member(
+    session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
+) -> ProjectMember:
     member = await session.get(ProjectMember, member_id)
     if member is None or not member.is_active:
         raise ApiException(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
         )
-    if member.role == ROLE_ADMIN:
-        # 管理员不参与工作协作：不能作为转派目标
+    if member.project_id != project_id:
+        # spec D3：跨项目成员引用 → 400（成员属于其他项目，不能作为本项目接收人）
         raise ApiException(
-            422, ErrorCodes.VALIDATION_ERROR, "管理员不参与工作协作，不能被指派", {"member_id": str(member_id)}
+            400,
+            ErrorCodes.CROSS_PROJECT_REFERENCE,
+            "不能转派给其他项目的成员",
+            {"member_id": str(member_id)},
         )
     return member
 
@@ -226,19 +245,19 @@ async def _get_active_member(session: AsyncSession, member_id: uuid.UUID) -> Pro
 async def _notify_leaders(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     type: str,
     title: str,
     body: str,
     link: str,
     outbox: list[OutgoingEvent] | None = None,
 ) -> None:
-    """通知全体活跃项目负责人（待审批事项）。"""
-    project = await get_default_project(session)
+    """通知指定项目的全体活跃负责人（待审批事项）。"""
     leaders = (
         (
             await session.execute(
                 select(ProjectMember).where(
-                    ProjectMember.project_id == project.id,
+                    ProjectMember.project_id == project_id,
                     ProjectMember.role == ROLE_LEADER,
                     ProjectMember.is_active.is_(True),
                 )
@@ -250,6 +269,7 @@ async def _notify_leaders(
     for leader in leaders:
         await notify(
             session,
+            project_id=project_id,
             recipient_id=leader.id,
             type=type,
             title=title,
@@ -274,12 +294,14 @@ async def create_transfer_request(
     审计 transfer.requested → 通知负责人待审批；commit 后向负责人发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    item = await get_work_item(session, item_id)
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     if item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可发起转派申请")
     if payload.to_member_id == actor.id:
         raise ApiException(422, ErrorCodes.VALIDATION_ERROR, "转派目标不能是发起人自己")
-    to_member = await _get_active_member(session, payload.to_member_id)
+    to_member = await _get_active_member(
+        session, payload.to_member_id, project_id=actor.project_id
+    )
 
     # 同一工作项同时只能存在一个 PENDING（8.3、17.2 节）；唯一部分索引兜底
     pending = (
@@ -334,6 +356,7 @@ async def create_transfer_request(
     )
     await _notify_leaders(
         session,
+        project_id=item.project_id,
         type="transfer.requested",
         title="新的转派申请待审批",
         body=f"{actor.display_name} 申请将工作项「{item.title}」转派给 {to_member.display_name}",
@@ -368,13 +391,13 @@ async def approve_transfer(
     commit 后向新旧负责人发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
     new_status = transition(request.status, "approve")
 
     # 审批时点再校验目标成员仍为活跃成员，避免转给已禁用账号
-    to_member = await _get_active_member(session, request.to_member_id)
-    item = await get_work_item(session, request.work_item_id)
+    to_member = await _get_active_member(session, request.to_member_id, project_id=actor.project_id)
+    item = await get_work_item(session, request.work_item_id, project_id=actor.project_id)
 
     before_assignee = item.assignee_id
     item.assignee_id = to_member.id
@@ -417,6 +440,7 @@ async def approve_transfer(
 
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.from_member_id,
         type="transfer.approved",
         title="转派申请已通过",
@@ -426,6 +450,7 @@ async def approve_transfer(
     )
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=to_member.id,
         type="transfer.approved",
         title="你已成为工作项主执行人",
@@ -450,7 +475,7 @@ async def reject_transfer(
 ) -> TransferRequestOut:
     """负责人驳回：主任务负责人不变化（7.3 节），同事务审计 + 通知发起人；commit 后发布事件。"""
     events: list[OutgoingEvent] = []
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
     new_status = transition(request.status, "reject")
 
@@ -477,6 +502,7 @@ async def reject_transfer(
     ).scalar_one()
     await notify(
         session,
+        project_id=actor.project_id,
         recipient_id=request.from_member_id,
         type="transfer.rejected",
         title="转派申请被驳回",
@@ -498,7 +524,7 @@ async def cancel_transfer(
     version: int,
 ) -> TransferRequestOut:
     """发起人取消自己的 PENDING 申请，同事务审计。"""
-    request = await get_request(session, request_id, for_update=True)
+    request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     if request.from_member_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅转派申请发起人可取消")
     _check_version(request, version)

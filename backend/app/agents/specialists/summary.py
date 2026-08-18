@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import summary as summary_prompts
-from app.agents.specialists.common import build_output, call_model_json
+from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.specialists.risk import split_by_due
 from app.agents.tools import TOOL_REGISTRY
 from app.core.config import settings
@@ -30,12 +30,23 @@ PROMPT_VERSION = "summary_agent.v1"
 
 async def summary_agent_capability(state: "AgentGraphState") -> Any:
     """汇总真实统计数据，产出项目进展摘要。"""
+    project_id = context_project_id(state)
     async with async_session_factory() as session:
-        status_counts = await TOOL_REGISTRY["get_work_item_status_counts"].func(session)
-        completed = await TOOL_REGISTRY["list_recently_completed_work_items"].func(session)
-        pending = await TOOL_REGISTRY["list_pending_approvals"].func(session)
-        open_items = await TOOL_REGISTRY["list_open_work_items"].func(session)
-        blocked_items = await TOOL_REGISTRY["list_blocked_items"].func(session)
+        status_counts = await TOOL_REGISTRY["get_work_item_status_counts"].func(
+            session, project_id=project_id
+        )
+        completed = await TOOL_REGISTRY["list_recently_completed_work_items"].func(
+            session, project_id=project_id
+        )
+        pending = await TOOL_REGISTRY["list_pending_approvals"].func(
+            session, project_id=project_id
+        )
+        open_items = await TOOL_REGISTRY["list_open_work_items"].func(
+            session, project_id=project_id
+        )
+        blocked_items = await TOOL_REGISTRY["list_blocked_items"].func(
+            session, project_id=project_id
+        )
 
     now = datetime.now(UTC)
     overdue, _ = split_by_due(

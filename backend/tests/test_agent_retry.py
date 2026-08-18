@@ -123,7 +123,11 @@ async def test_model_timeout_retries_with_backoff_then_fails(
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
             run = await request_agent_analysis(
-                session, redis_client, agent_type="echo", prompt="重试我"
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="重试我",
             )
         # 初始投递的任务取回 payload（后续重投沿用同一 payload）
         first = await dequeue(redis_client, timeout=2)
@@ -178,7 +182,9 @@ async def test_validation_error_is_not_retried(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
 
         await handle_task(_run_task(run.id), redis_client)
 
@@ -217,7 +223,9 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            failed_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            failed_run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
 
         # 1) Agent 任务失败被捕获（safe_handle_task 不向上抛）
         await safe_handle_task(_run_task(failed_run.id), redis_client)
@@ -233,7 +241,9 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
 
         # 3) 后续任务照常处理：新的 Agent 运行成功，其他类型任务正常消费
         async with async_session_factory() as session:
-            ok_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            ok_run = await request_agent_analysis(
+                session, redis_client, project_id=project.id, agent_type="echo"
+            )
         await safe_handle_task(_run_task(ok_run.id), redis_client)
         assert (await _get_run(ok_run.id)).status == "succeeded"
         await safe_handle_task(
@@ -242,7 +252,7 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
         )
 
         # 4) 模型不可用期间，核心流程（登录、建工作项）全部可用
-        headers = await auth_headers(client, "leader", LEADER_PW)
+        headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         created = await client.post(
             "/api/v1/work-items",
             json={"title": "模型下线期间的工作项", "description": "核心业务不受影响", "assignee_id": str(leader.id)},
@@ -259,14 +269,22 @@ async def test_worker_survives_agent_failure_and_core_flows_unaffected(
 
 
 async def _make_failed_run(
-    redis_client, work_item_id: uuid.UUID | None, prompt: str = ""  # noqa: ANN001
+    redis_client,  # noqa: ANN001
+    work_item_id: uuid.UUID | None,
+    prompt: str = "",
+    *,
+    project_id: uuid.UUID | None,
 ) -> AgentRun:
-    """建 run 并让其直接终态 failed（max_retries=0 + echo 不可用）。"""
+    """建 run 并让其直接终态 failed（max_retries=0 + echo 不可用）。
+
+    ticket 05：run 必须带项目归属，否则重试端点按项目过滤时视为不存在。
+    """
     async with async_session_factory() as session:
         run = await request_agent_analysis(
             session,
             redis_client,
             agent_type="echo",
+            project_id=project_id,
             work_item_id=work_item_id,
             prompt=prompt,
         )
@@ -293,15 +311,18 @@ async def test_manual_retry_failed_run_succeeds(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            item = WorkItem(title="RAG 工作项", description="d", assignee_id=leader.id, status="READY")
+            item = WorkItem(title="RAG 工作项", description="d", project_id=leader.project_id,
+                            assignee_id=leader.id, status="READY")
             item.collaborators = []
             session.add(item)
             await session.commit()
             item_id = item.id
 
-        run = await _make_failed_run(redis_client, item_id, prompt="做一个 RAG 问答")
+        run = await _make_failed_run(
+            redis_client, item_id, prompt="做一个 RAG 问答", project_id=project.id
+        )
 
-        headers = await auth_headers(client, "leader", LEADER_PW)
+        headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
         resp = await client.post(f"/api/v1/agent-runs/{run.id}/retry", headers=headers)
         assert resp.status_code == 202, resp.text
         assert resp.json()["status"] == "pending"
@@ -358,20 +379,25 @@ async def test_manual_retry_permissions_and_status(
     try:
         await _clean_queues(redis_client)
         async with async_session_factory() as session:
-            item = WorkItem(title="RAG 工作项", description="d", assignee_id=alice.id, status="READY")
+            item = WorkItem(title="RAG 工作项", description="d", project_id=alice.project_id,
+                            assignee_id=alice.id, status="READY")
             item.collaborators = []
             session.add(item)
             await session.commit()
             item_id = item.id
 
-        failed_run = await _make_failed_run(redis_client, item_id)
-        project_run = await _make_failed_run(redis_client, None)  # 项目级 run（无工作项）
+        failed_run = await _make_failed_run(redis_client, item_id, project_id=project.id)
+        project_run = await _make_failed_run(
+            redis_client, None, project_id=project.id
+        )  # 项目级 run（无工作项），归属显式指定
         async with async_session_factory() as session:
-            pending_run = await request_agent_analysis(session, redis_client, agent_type="echo")
+            pending_run = await request_agent_analysis(
+                session, redis_client, agent_type="echo", project_id=project.id
+            )
 
-        leader_headers = await auth_headers(client, "leader", LEADER_PW)
-        alice_headers = await auth_headers(client, "alice", ALICE_PW)
-        bob_headers = await auth_headers(client, "bob", BOB_PW)
+        leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
+        alice_headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+        bob_headers = await auth_headers(client, "bob", BOB_PW, project_id=str(project.id))
 
         # 相关成员（主执行人 alice）→ 202
         resp = await client.post(f"/api/v1/agent-runs/{failed_run.id}/retry", headers=alice_headers)

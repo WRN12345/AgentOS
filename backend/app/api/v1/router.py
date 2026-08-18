@@ -11,6 +11,7 @@ from app.agents.schemas.suggestions import AgentConfigOut
 from app.core.config import settings
 from app.core.idempotency import idempotency_guard
 from app.core.logging import setup_logging
+from app.domains.admin.router import router as admin_router
 from app.domains.approvals.router import router as approvals_router
 from app.domains.audit.router import router as audit_router
 from app.domains.collaboration.router import router as collaboration_router
@@ -18,6 +19,8 @@ from app.domains.deadlines.router import router as deadlines_router
 from app.domains.deliverables.router import router as deliverables_router
 from app.domains.dev_docs.router import router as dev_docs_router
 from app.domains.files.router import router as files_router
+from app.domains.identity.dependencies import get_current_user
+from app.domains.identity.models import User
 from app.domains.identity.router import router as auth_router
 from app.domains.notifications.router import router as notifications_router
 from app.domains.notifications.stream import router as events_router
@@ -34,6 +37,7 @@ logger = setup_logging("backend")
 
 router = APIRouter()
 
+router.include_router(admin_router)
 router.include_router(auth_router)
 router.include_router(audit_router)
 router.include_router(members_router)
@@ -57,12 +61,15 @@ async def v1_root() -> dict[str, str]:
 
 
 @router.get("/config", response_model=AgentConfigOut)
-async def get_config(_: ProjectMember = Depends(get_current_member)) -> AgentConfigOut:
+async def get_config(_: User = Depends(get_current_user)) -> AgentConfigOut:
     """前端可用的运行配置（T5.7，16 节）。
 
     仅暴露当前模型 Provider 是否为外部（云端）服务等非敏感标识；
     API Key、连接串等敏感配置不下发。前端据此在建议中心提示
     "数据将发送至外部服务"。
+
+    使用 get_current_user（不含项目成员校验），因为 admin 全局化后
+    全局管理员没有项目成员身份，但仍需获取前端配置。
     """
     return AgentConfigOut(
         llm_provider=settings.llm_provider,

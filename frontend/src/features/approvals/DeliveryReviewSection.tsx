@@ -46,6 +46,7 @@ import {
   REVIEW_DECISION_META,
 } from "../deliverables/constants";
 import { DeliverableBody } from "../deliverables/DeliverableBody";
+import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * 审批中心"交付审核"区（13.1 节，仅负责人）：列出 IN_REVIEW 工作项，
@@ -56,7 +57,7 @@ export function DeliveryReviewSection() {
   const [target, setTarget] = useState<WorkItemSummary | null>(null);
 
   const { data: items, isLoading } = useQuery({
-    queryKey: ["work-items", "status=IN_REVIEW"],
+    queryKey: queryKeys.workItems("status=IN_REVIEW"),
     queryFn: () => api.get<WorkItemSummary[]>("/work-items?status=IN_REVIEW"),
   });
 
@@ -105,7 +106,7 @@ function ReviewCard({
   onReview: () => void;
 }) {
   const { data: deliverables } = useQuery({
-    queryKey: ["deliverables", item.id],
+    queryKey: queryKeys.deliverables(item.id),
     queryFn: () =>
       api.get<Deliverable[]>(`/work-items/${item.id}/deliverables`),
   });
@@ -165,13 +166,13 @@ function ReviewDialog({
   const [fieldError, setFieldError] = useState<string | null>(null);
 
   const { data: deliverables } = useQuery({
-    queryKey: ["deliverables", item.id],
+    queryKey: queryKeys.deliverables(item.id),
     queryFn: () =>
       api.get<Deliverable[]>(`/work-items/${item.id}/deliverables`),
   });
 
   const { data: reviews } = useQuery({
-    queryKey: ["reviews", item.id],
+    queryKey: queryKeys.reviews(item.id),
     queryFn: () => api.get<Review[]>(`/work-items/${item.id}/reviews`),
   });
 
@@ -187,11 +188,11 @@ function ReviewDialog({
   };
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
-    queryClient.invalidateQueries({ queryKey: ["deliverables"] });
-    queryClient.invalidateQueries({ queryKey: ["reviews"] });
-    queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deliverables() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.reviews() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   };
 
   const review = useMutation({

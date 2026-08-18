@@ -41,10 +41,10 @@ router = APIRouter(tags=["dev_docs"])
 @router.get("/work-items/{item_id}/dev-doc", response_model=DevDocOut)
 async def get_dev_doc_endpoint(
     item_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> DevDocOut:
-    return await get_dev_doc_for_work_item(session, item_id)
+    return await get_dev_doc_for_work_item(session, actor, item_id)
 
 
 @router.put("/work-items/{item_id}/dev-doc", response_model=DevDocOut)

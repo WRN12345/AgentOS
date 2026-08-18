@@ -8,9 +8,9 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-MemberRole = Literal["leader", "member", "admin"]
+MemberRole = Literal["leader", "member"]
 
 
 class CapabilityIn(BaseModel):
@@ -47,27 +47,42 @@ class MemberOut(BaseModel):
 
 
 class MemberCreateIn(BaseModel):
-    """负责人/管理员创建成员：同时生成登录账号（16 节，不开放公开注册）。"""
+    """负责人添加已有账号成员（16 节，不开放公开注册；建号收敛到 admin）。
 
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8, max_length=128)
-    display_name: str = Field(min_length=1, max_length=64)
-    role: MemberRole = "member"
+    2026-08-17 规则调整：
+    - 账号创建由全局管理员负责（admin 控制台建号）；
+    - 项目负责人仅「添加已有账号」：按 username（全局唯一）或 user_id 解析已有账号加入本项目，
+      不建号、无初始密码，固定为「成员」角色；
+    - 每项目仅一名负责人，由 admin 指定/变更，成员接口不再提供角色字段。
+    不接受传入 project_id。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: uuid.UUID | None = None
+    username: str | None = Field(default=None, min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)
     weekly_available_hours: float | None = Field(default=None, ge=0, le=168)
     git_username: str | None = Field(default=None, max_length=64)
 
-
-class MemberCreatedOut(MemberOut):
-    """创建响应：初始密码仅此一次返回。"""
-
-    initial_password: str
+    @model_validator(mode="after")
+    def _validate_identity(self) -> "MemberCreateIn":
+        # 添加已有账号：username（全局唯一）或 user_id 须且仅须提供其一
+        if (self.user_id is None) == (self.username is None):
+            raise ValueError("添加已有账号须且仅须提供 username 或 user_id 之一")
+        return self
 
 
 class MemberUpdateIn(BaseModel):
-    """负责人维护成员资料 / 禁用启用。未提供的字段保持不变。"""
+    """负责人维护成员资料 / 禁用启用。未提供的字段保持不变。
+
+    2026-08-17 规则调整：每项目仅一名负责人、由 admin 指定/变更，本接口不再提供 role 字段；
+    负责人可维护本项目内任何成员（含负责人本人资料）。不接受传入 project_id。
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
-    role: MemberRole | None = None
     weekly_available_hours: float | None = Field(default=None, ge=0, le=168)
     git_username: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None

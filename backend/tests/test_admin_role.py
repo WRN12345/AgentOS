@@ -1,19 +1,17 @@
-"""管理员角色（admin）权限矩阵集成测试。
+"""管理员全局化后的权限矩阵测试。
 
-admin 定位：领导用的"查看 + 账号管理"角色——
-- 可读全部页面数据（成员/工作项/审批列表/审计/通知/Agent 建议与运行记录）；
-- 与 leader 同权管理成员账号（创建/编辑/禁用/能力确认）；
-- 不做业务写操作（建工作项/审批/审核/发起协作/提交交付/建议反馈一律 403）；
-- 不可被指派（工作项主执行人/协作者、转派目标、协作接收人 → 422，
-  文案"管理员不参与工作协作，不能被指派"）。
+admin 升级为全局角色（users.is_admin）：
+- 不属于任何项目，无 project_members 记录；
+- 可访问无需项目上下文的端点（config、audit、me）；
+- 不可访问项目内业务端点（403 NOT_PROJECT_MEMBER）；
+- 不可被指派（admin 没有成员身份，传入不存在的 member_id → 422）。
 """
-
 import uuid
 
 import httpx
 
 from app.domains.project.models import Project, ProjectMember
-from tests.conftest import add_member, auth_headers
+from tests.conftest import add_member, auth_headers, create_admin_user
 
 LEADER_PW = "Leader123!"
 ADMIN_PW = "Admin123!"
@@ -22,19 +20,24 @@ BOB_PW = "Bob123!"
 
 
 async def _make_ctx(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """标准场景：leader + admin + alice/bob 两名普通成员及各自请求头。"""
+    """标准场景：leader + alice/bob 两名普通成员 + 全局 admin（is_admin，无 member 记录）。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
-    _, admin = await add_member(project, "admin", ADMIN_PW, role="admin", display_name="管理员")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
+    admin_user = await create_admin_user("admin", ADMIN_PW)
+
     return {
         "leader": leader,
-        "admin": admin,
+        "admin_user": admin_user,
         "alice": alice,
         "bob": bob,
-        "leader_headers": await auth_headers(client, "leader", LEADER_PW),
+        "leader_headers": await auth_headers(
+            client, "leader", LEADER_PW, project_id=str(project.id)
+        ),
         "admin_headers": await auth_headers(client, "admin", ADMIN_PW),
-        "alice_headers": await auth_headers(client, "alice", ALICE_PW),
+        "alice_headers": await auth_headers(
+            client, "alice", ALICE_PW, project_id=str(project.id)
+        ),
     }
 
 
@@ -57,470 +60,197 @@ async def _create_work_item(
     return resp.json()
 
 
-# ---------- 成员账号管理：admin 与 leader 同权 ----------
+# ---------- admin 无法访问项目内业务接口 ----------
 
 
-async def test_admin_can_manage_member_accounts(
+async def test_admin_cannot_access_project_endpoints(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """admin 可创建/编辑/禁用成员、维护并确认能力（与 leader 同权）。"""
+    """全局 admin 没有项目成员身份，访问 /members 等业务接口 → 403。"""
     ctx = await _make_ctx(client, project)
     admin_headers = ctx["admin_headers"]
     assert isinstance(admin_headers, dict)
 
-    # 创建成员 → 201，初始密码仅返回一次
-    created = await client.post(
-        "/api/v1/members",
-        json={
-            "username": "carol",
-            "password": "Carol123!",
-            "display_name": "卡罗尔",
-            "role": "member",
-        },
-        headers=admin_headers,
-    )
-    assert created.status_code == 201, created.text
-    carol = created.json()
-    assert carol["initial_password"] == "Carol123!"
-
-    # 编辑资料 → 200
-    patched = await client.patch(
-        f"/api/v1/members/{carol['id']}",
-        json={"display_name": "卡罗尔·陈", "weekly_available_hours": 20},
-        headers=admin_headers,
-    )
-    assert patched.status_code == 200, patched.text
-    assert patched.json()["display_name"] == "卡罗尔·陈"
-
-    # 维护能力并确认 → 200，confirmed 翻转
-    caps = await client.put(
-        f"/api/v1/members/{carol['id']}/capabilities",
-        json={"capabilities": [{"tag": "RAG", "proficiency": 4}], "confirm": True},
-        headers=admin_headers,
-    )
-    assert caps.status_code == 200, caps.text
-    assert caps.json()["capabilities"][0]["confirmed"] is True
-
-    # 禁用 → 200，账号立即无法登录
-    disabled = await client.patch(
-        f"/api/v1/members/{carol['id']}", json={"is_active": False}, headers=admin_headers
-    )
-    assert disabled.status_code == 200, disabled.text
-    login = await client.post(
-        "/api/v1/auth/login", json={"username": "carol", "password": "Carol123!"}
-    )
-    assert login.status_code == 403
-    assert login.json()["code"] == "USER_DISABLED"
-
-
-async def test_admin_disable_self_follows_leader_rules(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """admin 停用自己与现有 leader 规则对齐（允许），停用后账号无法登录。"""
-    ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
-    admin_headers = ctx["admin_headers"]
-    assert isinstance(admin_headers, dict)
-
-    resp = await client.patch(
-        f"/api/v1/members/{admin.id}", json={"is_active": False}, headers=admin_headers
-    )
-    assert resp.status_code == 200, resp.text
-    login = await client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": ADMIN_PW}
-    )
-    assert login.status_code == 403
-
-
-# ---------- 管理员账号保护：负责人/成员不能对管理员进行操作 ----------
-
-
-async def test_member_list_hides_admin_from_non_admin(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """GET /members：leader/成员的列表不含 admin；admin 可见所有人。"""
-    ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
-    leader_headers = ctx["leader_headers"]
-    alice_headers = ctx["alice_headers"]
-    admin_headers = ctx["admin_headers"]
-    assert isinstance(leader_headers, dict)
-    assert isinstance(alice_headers, dict)
-    assert isinstance(admin_headers, dict)
-
-    for headers in (leader_headers, alice_headers):
-        resp = await client.get("/api/v1/members", headers=headers)
-        assert resp.status_code == 200, resp.text
-        roles = {m["role"] for m in resp.json()}
-        assert "admin" not in roles
-        assert all(m["id"] != str(admin.id) for m in resp.json())
-
+    # admin 没有项目上下文 → 400（MISSING_PROJECT_ID）
     resp = await client.get("/api/v1/members", headers=admin_headers)
-    assert resp.status_code == 200, resp.text
-    assert any(m["id"] == str(admin.id) for m in resp.json())
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "MISSING_PROJECT_ID"
 
 
-async def test_leader_cannot_update_admin(
+async def test_admin_write_business_requires_project_context(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """leader 编辑/降级/禁用 admin → 403。"""
+    """admin 没有项目成员身份，无法写业务数据 — 缺失 X-Project-Id 即 400。"""
     ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
-    leader_headers = ctx["leader_headers"]
-    assert isinstance(leader_headers, dict)
-
-    for payload in (
-        {"display_name": "被改名"},
-        {"role": "member"},
-        {"is_active": False},
-    ):
-        resp = await client.patch(
-            f"/api/v1/members/{admin.id}", json=payload, headers=leader_headers
-        )
-        assert resp.status_code == 403, (payload, resp.text)
-        assert "管理员" in resp.json()["message"]
-
-
-async def test_leader_cannot_maintain_admin_capabilities(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """leader 维护/确认 admin 的能力 → 403。"""
-    ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
-    leader_headers = ctx["leader_headers"]
-    assert isinstance(leader_headers, dict)
-
-    resp = await client.put(
-        f"/api/v1/members/{admin.id}/capabilities",
-        json={"capabilities": [{"tag": "RAG", "proficiency": 3}], "confirm": True},
-        headers=leader_headers,
-    )
-    assert resp.status_code == 403, resp.text
-    assert "管理员" in resp.json()["message"]
-
-
-async def test_member_cannot_update_admin(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """普通成员对 admin 的任何管理操作 → 403。"""
-    ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
-    alice_headers = ctx["alice_headers"]
-    assert isinstance(alice_headers, dict)
-
-    resp = await client.patch(
-        f"/api/v1/members/{admin.id}", json={"is_active": False}, headers=alice_headers
-    )
-    assert resp.status_code == 403, resp.text
-
-
-async def test_admin_can_operate_other_admin(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """admin 之间可以互相操作（编辑资料 → 200）。"""
-    ctx = await _make_ctx(client, project)
-    _, admin2 = await add_member(project, "admin2", ADMIN_PW, role="admin", display_name="管理员二")
     admin_headers = ctx["admin_headers"]
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     assert isinstance(admin_headers, dict)
 
-    resp = await client.patch(
-        f"/api/v1/members/{admin2.id}", json={"display_name": "管理员二号"}, headers=admin_headers
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["display_name"] == "管理员二号"
-
-
-async def test_admin_read_access(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """admin 可读成员/工作项/审批列表/审计/通知/Agent 建议与运行记录。"""
-    ctx = await _make_ctx(client, project)
-    admin_headers = ctx["admin_headers"]
-    leader_headers = ctx["leader_headers"]
-    alice_headers = ctx["alice_headers"]
-    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
-    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
-    assert isinstance(admin_headers, dict) and isinstance(leader_headers, dict)
-
-    # 造一条待审批数据：alice 对自己的工作项发起转派（PENDING）
-    item = await _create_work_item(client, leader_headers, alice.id)  # type: ignore[arg-type]
-    transfer = await client.post(
-        f"/api/v1/work-items/{item['id']}/transfer-requests",
-        json={
-            "to_member_id": str(bob.id),
-            "reason": "超出我的能力范围",
-            "impact_note": "DDL 不变",
-        },
-        headers=alice_headers,  # type: ignore[arg-type]
-    )
-    assert transfer.status_code == 201, transfer.text
-
-    # 各只读列表一律 200
-    for path in (
-        "/api/v1/members",
-        "/api/v1/work-items",
-        "/api/v1/audit-events",
-        "/api/v1/notifications",
-        "/api/v1/agent-suggestions",
-        "/api/v1/agent-runs",
-    ):
-        resp = await client.get(path, headers=admin_headers)
-        assert resp.status_code == 200, f"GET {path} 应 200，实际 {resp.status_code}"
-
-    # GET /approvals：admin 与 leader 一样能看到待审批数据（只读）
-    approvals = await client.get("/api/v1/approvals", headers=admin_headers)
-    assert approvals.status_code == 200
-    assert any(a["id"] == transfer.json()["id"] for a in approvals.json())
-    # 普通成员仍返回空列表（不 403，T3.5 语义不变）
-    member_approvals = await client.get("/api/v1/approvals", headers=alice_headers)  # type: ignore[arg-type]
-    assert member_approvals.status_code == 200
-    assert member_approvals.json() == []
-
-
-# ---------- 业务写操作：admin 一律 403 ----------
-
-
-async def test_admin_cannot_write_business(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """admin 建工作项/命令/审批/审核/发起协作/提交交付/写建议反馈 → 403。"""
-    ctx = await _make_ctx(client, project)
-    admin_headers = ctx["admin_headers"]
-    leader_headers = ctx["leader_headers"]
-    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
-    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
-    assert isinstance(admin_headers, dict) and isinstance(leader_headers, dict)
-
-    item = await _create_work_item(client, leader_headers, alice.id)
-
-    # 创建/编辑工作项 → 403
+    # 建工作项 → 400（缺失项目上下文）
     created = await client.post(
         "/api/v1/work-items",
         json={"title": "越权工作项", "priority": "low", "assignee_id": str(alice.id)},
         headers=admin_headers,
     )
-    assert created.status_code == 403
-    patched = await client.patch(
-        f"/api/v1/work-items/{item['id']}",
-        json={"version": item["version"], "title": "越权修改"},
-        headers=admin_headers,
-    )
-    assert patched.status_code == 403
-
-    # 状态命令（publish 为 leader 专属）→ 403
-    published = await client.post(
-        f"/api/v1/work-items/{item['id']}/publish",
-        json={"version": item["version"]},
-        headers=admin_headers,
-    )
-    assert published.status_code == 403
-
-    # 审批（转派）→ 403：先由 alice 发起一条 PENDING 转派
-    transfer = await client.post(
-        f"/api/v1/work-items/{item['id']}/transfer-requests",
-        json={"to_member_id": str(bob.id), "reason": "r", "impact_note": "i"},
-        headers=ctx["alice_headers"],  # type: ignore[arg-type]
-    )
-    assert transfer.status_code == 201, transfer.text
-    approved = await client.post(
-        f"/api/v1/transfer-requests/{transfer.json()['id']}/approve",
-        json={"version": transfer.json()["version"]},
-        headers=admin_headers,
-    )
-    assert approved.status_code == 403
-
-    # DDL 变更审批（leader 专属路由）→ 403
-    ddl = await client.post(
-        f"/api/v1/work-items/{item['id']}/deadline-change-requests",
-        json={
-            "target_type": "work_item",
-            "target_id": item["id"],
-            "new_due_at": "2026-09-01T00:00:00Z",
-            "reason": "依赖方延期",
-        },
-        headers=admin_headers,
-    )
-    assert ddl.status_code == 403
-
-    # 审核交付物 → 403
-    reviewed = await client.post(
-        f"/api/v1/work-items/{item['id']}/reviews",
-        json={"deliverable_id": str(uuid.uuid4()), "decision": "approve"},
-        headers=admin_headers,
-    )
-    assert reviewed.status_code == 403
-
-    # 发起协作（admin 不是主执行人）→ 403
-    collab = await client.post(
-        f"/api/v1/work-items/{item['id']}/collaboration-requests",
-        json={"assignee_id": str(bob.id), "title": "协作", "goal": "目标"},
-        headers=admin_headers,
-    )
-    assert collab.status_code == 403
-
-    # 提交交付物（admin 不是主执行人）→ 403
-    deliverable = await client.post(
-        f"/api/v1/work-items/{item['id']}/deliverables",
-        json={"type": "text", "content": "越权交付"},
-        headers=admin_headers,
-    )
-    assert deliverable.status_code == 403
-
-    # Agent 建议反馈（leader 专属路由）→ 403
-    feedback = await client.post(
-        f"/api/v1/agent-suggestions/{uuid.uuid4()}/feedback",
-        json={"action": "accepted"},
-        headers=admin_headers,
-    )
-    assert feedback.status_code == 403
-
-    # 普通成员管理操作仍 403（leader 语义不变的对照）
-    member_create = await client.post(
-        "/api/v1/members",
-        json={"username": "dave", "password": "Dave123!", "display_name": "戴夫"},
-        headers=ctx["alice_headers"],  # type: ignore[arg-type]
-    )
-    assert member_create.status_code == 403
+    assert created.status_code == 400
 
 
-# ---------- 不可被指派：assignee 为 admin → 422 ----------
+# ---------- admin 可访问无项目上下文的管理端点 ----------
 
 
-async def test_admin_cannot_be_assigned(
+async def test_admin_read_access_without_project(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """创建工作项/编辑/协作者/转派/协作的目标为 admin 成员时 → 422。"""
+    """admin 可读 config/me/audit-events（这些端点不依赖项目成员身份）。"""
     ctx = await _make_ctx(client, project)
-    admin: ProjectMember = ctx["admin"]  # type: ignore[assignment]
+    admin_headers = ctx["admin_headers"]
+    assert isinstance(admin_headers, dict)
+
+    # /config 使用 get_current_user
+    resp = await client.get("/api/v1/config", headers=admin_headers)
+    assert resp.status_code == 200
+
+    # /me 使用 get_current_user
+    resp = await client.get("/api/v1/auth/me", headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is True
+
+    # /audit-events 使用 get_current_leader_or_admin（admin 分支放行）
+    resp = await client.get("/api/v1/audit-events", headers=admin_headers)
+    assert resp.status_code == 200
+
+
+# ---------- admin 不可被指派（没有成员记录） ----------
+
+
+async def test_admin_cannot_be_assigned_no_member_record(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """admin 没有 project_members 记录，指派到不存在的 member_id → 422。"""
+    ctx = await _make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    # 造一个不存在的 UUID（模拟 admin 没有 member_id 的场景）
+    fake_member_id = uuid.uuid4()
+
+    created = await client.post(
+        "/api/v1/work-items",
+        json={"title": "指派不存在成员", "priority": "low", "assignee_id": str(fake_member_id)},
+        headers=leader_headers,
+    )
+    assert created.status_code == 422, created.text
+    assert "成员不存在" in created.json()["message"]
+
+
+# ---------- 成员列表不含 admin（admin 无记录） ----------
+
+
+async def test_member_list_does_not_contain_admin(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """全局 admin 没有 project_members 记录，成员列表自然不含 admin。"""
+    ctx = await _make_ctx(client, project)
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    resp = await client.get("/api/v1/members", headers=leader_headers)
+    assert resp.status_code == 200, resp.text
+    members = resp.json()
+    # 只有 leader、alice、bob，没有 admin
+    usernames = {m["username"] for m in members}
+    assert "admin" not in usernames
+    assert usernames >= {"leader", "alice", "bob"}
+
+
+# ---------- 成员账号管理：仅 leader 可操作 ----------
+
+
+async def test_only_leader_can_add_member(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """普通成员不能添加成员 → 403；leader 可添加已有账号 → 201。"""
+    ctx = await _make_ctx(client, project)
     leader_headers = ctx["leader_headers"]
     alice_headers = ctx["alice_headers"]
     assert isinstance(leader_headers, dict) and isinstance(alice_headers, dict)
 
-    # 创建工作项：主执行人 = admin → 422
-    created = await client.post(
-        "/api/v1/work-items",
-        json={"title": "指派管理员", "priority": "low", "assignee_id": str(admin.id)},
-        headers=leader_headers,
-    )
-    assert created.status_code == 422, created.text
-    assert "管理员不参与工作协作" in created.json()["message"]
+    # carol 是已有全局账号（无成员记录，建号收敛到 admin）
+    from app.domains.identity.service import create_user
+    from app.infrastructure.database.engine import async_session_factory
 
-    # 创建工作项：协作者含 admin → 422
-    with_collab = await client.post(
-        "/api/v1/work-items",
-        json={
-            "title": "协作指派管理员",
-            "priority": "low",
-            "assignee_id": str(alice.id),
-            "collaborator_ids": [str(admin.id)],
-        },
-        headers=leader_headers,
-    )
-    assert with_collab.status_code == 422, with_collab.text
-    assert "管理员不参与工作协作" in with_collab.json()["message"]
+    async with async_session_factory() as session:
+        await create_user(session, "carol", "Carol123!")
+        await session.commit()
 
-    # 编辑工作项：改派主执行人为 admin → 422
-    item = await _create_work_item(client, leader_headers, alice.id)
-    patched = await client.patch(
-        f"/api/v1/work-items/{item['id']}",
-        json={"version": item["version"], "assignee_id": str(admin.id)},
-        headers=leader_headers,
-    )
-    assert patched.status_code == 422, patched.text
-    assert "管理员不参与工作协作" in patched.json()["message"]
+    payload = {"username": "carol"}
 
-    # 转派目标 = admin → 422
-    transfer = await client.post(
-        f"/api/v1/work-items/{item['id']}/transfer-requests",
-        json={"to_member_id": str(admin.id), "reason": "r", "impact_note": "i"},
-        headers=alice_headers,
-    )
-    assert transfer.status_code == 422, transfer.text
-    assert "管理员不参与工作协作" in transfer.json()["message"]
+    # 普通成员 → 403
+    resp = await client.post("/api/v1/members", json=payload, headers=alice_headers)
+    assert resp.status_code == 403
 
-    # 协作接收人 = admin → 422
-    collab = await client.post(
-        f"/api/v1/work-items/{item['id']}/collaboration-requests",
-        json={"assignee_id": str(admin.id), "title": "协作", "goal": "目标"},
-        headers=alice_headers,
-    )
-    assert collab.status_code == 422, collab.text
-    assert "管理员不参与工作协作" in collab.json()["message"]
+    # leader → 201
+    resp = await client.post("/api/v1/members", json=payload, headers=leader_headers)
+    assert resp.status_code == 201, resp.text
 
 
-# ---------- 改角色守卫：有在办协作的成员不能转为管理员 ----------
-
-
-async def test_member_with_active_work_cannot_become_admin(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """成员名下有活跃工作项时，role 改为 admin → 422，提示先办结或转派。"""
-    ctx = await _make_ctx(client, project)
-    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
-    leader_headers = ctx["leader_headers"]
-    assert isinstance(leader_headers, dict)
-
-    item = await _create_work_item(client, leader_headers, alice.id)
-    published = await client.post(
-        f"/api/v1/work-items/{item['id']}/publish",
-        json={"version": item["version"]},
-        headers=leader_headers,
-    )
-    assert published.status_code == 200, published.text
-
-    patched = await client.patch(
-        f"/api/v1/members/{alice.id}", json={"role": "admin"}, headers=leader_headers
-    )
-    assert patched.status_code == 422, patched.text
-    assert "管理员" in patched.json()["message"]
-
-
-async def test_member_without_active_work_can_become_admin(
-    client: httpx.AsyncClient, project: Project
-) -> None:
-    """无在办协作的成员可正常转为 admin；DRAFT 工作项不算在办（未发布不阻塞）。"""
-    ctx = await _make_ctx(client, project)
-    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
-    bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
-    leader_headers = ctx["leader_headers"]
-    assert isinstance(leader_headers, dict)
-
-    # alice 只有一个 DRAFT 工作项（未发布，不计入活跃负载）
-    await _create_work_item(client, leader_headers, alice.id)
-
-    for member in (alice, bob):
-        patched = await client.patch(
-            f"/api/v1/members/{member.id}", json={"role": "admin"}, headers=leader_headers
-        )
-        assert patched.status_code == 200, patched.text
-        assert patched.json()["role"] == "admin"
-
-
-# ---------- Agent 分配建议数据源：不含 admin ----------
+# ---------- Agent 分配建议数据源：自动不含 admin ----------
 
 
 async def test_agent_tools_exclude_admin(project: Project) -> None:
-    """list_member_capabilities / get_member_workload 不返回 admin（分配建议不会推荐管理员）。"""
+    """admin 没有 project_members 记录，Agent 工具自然不返回 admin。"""
     from app.agents.tools import get_member_workload, list_member_capabilities
     from app.domains.project.models import MemberCapability
     from app.infrastructure.database.engine import async_session_factory
 
-    _, admin = await add_member(project, "admin", ADMIN_PW, role="admin", display_name="管理员")
+    # 仅创建普通成员（不创建 admin 成员记录）
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
+    await create_admin_user("admin", ADMIN_PW)  # 无 member 记录
 
     async with async_session_factory() as session:
-        session.add(MemberCapability(member_id=admin.id, tag="RAG", proficiency=5))
         session.add(MemberCapability(member_id=alice.id, tag="RAG", proficiency=3))
         await session.commit()
 
     async with async_session_factory() as session:
-        caps = await list_member_capabilities(session)
-        workload = await get_member_workload(session)
+        caps = await list_member_capabilities(session, project_id=project.id)
+        workload = await get_member_workload(session, project_id=project.id)
 
-    admin_id = str(admin.id)
     alice_id = str(alice.id)
-    assert all(c["member_id"] != admin_id for c in caps)
-    assert any(c["member_id"] == alice_id for c in caps)
-    assert all(w["member_id"] != admin_id for w in workload)
-    assert any(w["member_id"] == alice_id for w in workload)
+    # admin 没有 member 记录，工具自然不返回
+    assert all(c["member_id"] == alice_id for c in caps)
+    assert all(w["member_id"] == alice_id for w in workload)
+
+
+# ---------- 角色仅由 admin 指定：成员接口不接受 role 字段 ----------
+
+
+async def test_member_create_rejects_role_field(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """POST /members 带 role → 422（角色仅由 admin 指定，每项目一名负责人）。"""
+    ctx = await _make_ctx(client, project)
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    resp = await client.post(
+        "/api/v1/members",
+        json={"username": "alice", "role": "admin"},
+        headers=leader_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+
+async def test_member_update_rejects_role_field(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """PATCH /members 带 role → 422（角色仅由 admin 指定/变更）。"""
+    ctx = await _make_ctx(client, project)
+    alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
+    leader_headers = ctx["leader_headers"]
+    assert isinstance(leader_headers, dict)
+
+    resp = await client.patch(
+        f"/api/v1/members/{alice.id}", json={"role": "leader"}, headers=leader_headers
+    )
+    assert resp.status_code == 422, resp.text

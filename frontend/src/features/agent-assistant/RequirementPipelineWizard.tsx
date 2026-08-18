@@ -41,6 +41,7 @@ import type {
   WorkItem,
   WorkItemPriority,
 } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
 
 type Step = "input" | "waiting" | "confirm" | "creating";
 
@@ -187,7 +188,7 @@ export function RequirementPipelineWizard({
 
   // 第二步：轮询运行状态直至终态（2s 轮询，与 SSE 失效缓存互补）
   const { data: run } = useQuery({
-    queryKey: ["agent-runs", "detail", runId],
+    queryKey: queryKeys.agentRuns("detail", runId),
     queryFn: () => api.get<AgentRun>(`/agent-runs/${runId}`),
     enabled: step === "waiting" && runId !== null,
     refetchInterval: (query) => {
@@ -198,7 +199,7 @@ export function RequirementPipelineWizard({
 
   // 运行成功后取该 run 的建议
   const { data: suggestions } = useQuery({
-    queryKey: ["agent-suggestions", "by-run", runId],
+    queryKey: queryKeys.agentSuggestions("by-run", runId),
     queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),
     enabled: step === "waiting" && run?.status === "succeeded",
   });
@@ -233,7 +234,7 @@ export function RequirementPipelineWizard({
         { action },
         newIdempotencyKey(),
       );
-      queryClient.invalidateQueries({ queryKey: ["agent-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
     } catch {
       // 反馈失败不阻塞主流程（如重复反馈 409）
     }
@@ -309,7 +310,7 @@ export function RequirementPipelineWizard({
       }
     }
     setCreating(false);
-    queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
     if (failed.length === 0) {
       await sendFeedback("accepted");
       // 成功摘要带分配去向，让用户清楚"发生了什么"
@@ -357,8 +358,7 @@ export function RequirementPipelineWizard({
     close(false);
   };
 
-  // 管理员不参与工作协作：不出现在主执行人候选中
-  const activeMembers = members.filter((m) => m.is_active && m.role !== "admin");
+  const activeMembers = members.filter((m) => m.is_active);
   const unresolved = pipelineContent?.unresolved_mentions ?? [];
   const draftsValid =
     drafts.length > 0 && drafts.every((d) => d.title.trim() && d.assigneeId);

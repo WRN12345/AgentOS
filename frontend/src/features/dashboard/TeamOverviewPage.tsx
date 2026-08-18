@@ -36,6 +36,7 @@ import { useIsAdmin, useIsLeader } from "../../app/store";
 import { roleBadgeVariant, roleLabel } from "../../lib/roles";
 import { TimelineSection } from "./TimelineSection";
 import { ACTIVE_STATUSES, daysUntil } from "./shared";
+import { queryKeys } from "../../lib/queryKeys";
 
 const STATUS_ORDER: WorkItemStatus[] = [
   "DRAFT",
@@ -64,11 +65,11 @@ export default function TeamOverviewPage() {
   const isAdmin = useIsAdmin();
 
   const { data: members, isLoading: membersLoading } = useQuery({
-    queryKey: ["members"],
+    queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
   });
   const { data: items, isLoading: itemsLoading } = useQuery({
-    queryKey: ["work-items", ""],
+    queryKey: queryKeys.workItems(""),
     queryFn: () => api.get<WorkItemSummary[]>("/work-items"),
   });
 
@@ -96,9 +97,9 @@ export default function TeamOverviewPage() {
     }),
   );
 
-  // 成员负载（横向条形图数据，按活跃任务数降序；管理员不参与协作）
+  // 成员负载（横向条形图数据，按活跃任务数降序）
   const workloadMembers = (members ?? [])
-    .filter((m) => m.is_active && m.role !== "admin")
+    .filter((m) => m.is_active)
     .sort((a, b) => b.active_work_items - a.active_work_items);
   const workloadData = workloadMembers.map((m) => ({
     name: m.display_name,

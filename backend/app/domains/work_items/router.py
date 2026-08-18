@@ -48,11 +48,16 @@ async def list_work_items_endpoint(
     status: str | None = Query(default=None),
     due_from: datetime | None = Query(default=None),
     due_to: datetime | None = Query(default=None),
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[WorkItemSummaryOut]:
     return await list_work_items(
-        session, assignee_id=assignee_id, status=status, due_from=due_from, due_to=due_to
+        session,
+        project_id=actor.project_id,
+        assignee_id=assignee_id,
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
     )
 
 
@@ -69,10 +74,12 @@ async def create_work_item_endpoint(
 @router.get("/{item_id}", response_model=WorkItemOut)
 async def get_work_item_endpoint(
     item_id: uuid.UUID,
-    _: ProjectMember = Depends(get_current_member),
+    actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> WorkItemOut:
-    return await work_item_to_out(session, await get_work_item(session, item_id))
+    return await work_item_to_out(
+        session, await get_work_item(session, item_id, project_id=actor.project_id)
+    )
 
 
 @router.patch("/{item_id}", response_model=WorkItemOut)

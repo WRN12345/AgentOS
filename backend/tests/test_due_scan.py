@@ -28,12 +28,13 @@ from tests.conftest import add_member
 
 
 async def _make_work_item(
-    assignee_id: uuid.UUID, *, status: str, due_at: datetime | None
+    assignee_id: uuid.UUID, *, project_id: uuid.UUID, status: str, due_at: datetime | None
 ) -> WorkItem:
     async with async_session_factory() as session:
         item = WorkItem(
             title="临期工作项",
             description="",
+            project_id=project_id,
             assignee_id=assignee_id,
             status=status,
             due_at=due_at,
@@ -94,7 +95,9 @@ async def test_due_scan_sends_and_deduplicates(project: Project) -> None:
     _, alice = await add_member(project, "alice", "Alice123!", display_name="爱丽丝")
     _, bob = await add_member(project, "bob", "Bob123!", display_name="鲍勃")
     now = datetime.now(UTC)
-    item = await _make_work_item(alice.id, status="READY", due_at=now + timedelta(hours=1))
+    item = await _make_work_item(
+        alice.id, project_id=project.id, status="READY", due_at=now + timedelta(hours=1)
+    )
     collab = await _make_collab(
         item.id, alice.id, bob.id, status="IN_PROGRESS", due_at=now + timedelta(hours=2)
     )
@@ -137,9 +140,11 @@ async def test_due_scan_overdue_and_terminal_skipped(project: Project) -> None:
     _, bob = await add_member(project, "bob", "Bob123!", display_name="鲍勃")
     now = datetime.now(UTC)
     overdue_item = await _make_work_item(
-        alice.id, status="IN_PROGRESS", due_at=now - timedelta(hours=1)
+        alice.id, project_id=project.id, status="IN_PROGRESS", due_at=now - timedelta(hours=1)
     )
-    await _make_work_item(alice.id, status="COMPLETED", due_at=now + timedelta(hours=1))
+    await _make_work_item(
+        alice.id, project_id=project.id, status="COMPLETED", due_at=now + timedelta(hours=1)
+    )
     await _make_collab(
         overdue_item.id, alice.id, bob.id, status="CANCELLED", due_at=now + timedelta(hours=1)
     )
@@ -159,7 +164,9 @@ async def test_worker_handle_task_dispatches_due_scan(project: Project) -> None:
     """worker handle_task 认识 due.scan 类型并执行扫描。"""
     _, alice = await add_member(project, "alice", "Alice123!", display_name="爱丽丝")
     now = datetime.now(UTC)
-    await _make_work_item(alice.id, status="READY", due_at=now + timedelta(hours=3))
+    await _make_work_item(
+        alice.id, project_id=project.id, status="READY", due_at=now + timedelta(hours=3)
+    )
 
     redis_client = create_redis_client()
     try:

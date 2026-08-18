@@ -14,6 +14,7 @@ import uuid
 from contextlib import suppress
 
 import httpx
+import pytest
 import redis.asyncio as redis
 
 from app.domains.project.models import Project, ProjectMember
@@ -36,9 +37,9 @@ async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, objec
         "leader": leader,
         "alice": alice,
         "bob": bob,
-        "leader_headers": await auth_headers(client, "leader", LEADER_PW),
-        "alice_headers": await auth_headers(client, "alice", ALICE_PW),
-        "bob_headers": await auth_headers(client, "bob", BOB_PW),
+        "leader_headers": await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id)),
+        "alice_headers": await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id)),
+        "bob_headers": await auth_headers(client, "bob", BOB_PW, project_id=str(project.id)),
     }
     created = await client.post(
         "/api/v1/work-items",
@@ -103,7 +104,8 @@ async def test_work_item_status_change_publishes_to_counterpart(
 
         payload = await _next_payload(alice_pubsub)
         assert payload["type"] == "work_item.published"
-        assert set(payload) == {"id", "type", "data", "created_at"}
+        assert set(payload) == {"id", "type", "project_id", "data", "created_at"}
+        assert payload["project_id"] == str(project.id)
         assert payload["data"]["title"] == "工作项已发布"
         assert payload["data"]["link"] == f"/work-items/{item['id']}"
         uuid.UUID(payload["id"])  # id 为合法 uuid
@@ -182,6 +184,45 @@ async def test_sse_requires_valid_token(client: httpx.AsyncClient, project: Proj
     assert resp.status_code == 401
 
 
+async def test_sse_generator_stops_after_member_is_disabled(monkeypatch) -> None:
+    """握手后成员资格失效时，生成器在下发下一条项目事件前关闭。"""
+    from app.domains.notifications import stream as stream_module
+
+    class FakeRequest:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    class FakePubSub:
+        async def subscribe(self, _channel) -> None:
+            return None
+
+        async def get_message(self, **_kwargs):
+            return {"data": '{"id":"evt-1","type":"work_item.updated"}'}
+
+        async def unsubscribe(self, _channel) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class FakeRedis:
+        def pubsub(self):
+            return FakePubSub()
+
+        async def aclose(self) -> None:
+            return None
+
+    async def inactive(_member_id) -> bool:
+        return False
+
+    monkeypatch.setattr(stream_module, "create_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(stream_module, "_stream_identity_is_active", inactive)
+    generator = stream_module._event_generator(FakeRequest(), uuid.uuid4())
+    assert await anext(generator) == ": connected\n\n"
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
+
+
 async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Project) -> None:
     """?token= 建立流后，协作请求事件以 id:/event:/data: 帧数秒内下发。
 
@@ -218,8 +259,10 @@ async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Pro
         "scheme": "http",
         "path": "/api/v1/events/stream",
         "raw_path": b"/api/v1/events/stream",
-        "query_string": f"token={bob_token}".encode(),
-        "headers": [(b"host", b"test")],
+        "query_string": f"token={bob_token}&project_id={project.id}".encode(),
+        "headers": [
+            (b"host", b"test"),
+        ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
     }
@@ -266,6 +309,7 @@ async def test_sse_stream_delivers_event(client: httpx.AsyncClient, project: Pro
         assert lines[2].startswith("data: ")
         payload = json.loads(lines[2].removeprefix("data: "))
         assert payload["type"] == "collaboration.requested"
+        assert payload["project_id"] == str(project.id)
         assert payload["data"]["title"] == "新的协作请求"
         assert payload["id"] == lines[0].removeprefix("id: ")
     finally:

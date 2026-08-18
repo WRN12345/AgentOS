@@ -30,8 +30,14 @@ CHANNEL_PREFIX = "agentos:events"
 
 @dataclass(frozen=True)
 class OutgoingEvent:
-    """一条待发布事件：与通知同构（type 复用通知 type），按接收人分发。"""
+    """一条待发布事件：与通知同构（type 复用通知 type），按接收人分发。
 
+    project_id 为事件归属项目：多项目后 SSE 连接只订阅当前项目的
+    member 频道（channel 按 member_id 分，member 记录本身项目内唯一），
+    载荷携带 project_id 供客户端校验/前端缓存隔离（spec 4.3、ticket 04）。
+    """
+
+    project_id: uuid.UUID
     recipient_id: uuid.UUID
     type: str
     title: str
@@ -45,10 +51,11 @@ def channel_for(member_id: uuid.UUID) -> str:
 
 
 def build_payload(event: OutgoingEvent) -> dict[str, Any]:
-    """事件载荷：{id, type, data:{title, body, link}, created_at}。"""
+    """事件载荷：{id, type, project_id, data:{title, body, link}, created_at}。"""
     return {
         "id": str(uuid.uuid4()),
         "type": event.type,
+        "project_id": str(event.project_id),
         "data": {"title": event.title, "body": event.body, "link": event.link},
         "created_at": datetime.now(UTC).isoformat(),
     }

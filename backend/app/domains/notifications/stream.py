@@ -4,6 +4,8 @@
   （infrastructure/events）向客户端下发实时事件；
 - 认证：浏览器 EventSource 不能自定义请求头，支持 `?token=<access_token>`
   查询参数（同时兼容 `Authorization: Bearer` 头，便于 curl 调试）；
+- 项目上下文：同样走 query `?project_id=<uuid>`（EventSource 不能带 header），
+  并以 `X-Project-Id` 头兜底（便于 curl 调试）；连接只收当前项目事件（4.3 节）；
   校验规则与 get_current_member 一致（JWT 解析 → 用户有效且令牌版本匹配 →
   项目成员有效）；
 - 帧格式：`id:` / `event:` / `data:` 三段；15s 无事件发 `: ping` 注释帧，
@@ -15,6 +17,7 @@
 """
 
 import json
+import time
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -24,23 +27,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
 from app.domains.identity.security import decode_access_token
 from app.domains.identity.service import get_user_by_id
+from app.domains.identity.models import User
 from app.domains.project.models import ProjectMember
-from app.domains.project.service import get_default_project, get_member_by_user
+from app.domains.project.service import get_member_by_user
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.events import channel_for
 
 router = APIRouter(prefix="/events", tags=["events"])
+logger = setup_logging("backend")
 
 HEARTBEAT_SECONDS = 15.0
+AUTH_RECHECK_SECONDS = 5.0
 
 
 async def _resolve_member(
     request: Request, session: AsyncSession, token: str | None
 ) -> ProjectMember:
-    """解析 SSE 连接的成员身份：`?token=` 优先，Authorization 头兜底。"""
+    """解析 SSE 连接的成员身份：`?token=` 优先，Authorization 头兜底。
+    多项目后同时从 X-Project-Id 请求头读取项目上下文。
+    """
     raw = token
     if not raw:
         authorization = request.headers.get("Authorization", "")
@@ -61,8 +70,21 @@ async def _resolve_member(
     if not user.is_active:
         raise ApiException(403, ErrorCodes.USER_DISABLED, "账号已被禁用")
 
-    project = await get_default_project(session)
-    member = await get_member_by_user(session, project.id, user.id)
+    # 多项目：优先 query 参数 project_id（浏览器 EventSource 不能自定义 header，
+    # spec 4.3 要求走 query，与 token 同传法）；header X-Project-Id 兜底（便于 curl 调试）
+    project_id_str = request.query_params.get("project_id") or request.headers.get(
+        "X-Project-Id", ""
+    )
+    if not project_id_str:
+        raise ApiException(400, ErrorCodes.MISSING_PROJECT_ID, "缺少项目上下文，请携带 X-Project-Id 请求头")
+    try:
+        project_id = uuid.UUID(project_id_str)
+    except ValueError:
+        raise ApiException(
+            400, ErrorCodes.MISSING_PROJECT_ID, "X-Project-Id 格式无效，须为合法 UUID"
+        ) from None
+
+    member = await get_member_by_user(session, project_id, user.id)
     if member is None or not member.is_active:
         raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是项目成员或已被禁用")
     return member
@@ -78,6 +100,16 @@ def _format_sse(payload: dict) -> str:
     )
 
 
+async def _stream_identity_is_active(member_id: uuid.UUID) -> bool:
+    """流运行期间复验账号与成员状态，禁用/移除后不再继续推送。"""
+    async with async_session_factory() as session:
+        member = await session.get(ProjectMember, member_id)
+        if member is None or not member.is_active:
+            return False
+        user = await session.get(User, member.user_id)
+        return user is not None and user.is_active
+
+
 async def _event_generator(request: Request, member_id: uuid.UUID) -> AsyncGenerator[str, None]:
     redis_client = create_redis_client()
     pubsub = redis_client.pubsub()
@@ -85,19 +117,27 @@ async def _event_generator(request: Request, member_id: uuid.UUID) -> AsyncGener
     try:
         await pubsub.subscribe(channel)
         yield ": connected\n\n"
+        last_ping = time.monotonic()
         while True:
             if await request.is_disconnected():
                 break
+            if not await _stream_identity_is_active(member_id):
+                logger.info("event stream closed after identity revocation: member_id=%s", member_id)
+                break
             message = await pubsub.get_message(
-                ignore_subscribe_messages=True, timeout=HEARTBEAT_SECONDS
+                ignore_subscribe_messages=True, timeout=AUTH_RECHECK_SECONDS
             )
             if message is None:
-                yield ": ping\n\n"  # 心跳注释帧：防反代空闲超时
+                if time.monotonic() - last_ping >= HEARTBEAT_SECONDS:
+                    yield ": ping\n\n"  # 心跳注释帧：防反代空闲超时
+                    last_ping = time.monotonic()
                 continue
             try:
                 payload = json.loads(message["data"])
             except (TypeError, ValueError):
                 continue
+            if not await _stream_identity_is_active(member_id):
+                break
             yield _format_sse(payload)
     finally:
         await pubsub.unsubscribe(channel)

@@ -24,7 +24,7 @@ from app.domains.deadlines.state_machine import DeadlineChangeStatus, DeadlineTa
 from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
-from app.domains.project.models import ROLE_ADMIN, ROLE_LEADER, ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.reviews.models import Review
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
@@ -259,14 +259,18 @@ async def list_pending_approvals(
     session: AsyncSession, actor: ProjectMember
 ) -> list[ApprovalItemOut]:
     """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role not in (ROLE_LEADER):
         return []
 
+    # 三类申请不冗余 project_id，经所属工作项推导过滤（spec D2）
     transfers = list(
         (
             await session.execute(
-                select(TransferRequest).where(
-                    TransferRequest.status == TransferStatus.PENDING.value
+                select(TransferRequest)
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    TransferRequest.status == TransferStatus.PENDING.value,
                 )
             )
         )
@@ -276,8 +280,11 @@ async def list_pending_approvals(
     deadline_changes = list(
         (
             await session.execute(
-                select(DeadlineChangeRequest).where(
-                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value
+                select(DeadlineChangeRequest)
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DeadlineChangeRequest.status == DeadlineChangeStatus.PENDING_APPROVAL.value,
                 )
             )
         )
@@ -287,7 +294,12 @@ async def list_pending_approvals(
     dev_docs = list(
         (
             await session.execute(
-                select(DevDoc).where(DevDoc.status == DevDocStatus.SUBMITTED.value)
+                select(DevDoc)
+                .join(WorkItem, WorkItem.id == DevDoc.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DevDoc.status == DevDocStatus.SUBMITTED.value,
+                )
             )
         )
         .scalars()
@@ -304,14 +316,19 @@ async def list_processed_approvals(
 ) -> list[ApprovalItemOut]:
     """已处理审批记录：终态（APPROVED/REJECTED/CANCELLED）申请按 updated_at
     倒序、最多 limit 条；权限与待审批列表一致（普通成员空列表，不 403）。"""
-    if actor.role not in (ROLE_LEADER, ROLE_ADMIN):
+    if actor.role not in (ROLE_LEADER):
         return []
 
+    # 申请与审核均不冗余 project_id，经所属工作项推导过滤（spec D2）
     transfers = list(
         (
             await session.execute(
                 select(TransferRequest)
-                .where(TransferRequest.status.in_(PROCESSED_TRANSFER_STATUSES))
+                .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    TransferRequest.status.in_(PROCESSED_TRANSFER_STATUSES),
+                )
                 .order_by(TransferRequest.updated_at.desc())
                 .limit(limit)
             )
@@ -323,7 +340,11 @@ async def list_processed_approvals(
         (
             await session.execute(
                 select(DeadlineChangeRequest)
-                .where(DeadlineChangeRequest.status.in_(PROCESSED_DEADLINE_CHANGE_STATUSES))
+                .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DeadlineChangeRequest.status.in_(PROCESSED_DEADLINE_CHANGE_STATUSES),
+                )
                 .order_by(DeadlineChangeRequest.updated_at.desc())
                 .limit(limit)
             )
@@ -335,7 +356,11 @@ async def list_processed_approvals(
         (
             await session.execute(
                 select(DevDoc)
-                .where(DevDoc.status.in_(PROCESSED_DEV_DOC_STATUSES))
+                .join(WorkItem, WorkItem.id == DevDoc.work_item_id)
+                .where(
+                    WorkItem.project_id == actor.project_id,
+                    DevDoc.status.in_(PROCESSED_DEV_DOC_STATUSES),
+                )
                 .order_by(DevDoc.updated_at.desc())
                 .limit(limit)
             )
@@ -347,7 +372,11 @@ async def list_processed_approvals(
     reviews = list(
         (
             await session.execute(
-                select(Review).order_by(Review.updated_at.desc()).limit(limit)
+                select(Review)
+                .join(WorkItem, WorkItem.id == Review.work_item_id)
+                .where(WorkItem.project_id == actor.project_id)
+                .order_by(Review.updated_at.desc())
+                .limit(limit)
             )
         )
         .scalars()
