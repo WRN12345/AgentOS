@@ -95,7 +95,7 @@ async def _clean_tables() -> None:
                 "collaboration_requests, notifications, "
                 "transfer_requests, deadline_change_requests, stored_files, "
                 "agent_suggestions, agent_runs, dev_docs, "
-                "project_members, projects"
+                "memory_chunks, project_members, projects"
             )
         )
         # LangGraph 检查点表由 worker 首次运行时才创建（不归 Alembic 管理），

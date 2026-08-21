@@ -20,6 +20,7 @@ from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401
 from app.domains.deadlines import models as _deadline_models  # noqa: F401
 from app.domains.identity import models as _identity_models  # noqa: F401
+from app.domains.memory import models as _memory_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401
 from app.domains.project import models as _project_models  # noqa: F401
 from app.domains.transfers import models as _transfer_models  # noqa: F401
@@ -29,6 +30,7 @@ from app.infrastructure.queue.queue import dequeue, promote_due_delayed
 from app.workers.agent_run import execute_agent_run
 from app.workers.due_scan import scan_due_reminders
 from app.workers.heartbeat import heartbeat
+from app.workers.memory_index import execute_memory_index
 from app.workers.risk_scan import run_risk_scan
 
 logger = setup_logging("worker")
@@ -51,6 +53,9 @@ async def handle_task(task: dict, redis_client: redis.Redis) -> None:
     elif task_type == "agent.risk_scan":
         # Workflow Risk Agent 周期风险扫描（T5.5）：去重后投递 agent.run，不触碰业务状态
         await run_risk_scan(redis_client)
+    elif task_type == "memory.index":
+        # 记忆索引任务（M1.8）：切块→embedding→memory_chunks，失败按退避重入队
+        await execute_memory_index(task.get("payload", {}), redis_client)
     else:
         logger.warning("unknown task type, skipped: id=%s type=%s", task.get("id"), task_type)
 

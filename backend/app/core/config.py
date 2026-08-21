@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # 推理模型的 thinking 也占用该额度，默认太小会导致 JSON 输出被截断。
     llm_max_tokens: int = 4096
 
+    # 记忆模块 embedding（设计文档第 5 节、15.1）：默认本地 Ollama 跑 qwen3-embedding 0.6B，
+    # 复用 ollama_base_url 与 llm_timeout_seconds；dimensions 须与所选模型一致，
+    # 更换模型/维度时 memory_chunks 须全量重建（16.4）。
+    embedding_model: str = "qwen3-embedding:0.6b"
+    embedding_dimensions: int = 1024
+
     # Agent 运行级失败重试（17.3 节，T5.6）：指数退避，间隔 = base * 2^attempt。
     # 与 provider 层 LLM_MAX_RETRIES（单次调用内的线性重试，应对瞬时抖动）是
     # 两道不同防线：provider 重试耗尽后错误冒泡到本层，按运行粒度退避重投。

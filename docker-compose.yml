@@ -2,7 +2,8 @@ name: agentos
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector 官方镜像（基于 postgres:16），提供 vector 扩展供记忆模块语义检索使用
+    image: pgvector/pgvector:pg16
     container_name: agentos-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agentos}

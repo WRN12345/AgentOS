@@ -17,6 +17,7 @@ from app.domains.deadlines import models as _deadline_models  # noqa: F401
 from app.domains.deliverables import models as _deliverable_models  # noqa: F401
 from app.domains.files import models as _file_models  # noqa: F401
 from app.domains.identity import models as _identity_models  # noqa: F401
+from app.domains.memory import models as _memory_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401
 from app.domains.project import models as _project_models  # noqa: F401
 from app.domains.reviews import models as _review_models  # noqa: F401
