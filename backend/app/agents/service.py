@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES, enqueue_run_history_index
 from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, apply_memory_proposal
 from app.domains.project.models import ProjectMember
 from app.infrastructure.queue.queue import enqueue
@@ -197,6 +198,13 @@ async def submit_suggestion_feedback(
     )
     await session.commit()
     await session.refresh(suggestion)
+
+    # M5.1：拆解/分配运行的建议反馈落定后，重投历史索引任务（整体重建，
+    # 块内容反映最新采纳状态）；best-effort，投递失败只记日志
+    run = await session.get(AgentRun, suggestion.run_id)
+    if run is not None and run.agent_type in HISTORY_RUN_AGENT_TYPES:
+        await enqueue_run_history_index(run)
+
     logger.info(
         "agent suggestion feedback: id=%s action=%s actor=%s",
         suggestion.id,

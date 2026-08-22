@@ -32,6 +32,7 @@ from app.domains.memory.extractors import (
     UnsupportedFormatError,
     extract_text,
 )
+from app.domains.memory.history import build_run_history_text
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import enqueue_delayed
@@ -113,17 +114,26 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
         if stored_file_id:
             written = await _index_stored_file(uuid.UUID(str(stored_file_id)))
         else:
-            # 纯文本路径（M1.8 桩）：档案/历史/核心记忆直接携带文本
+            # 纯文本路径：档案/核心记忆直接携带文本；history 类型由 worker 从
+            # run 记录现取文本（M5.1），保证块内容反映最新采纳状态
             project_id = (
                 uuid.UUID(payload["project_id"]) if payload.get("project_id") else None
             )
             async with async_session_factory() as session:
                 service = MemoryIndexService(session)
+                if source_type == "history" and "text" not in payload:
+                    text = await build_run_history_text(session, uuid.UUID(str(source_id)))
+                    if text is None:
+                        # 运行未完成/非拆解分配类型：不索引（15.4）
+                        logger.info("history source not indexable, skipped: %s", source_id)
+                        return
+                else:
+                    text = str(payload.get("text", ""))
                 written = await service.rebuild_chunks(
                     project_id=project_id,
                     source_type=str(source_type),
                     source_id=uuid.UUID(str(source_id)),
-                    text=str(payload.get("text", "")),
+                    text=text,
                 )
         logger.info(
             "memory index done: type=%s id=%s chunks=%d", source_type, source_id, written
