@@ -9,13 +9,16 @@
 
 import uuid
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.domains.memory.chunking import chunk_text
 from app.domains.memory.models import SOURCE_TYPES, MemoryChunk
 from app.infrastructure.models.embedding import EmbeddingProvider, get_embedding_provider
+
+#: 记忆索引任务类型（API 进程投递、worker 消费共用，见 app/workers/memory_index.py）
+MEMORY_INDEX_TASK_TYPE = "memory.index"
 
 
 class MemoryIndexService:
@@ -73,3 +76,28 @@ class MemoryIndexService:
         )
         await self._session.commit()
         return len(chunks)
+
+    async def mark_source_stale(
+        self,
+        *,
+        source_type: str,
+        source_id: uuid.UUID,
+        commit: bool = True,
+    ) -> int:
+        """把某来源的全部块标记为失效（is_current=False），返回影响行数。
+
+        用于文档版本更替（设计文档第 3 节）：新版本上传后旧版本的块不再参与
+        检索，但保留供人工追溯。
+        """
+        result = await self._session.execute(
+            update(MemoryChunk)
+            .where(
+                MemoryChunk.source_type == source_type,
+                MemoryChunk.source_id == source_id,
+                MemoryChunk.is_current.is_(True),
+            )
+            .values(is_current=False)
+        )
+        if commit:
+            await self._session.commit()
+        return int(result.rowcount)  # type: ignore[attr-defined]

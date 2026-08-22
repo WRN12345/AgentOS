@@ -24,6 +24,9 @@ dependencies = [
     "langgraph==1.2.9",
     "langgraph-checkpoint-postgres==3.1.0",
     "psycopg[binary,pool]==3.3.4",
+    # 记忆模块文档内容提取（设计文档第 4 节）：PDF 与 Word
+    "pypdf==5.1.0",
+    "python-docx==1.1.2",
 ]
 
 [project.optional-dependencies]

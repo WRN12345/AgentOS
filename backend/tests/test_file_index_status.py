@@ -1,0 +1,144 @@
+"""索引状态机与重试接口测试（M2.4 验收，设计文档第 6 节）。
+
+- 状态机：pending → indexing → indexed/failed 合法；failed → pending（重试）合法；
+  终态（indexed/unindexed）与其他跳转一律 409；
+- 重试接口：failed 文件回到 pending 并重投 memory.index 任务；非 failed 409；
+  跨项目 404（不暴露存在性）。
+"""
+
+import json
+import uuid
+from pathlib import Path
+
+import httpx
+import pytest
+
+from app.domains.files.models import StoredFile
+from app.domains.files.service import (
+    INDEX_FAILED,
+    INDEX_INDEXED,
+    INDEX_INDEXING,
+    INDEX_PENDING,
+    INDEX_UNINDEXED,
+    transition_index_status,
+)
+from app.domains.project.models import Project
+from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.database.engine import async_session_factory
+from app.infrastructure.queue.queue import QUEUE_KEY
+from app.infrastructure.storage.local import LocalStorageProvider
+from app.infrastructure.storage.provider import get_storage_provider
+from app.main import app
+from tests.conftest import add_member, auth_headers
+
+ALICE_PW = "Alice123!"
+
+
+@pytest.fixture
+def storage(tmp_path: Path):
+    provider = LocalStorageProvider(tmp_path)
+    app.dependency_overrides[get_storage_provider] = lambda: provider
+    yield provider
+    app.dependency_overrides.pop(get_storage_provider, None)
+
+
+def _stored(status: str = INDEX_PENDING) -> StoredFile:
+    stored = StoredFile(index_status=status)
+    # transition_index_status 只读写字段，不需要入库
+    return stored
+
+
+def test_index_status_transitions() -> None:
+    stored = _stored(INDEX_PENDING)
+    transition_index_status(stored, INDEX_INDEXING)
+    transition_index_status(stored, INDEX_FAILED)
+    transition_index_status(stored, INDEX_PENDING)
+    transition_index_status(stored, INDEX_INDEXING)
+    transition_index_status(stored, INDEX_INDEXED)
+    assert stored.index_status == INDEX_INDEXED
+
+
+def test_index_status_terminal_states_reject() -> None:
+    for terminal in (INDEX_INDEXED, INDEX_UNINDEXED):
+        stored = _stored(terminal)
+        with pytest.raises(Exception) as exc_info:
+            transition_index_status(stored, INDEX_PENDING)
+        assert "409" in str(exc_info.value.status_code)  # type: ignore[attr-defined]
+
+
+def test_index_status_invalid_jump_rejected() -> None:
+    stored = _stored(INDEX_PENDING)
+    with pytest.raises(Exception):
+        transition_index_status(stored, INDEX_INDEXED)  # 须先经 indexing
+
+
+async def _upload_failed_file(
+    client: httpx.AsyncClient, headers: dict[str, str]
+) -> str:
+    resp = await client.post(
+        "/api/v1/files",
+        headers=headers,
+        files={"file": ("doc.md", b"content", "text/markdown")},
+    )
+    assert resp.status_code == 201, resp.text
+    file_id = resp.json()["id"]
+    async with async_session_factory() as session:
+        stored = await session.get(StoredFile, uuid.UUID(file_id))
+        stored.index_status = INDEX_FAILED  # 模拟索引失败
+        await session.commit()
+    return file_id
+
+
+async def test_retry_endpoint_failed_to_pending_and_enqueues(
+    client: httpx.AsyncClient, project: Project, storage
+) -> None:
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    file_id = await _upload_failed_file(client, headers)
+
+    redis_client = create_redis_client()
+    await redis_client.delete(QUEUE_KEY)
+    try:
+        resp = await client.post(f"/api/v1/files/{file_id}/index-retry", headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["index_status"] == INDEX_PENDING
+
+        queued = await redis_client.lrange(QUEUE_KEY, 0, -1)
+        assert len(queued) == 1
+        task = json.loads(queued[0])
+        assert task["type"] == "memory.index"
+        assert task["payload"]["stored_file_id"] == file_id
+        assert task["payload"]["source_type"] == "document"
+    finally:
+        await redis_client.delete(QUEUE_KEY)
+        await redis_client.aclose()
+
+
+async def test_retry_endpoint_rejects_non_failed(
+    client: httpx.AsyncClient, project: Project, storage
+) -> None:
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    resp = await client.post(
+        "/api/v1/files",
+        headers=headers,
+        files={"file": ("doc.md", b"content", "text/markdown")},
+    )
+    file_id = resp.json()["id"]  # 状态 pending，非 failed
+
+    retry = await client.post(f"/api/v1/files/{file_id}/index-retry", headers=headers)
+    assert retry.status_code == 409
+    assert retry.json()["code"] == "FILE_INDEX_INVALID_TRANSITION"
+
+
+async def test_retry_endpoint_cross_project_404(
+    client: httpx.AsyncClient, project_a: Project, project_b: Project, storage
+) -> None:
+    _, alice = await add_member(project_a, "alice", ALICE_PW)
+    headers_a = await auth_headers(client, "alice", ALICE_PW, project_id=str(project_a.id))
+    file_id = await _upload_failed_file(client, headers_a)
+
+    _, bob = await add_member(project_b, "bob", "Bob12345!")
+    headers_b = await auth_headers(client, "bob", "Bob12345!", project_id=str(project_b.id))
+    resp = await client.post(f"/api/v1/files/{file_id}/index-retry", headers=headers_b)
+    assert resp.status_code == 404

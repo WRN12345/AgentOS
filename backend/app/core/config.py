@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # 更换模型/维度时 memory_chunks 须全量重建（16.4）。
     embedding_model: str = "qwen3-embedding:0.6b"
     embedding_dimensions: int = 1024
+    # 检索（设计文档第 5 节、16.13）：默认返回条数与余弦距离上限
+    # （超过上限视为"知识库没有相关内容"，问答页拒答并给线索）
+    memory_search_limit: int = 8
+    memory_search_max_distance: float = 0.6
 
     # Agent 运行级失败重试（17.3 节，T5.6）：指数退避，间隔 = base * 2^attempt。
     # 与 provider 层 LLM_MAX_RETRIES（单次调用内的线性重试，应对瞬时抖动）是
@@ -61,10 +65,12 @@ class Settings(BaseSettings):
     storage_root: str = "/app/data/uploads"
     upload_max_bytes: int = 20 * 1024 * 1024
     # 上传白名单（逗号分隔）：扩展名（小写、带点）与声明的 MIME 类型
-    upload_allowed_extensions: str = ".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip"
+    # .docx 为记忆模块知识文档支持的 Word 格式（设计文档第 4 节）
+    upload_allowed_extensions: str = ".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip,.docx"
     upload_allowed_mime_types: str = (
         "text/plain,text/markdown,text/csv,application/json,"
-        "application/pdf,image/png,image/jpeg,application/zip"
+        "application/pdf,image/png,image/jpeg,application/zip,"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
     @property

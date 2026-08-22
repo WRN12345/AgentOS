@@ -36,3 +36,12 @@ class StoredFile(CoreModel):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_items.id"), index=True, nullable=True
     )
+    # 版本链（设计文档第 3 节，迁移 0024）：同项目同名文件 version 递增；
+    # superseded_by 指向取代本行的新版本，NULL 即当前最新版本（不可删除，只版本更替）
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stored_files.id", deferrable=True, initially="DEFERRED"), nullable=True
+    )
+    # 索引状态机（设计文档第 6 节，迁移 0025）：pending → indexing → indexed/failed；
+    # 不支持读取内容的格式为 unindexed（终态）；failed 可重试回 pending
+    index_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")

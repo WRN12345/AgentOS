@@ -1,0 +1,63 @@
+"""记忆检索接口（设计文档第 11、12 节）。
+
+- POST /memory/search：项目成员检索本项目记忆；全局 admin 只读可查任意项目；
+- 与 Agent 工具共用 search_memory 权限路径——检索层强制项目隔离（第 12 节）；
+- caller 标识：HTTP 路径仅允许 member_qa（默认）与 leader_query（需负责人角色），
+  agent_assignment 仅供 Agent 内部调用（16.12，M3.9 放行规则的判定依据）。
+"""
+
+import uuid
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import ApiException, ErrorCodes
+from app.domains.identity.dependencies import get_current_user
+from app.domains.identity.models import User
+from app.domains.memory.schemas import MemorySearchRequest, MemorySearchResponse
+from app.domains.memory.search import (
+    CALLER_LEADER_QUERY,
+    CALLER_MEMBER_QA,
+    search_memory,
+)
+from app.domains.project.dependencies import project_id_from_request
+from app.domains.project.models import ROLE_LEADER
+from app.domains.project.service import get_member_by_user
+from app.infrastructure.database.engine import get_session
+
+router = APIRouter(tags=["memory"])
+
+
+@router.post("/memory/search", response_model=MemorySearchResponse)
+async def search_memory_endpoint(
+    body: MemorySearchRequest,
+    request_id: uuid.UUID = Depends(project_id_from_request),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MemorySearchResponse:
+    member = await get_member_by_user(session, request_id, current_user.id)
+    is_admin = bool(current_user.is_admin)
+    if member is None or not member.is_active:
+        if not is_admin:
+            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
+        member = None  # 全局 admin：只读查看（第 12 节）
+
+    caller = body.caller or CALLER_MEMBER_QA
+    if caller not in (CALLER_MEMBER_QA, CALLER_LEADER_QUERY):
+        # agent_assignment 仅供 Agent 内部调用（16.12），HTTP 路径不开放
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "不允许的检索调用方标识")
+    if caller == CALLER_LEADER_QUERY and (member is None or member.role != ROLE_LEADER):
+        # leader_query 会命中档案跨项目内容（M3.9），HTTP 路径须确为负责人
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可按分配场景检索")
+
+    results = await search_memory(
+        session,
+        member=member,
+        is_admin=is_admin,
+        project_id=request_id,
+        query=body.query,
+        caller=caller,
+        source_types=body.source_types,
+        limit=body.limit,
+    )
+    return MemorySearchResponse.from_results(results)
