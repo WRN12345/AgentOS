@@ -23,6 +23,9 @@ const storedFile: StoredFile = {
   storage_backend: "local",
   uploaded_by: "member-1",
   work_item_id: "wi-1",
+  version: 1,
+  superseded_by: null,
+  index_status: "indexed",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
