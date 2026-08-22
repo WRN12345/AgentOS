@@ -15,12 +15,12 @@ from sqlalchemy import select
 from app.core.errors import ApiException, ErrorCodes
 from app.domains.audit.models import AuditEvent
 from app.domains.memory.core_memory import (
-    CORE_MEMORY_BUDGET_CHARS,
     budget_usage,
     create_entry,
     deprecate_entry,
     list_entries,
 )
+from app.domains.memory.models import CORE_MEMORY_BUDGET_CHARS
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
 from tests.conftest import add_member

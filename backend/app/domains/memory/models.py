@@ -26,6 +26,10 @@ CORE_MEMORY_SCOPES = ("project", "organization")
 #: 核心记忆条目状态（与迁移 0026 的 ck_core_memory_entries_status 一致）
 CORE_MEMORY_STATUSES = ("active", "deprecated")
 
+#: 单项目核心记忆容量预算（生效条目合计字符数，设计文档第 8 节）；
+#: 单条上限与预算一致——一条吃掉全部预算也允许，由容量校验兜底
+CORE_MEMORY_BUDGET_CHARS = 4000
+
 
 class MemoryChunk(CoreModel):
     __tablename__ = "memory_chunks"

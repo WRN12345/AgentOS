@@ -14,14 +14,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ApiException, ErrorCodes
 from app.domains.identity.dependencies import get_current_user
 from app.domains.identity.models import User
-from app.domains.memory.schemas import MemorySearchRequest, MemorySearchResponse
+from app.domains.memory.core_memory import (
+    budget_usage,
+    create_entry,
+    deprecate_entry,
+    entries_to_out,
+    list_entries,
+)
+from app.domains.memory.schemas import (
+    CoreMemoryEntryCreateIn,
+    CoreMemoryEntryListOut,
+    CoreMemoryEntryOut,
+    MemorySearchRequest,
+    MemorySearchResponse,
+)
 from app.domains.memory.search import (
     CALLER_LEADER_QUERY,
     CALLER_MEMBER_QA,
     search_memory,
 )
-from app.domains.project.dependencies import project_id_from_request
-from app.domains.project.models import ROLE_LEADER
+from app.domains.project.dependencies import get_current_leader, project_id_from_request
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_member_by_user
 from app.infrastructure.database.engine import get_session
 
@@ -61,3 +74,49 @@ async def search_memory_endpoint(
         limit=body.limit,
     )
     return MemorySearchResponse.from_results(results)
+
+
+# ---------- 核心记忆条目（设计文档第 8 节，M4.3） ----------
+
+
+@router.get("/memory/core-entries", response_model=CoreMemoryEntryListOut)
+async def list_core_memory_entries(
+    project_id: uuid.UUID = Depends(project_id_from_request),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CoreMemoryEntryListOut:
+    """核心记忆条目列表 + 容量占用：项目成员可读；全局 admin 只读查看（第 12 节）。"""
+    member = await get_member_by_user(session, project_id, current_user.id)
+    if member is None or not member.is_active:
+        if not current_user.is_admin:
+            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
+
+    entries = await list_entries(session, project_id=project_id)
+    used, budget = await budget_usage(session, project_id=project_id)
+    return CoreMemoryEntryListOut(
+        entries=await entries_to_out(session, entries),
+        used_chars=used,
+        budget_chars=budget,
+    )
+
+
+@router.post("/memory/core-entries", response_model=CoreMemoryEntryOut, status_code=201)
+async def create_core_memory_entry(
+    body: CoreMemoryEntryCreateIn,
+    leader: ProjectMember = Depends(get_current_leader),
+    session: AsyncSession = Depends(get_session),
+) -> CoreMemoryEntryOut:
+    """负责人手写条目（种子记忆，16.11），立即生效；超容量预算 400 拒绝。"""
+    entry = await create_entry(session, leader, content=body.content)
+    return (await entries_to_out(session, [entry]))[0]
+
+
+@router.post("/memory/core-entries/{entry_id}/deprecate", response_model=CoreMemoryEntryOut)
+async def deprecate_core_memory_entry(
+    entry_id: uuid.UUID,
+    leader: ProjectMember = Depends(get_current_leader),
+    session: AsyncSession = Depends(get_session),
+) -> CoreMemoryEntryOut:
+    """负责人作废条目：保留供追溯；跨项目按 404（多项目规约）。"""
+    entry = await deprecate_entry(session, leader, entry_id=entry_id)
+    return (await entries_to_out(session, [entry]))[0]

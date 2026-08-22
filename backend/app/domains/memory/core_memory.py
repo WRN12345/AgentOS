@@ -16,12 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
 from app.domains.audit.service import record_event
-from app.domains.memory.models import CoreMemoryEntry
+from app.domains.memory.models import CORE_MEMORY_BUDGET_CHARS, CoreMemoryEntry
+from app.domains.memory.schemas import CoreMemoryEntryOut
 from app.domains.project.models import ProjectMember
 from app.domains.project.service import require_leader
-
-#: 单项目核心记忆容量预算（生效条目合计字符数，设计文档第 8 节）
-CORE_MEMORY_BUDGET_CHARS = 4000
+from app.domains.work_items.schemas import MemberBrief
 
 
 async def list_entries(
@@ -46,6 +45,45 @@ async def budget_usage(
     )
     used = sum(len(content) for content in (await session.execute(stmt)).scalars().all())
     return used, CORE_MEMORY_BUDGET_CHARS
+
+
+async def entries_to_out(
+    session: AsyncSession, entries: list[CoreMemoryEntry]
+) -> list[CoreMemoryEntryOut]:
+    """条目序列化：批量加载成员显示名；proposed_by 为 None 表示 Agent 提议（第 8 节）。"""
+    member_ids = {
+        mid
+        for e in entries
+        for mid in (e.proposed_by_member_id, e.confirmed_by_member_id)
+        if mid is not None
+    }
+    briefs: dict[uuid.UUID, MemberBrief] = {}
+    if member_ids:
+        members = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.id.in_(member_ids))
+            )
+        ).scalars().all()
+        briefs = {m.id: MemberBrief(id=m.id, display_name=m.display_name) for m in members}
+
+    def brief_of(member_id: uuid.UUID) -> MemberBrief:
+        return briefs.get(member_id) or MemberBrief(id=member_id, display_name="")
+
+    return [
+        CoreMemoryEntryOut(
+            id=e.id,
+            scope=e.scope,
+            content=e.content,
+            status=e.status,
+            proposed_by=(
+                brief_of(e.proposed_by_member_id) if e.proposed_by_member_id else None
+            ),
+            confirmed_by=brief_of(e.confirmed_by_member_id),
+            effective_at=e.effective_at,
+            created_at=e.created_at,
+        )
+        for e in entries
+    ]
 
 
 async def create_entry(
