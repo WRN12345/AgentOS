@@ -12,7 +12,7 @@
 | `backend` | FastAPI 模块化单体（4.1），唯一对外 API | `agentos-backend` | `alembic upgrade head && uvicorn` |
 | `worker` | 后台任务消费者（4.2），与 API 共用代码 | `agentos-worker` | `python -m app.workers.worker` |
 | `scheduler` | 周期任务触发器（4.2） | `agentos-scheduler` | `python -m app.workers.scheduler` |
-| `postgres` | 主数据库（第 11 章） | `postgres:16-alpine` | postgres |
+| `postgres` | 主数据库（第 11 章） | `pgvector/pgvector:pg16`（基于 postgres:16，含 vector 扩展，供记忆模块使用） | postgres |
 | `redis` | 任务队列 + 心跳媒介（4.2） | `redis:7-alpine` | redis-server（AOF 开启） |
 
 要点：
@@ -25,7 +25,7 @@
 
 ### postgres / redis
 
-- 使用官方镜像 `postgres:16-alpine`、`redis:7-alpine`，数据通过 bind mount 持久化到 `./data/postgres`、`./data/redis`（19.4）。
+- 数据库使用 `pgvector/pgvector:pg16` 镜像（基于官方 postgres:16，自带 vector 扩展，记忆模块的语义检索依赖它），redis 使用官方镜像 `redis:7-alpine`，数据通过 bind mount 持久化到 `./data/postgres`、`./data/redis`（19.4）。
 - redis 以 `--appendonly yes` 启动（AOF 持久化），防止队列数据因重启丢失。
 - **两者都不发布端口**（compose 里没有 `ports:`）。原因有二：一是 19.4 节要求数据库和 Redis 不对外开放，正式部署只开放 Web 入口；二是本机宿主机 5432/6379 已被系统服务占用。日常调试用 `docker compose exec` 进容器操作（见第 8 节）。`.env.example` 注释中"端口仅绑定 127.0.0.1"描述的是同一安全目标的通用形态，本仓库实现得更严格——完全不绑定。
 - `PGDATA` 设为 `/var/lib/postgresql/data/pgdata` 子目录，避免 bind mount 根目录的权限/残留文件问题。
@@ -191,6 +191,7 @@ worker/scheduler 没有 HTTP 端口，Compose 没法用 HTTP 探活，因此采�
 | `LLM_PROVIDER` | 模型提供方（第 15 章）：`ollama` 或 OpenAI 兼容 |
 | `LLM_MODEL` | 模型名（如 `qwen2.5` 等），留空表示未配置 |
 | `OLLAMA_BASE_URL` | 宿主机 Ollama 地址，容器内经 `host.docker.internal:11434` 访问 |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | 记忆模块 embedding 模型与维度（默认 `qwen3-embedding:0.6b` / 1024）；首次部署需在宿主机执行 `ollama pull qwen3-embedding:0.6b`；更换模型/维度时 memory_chunks 须全量重建（设计文档 16.4） |
 | `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | OpenAI 兼容云 API 的地址与密钥（可切换的备选通道） |
 | `LOG_DIR` | 容器内日志目录，挂载到 `data/logs/` |
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务触发周期（秒），默认 60 |
@@ -199,7 +200,7 @@ worker/scheduler 没有 HTTP 端口，Compose 没法用 HTTP 探活，因此采�
 
 ### 镜像源与构建
 
-- 本机 Docker Hub 不可达：基础镜像（`postgres:16-alpine`、`redis:7-alpine`、`python:3.12-slim`、`node:20-alpine`、`nginx:1.27-alpine`）是从 `docker.m.daocloud.io` 拉取后 `docker tag` 回官方名的。新机器重建时如遇拉取失败，先按此方式处理。
+- 本机 Docker Hub 不可达：基础镜像（`pgvector/pgvector:pg16`、`redis:7-alpine`、`python:3.12-slim`、`node:20-alpine`、`nginx:1.27-alpine`）是从 `docker.m.daocloud.io` 拉取后 `docker tag` 回官方名的。新机器重建时如遇拉取失败，先按此方式处理。
 - pip / npm 源通过 compose 的 build args 切换：`backend`/`worker`/`scheduler` 的 `PIP_INDEX_URL`（当前为清华镜像，通用环境改 `https://pypi.org/simple`）、`frontend` 的 `NPM_REGISTRY`（当前为 npmmirror，通用环境改 `https://registry.npmjs.org`）。Dockerfile 内默认值是官方源，compose 里覆盖为国内镜像。
 - **buildx 版本要求 ≥ 0.17**（Dockerfile 使用了较新的构建特性）。本机已手动安装 v0.19.3 到 `/root/.docker/cli-plugins/docker-buildx`；如升级 Docker 后插件丢失，需重新安装。
 
