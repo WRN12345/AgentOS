@@ -14,6 +14,7 @@ import WorkItemDetailPage from "../features/work-items/WorkItemDetailPage";
 import ApprovalsPage from "../features/approvals/ApprovalsPage";
 import DeliverablesPage from "../features/deliverables/DeliverablesPage";
 import AgentAssistantPage from "../features/agent-assistant/AgentAssistantPage";
+import DocumentsPage from "../features/knowledge/DocumentsPage";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "approvals", element: <ApprovalsPage /> },
       { path: "deliverables", element: <DeliverablesPage /> },
       { path: "agent-assistant", element: <AgentAssistantPage /> },
+      { path: "documents", element: <DocumentsPage /> },
     ],
   },
 ]);

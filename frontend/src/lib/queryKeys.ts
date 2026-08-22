@@ -29,6 +29,7 @@ export const queryKeys = {
   deadlineChangeRequests: (...suffix: unknown[]) =>
     scoped("deadline-change-requests", ...suffix),
   deliverables: (...suffix: unknown[]) => scoped("deliverables", ...suffix),
+  files: (...suffix: unknown[]) => scoped("files", ...suffix),
   reviews: (...suffix: unknown[]) => scoped("reviews", ...suffix),
   devDoc: (...suffix: unknown[]) => scoped("dev-doc", ...suffix),
   agentSuggestions: (...suffix: unknown[]) =>

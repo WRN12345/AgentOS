@@ -318,9 +318,17 @@ export interface StoredFile {
   storage_backend: string;
   uploaded_by: string;
   work_item_id: string | null;
+  /** 版本链（设计文档第 3 节）：同名上传递增；superseded_by 非空表示已被新版本取代。 */
+  version: number;
+  superseded_by: string | null;
+  /** 索引状态（设计文档第 6 节）。 */
+  index_status: IndexStatus;
   created_at: string;
   updated_at: string;
 }
+
+/** 索引状态机（设计文档第 6 节）。 */
+export type IndexStatus = "pending" | "indexing" | "indexed" | "failed" | "unindexed";
 
 export type DeliverableType = "git_link" | "text" | "file";
 
