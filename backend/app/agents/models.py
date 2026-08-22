@@ -71,7 +71,7 @@ class AgentSuggestion(CoreModel):
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 使用的业务事实引用（如 {"work_item_ids": [...], "member_ids": [...]}）
     fact_refs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    # 人工采纳结果（T5.7 反馈接口写入）
+    # 人工采纳结果（T5.7 反馈接口写入；expired 由周期任务写入，16.6）
     review_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", index=True
     )
@@ -84,7 +84,8 @@ class AgentSuggestion(CoreModel):
 
     __table_args__ = (
         CheckConstraint(
-            "review_status IN ('pending', 'accepted', 'ignored')",
+            # expired：核心记忆提议挂起超 7 天自动过期（16.6，迁移 0027）
+            "review_status IN ('pending', 'accepted', 'ignored', 'expired')",
             name="ck_agent_suggestions_review_status",
         ),
     )

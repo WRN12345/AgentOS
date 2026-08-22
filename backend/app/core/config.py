@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     due_soon_horizon_hours: int = 24
     # Workflow Risk Agent 周期风险扫描（T5.5，4.2 节逾期风险扫描）触发周期，默认 24 小时
     agent_risk_scan_interval_seconds: float = 86400.0
+    # 核心记忆提议过期扫描（M4.5，16.6）触发周期，默认 24 小时
+    memory_proposal_expire_interval_seconds: float = 86400.0
 
     # 认证（第 16 章）：JWT 密钥与令牌有效期；密钥走环境变量，禁止硬编码真实密钥
     jwt_secret: str = "dev-jwt-secret-change-in-production"

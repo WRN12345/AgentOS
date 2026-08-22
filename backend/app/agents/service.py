@@ -207,12 +207,12 @@ async def submit_suggestion_feedback(
 
 
 def raise_if_suggestion_reviewed(suggestion: AgentSuggestion) -> None:
-    """状态迁移校验：已反馈的建议再次反馈 → 409（简单一致方案：不幂等吞掉）。"""
+    """状态迁移校验：已终结（accepted/ignored/expired）的建议再次反馈 → 409。"""
     if suggestion.review_status != "pending":
         raise ApiException(
             409,
             ErrorCodes.AGENT_SUGGESTION_ALREADY_REVIEWED,
-            "该建议已完成人工反馈，不可重复反馈",
+            "该建议已完成人工反馈或已过期，不可重复反馈",
             details={
                 "suggestion_id": str(suggestion.id),
                 "review_status": suggestion.review_status,

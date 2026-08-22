@@ -9,10 +9,11 @@
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.models import AgentRun, AgentSuggestion
@@ -176,3 +177,46 @@ async def apply_memory_proposal(
         )
     await session.flush()
     return target
+
+
+# ---------- 提议自动过期（16.6，M4.5） ----------
+
+#: 提议挂起上限（天）：超过无人确认自动过期，Agent 认为仍重要可重新提议
+MEMORY_PROPOSAL_EXPIRE_DAYS = 7
+
+
+async def expire_stale_proposals(
+    session: AsyncSession, *, now: datetime | None = None
+) -> int:
+    """把挂起超 7 天的 memory_proposal 标记为 expired，返回过期条数。
+
+    过期是终态：不占待确认列表（list 按 pending 过滤自然消失），
+    再反馈走既有的非 pending → 409；审计留痕（16.10，actor 为空=系统动作）。
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=MEMORY_PROPOSAL_EXPIRE_DAYS)
+    stmt = (
+        select(AgentSuggestion, AgentRun.project_id)
+        .join(AgentRun, AgentSuggestion.run_id == AgentRun.id)
+        .where(
+            AgentSuggestion.suggestion_type == MEMORY_PROPOSAL_TYPE,
+            AgentSuggestion.review_status == "pending",
+            AgentSuggestion.created_at < cutoff,
+        )
+    )
+    rows = (await session.execute(stmt)).all()
+    for suggestion, project_id in rows:
+        suggestion.review_status = "expired"
+        suggestion.reviewed_at = now
+        await record_event(
+            session,
+            action="core_memory.proposal_expired",
+            actor_id=None,  # 系统动作
+            target_type="agent_suggestion",
+            target_id=suggestion.id,
+            before={"review_status": "pending"},
+            after={"review_status": "expired"},
+            project_id=project_id,
+        )
+    await session.commit()
+    return len(rows)
