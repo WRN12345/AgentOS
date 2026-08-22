@@ -38,12 +38,17 @@ async def search_memory(
     """带权限校验的检索：项目成员限本项目，全局 admin 只读任意项目。
 
     - member 为 None 且非 admin → 404；member 与 project_id 不匹配/已停用 → 404；
-    - caller 必须是 CALLER_TYPES 之一（档案放行规则的判定依据，M3.9）。
+    - caller 必须是 CALLER_TYPES 之一（档案放行规则的判定依据，M3.9）；
+    - 例外：caller=agent_assignment 是 Agent 运行时的内部调用（M6.1），无成员身份，
+      项目上下文由 run.project_id 服务端确立——HTTP 路径已在路由层拒绝该标识（M2.10）。
     """
     if caller not in CALLER_TYPES:
         raise ValueError(f"未知检索调用方: {caller}")
 
-    if member is not None:
+    if caller == CALLER_AGENT_ASSIGNMENT:
+        # Agent 内部调用：信任锚是 run 的项目归属，不做成员/admin 校验
+        pass
+    elif member is not None:
         if not member.is_active or member.project_id != project_id:
             raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
     elif not is_admin:
