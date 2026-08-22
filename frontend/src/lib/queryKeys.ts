@@ -30,6 +30,7 @@ export const queryKeys = {
     scoped("deadline-change-requests", ...suffix),
   deliverables: (...suffix: unknown[]) => scoped("deliverables", ...suffix),
   files: (...suffix: unknown[]) => scoped("files", ...suffix),
+  coreMemory: (...suffix: unknown[]) => scoped("core-memory", ...suffix),
   reviews: (...suffix: unknown[]) => scoped("reviews", ...suffix),
   devDoc: (...suffix: unknown[]) => scoped("dev-doc", ...suffix),
   agentSuggestions: (...suffix: unknown[]) =>

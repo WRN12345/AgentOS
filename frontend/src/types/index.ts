@@ -118,6 +118,27 @@ export interface MemberBrief {
   display_name: string;
 }
 
+/* ---------- 记忆模块：核心记忆（设计文档第 8 节，M4.3） ---------- */
+
+/** 核心记忆条目；proposed_by 为 null 表示 Agent 提议（负责人确认后生效）。 */
+export interface CoreMemoryEntry {
+  id: string;
+  scope: string;
+  content: string;
+  status: "active" | "deprecated";
+  proposed_by: MemberBrief | null;
+  confirmed_by: MemberBrief;
+  effective_at: string;
+  created_at: string;
+}
+
+/** GET /memory/core-entries 响应：条目列表 + 容量占用。 */
+export interface CoreMemoryEntryList {
+  entries: CoreMemoryEntry[];
+  used_chars: number;
+  budget_chars: number;
+}
+
 /** 协作请求状态（8.2 节）。 */
 export type CollaborationStatus =
   | "REQUESTED"

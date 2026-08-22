@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   BarChart3,
+  BookOpen,
   Bot,
   ChevronsUpDown,
   ClipboardCheck,
@@ -41,6 +42,8 @@ const navItems = [
   { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },
   { to: "/deliverables", label: "交付物", icon: Package, end: false },
   { to: "/agent-assistant", label: "AI 助手", icon: Bot, end: false },
+  { to: "/documents", label: "知识库文档", icon: BookOpen, end: false },
+  { to: "/core-memory", label: "核心记忆", icon: Sparkles, end: false },
 ];
 
 /** 应用主布局：左侧导航 + 顶栏当前用户与登出入口。 */
