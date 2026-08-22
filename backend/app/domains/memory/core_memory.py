@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
 from app.domains.audit.service import record_event
-from app.domains.memory.models import CORE_MEMORY_BUDGET_CHARS, CoreMemoryEntry
+from app.domains.memory.models import (
+    CORE_MEMORY_BUDGET_CHARS,
+    CORE_MEMORY_NEAR_FULL_RATIO,
+    CoreMemoryEntry,
+)
 from app.domains.memory.schemas import CoreMemoryEntryOut
 from app.domains.project.models import ProjectMember
 from app.domains.project.service import require_leader
@@ -62,6 +66,14 @@ async def ensure_budget(
             "核心记忆容量不足，请先作废过时条目或走整合精简提议",
             details={"used": used, "budget": budget, "required": additional},
         )
+
+
+async def budget_nearly_full(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> tuple[bool, int, int]:
+    """容量快满判断（M4.6，供 M6.7 触发整合精简提议）：返回（是否快满, 已用, 预算）。"""
+    used, budget = await budget_usage(session, project_id=project_id)
+    return used >= budget * CORE_MEMORY_NEAR_FULL_RATIO, used, budget
 
 
 async def entries_to_out(

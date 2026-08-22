@@ -30,6 +30,9 @@ CORE_MEMORY_STATUSES = ("active", "deprecated")
 #: 单条上限与预算一致——一条吃掉全部预算也允许，由容量校验兜底
 CORE_MEMORY_BUDGET_CHARS = 4000
 
+#: 容量快满阈值（占用比例，M4.6）：达到后 Agent 应提议整合精简（M6.7）
+CORE_MEMORY_NEAR_FULL_RATIO = 0.9
+
 
 class MemoryChunk(CoreModel):
     __tablename__ = "memory_chunks"
