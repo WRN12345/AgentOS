@@ -4,7 +4,9 @@
 
 - 输入：工作项结论文本（复用 M5.2 的 build_work_item_conclusion_text）；
 - 输出：一两句可复用经验；模型判断"没有值得沉淀的"时返回约定标记 NO_EXPERIENCE，
-  调用方据此跳过（不产出提议，M5.4）；
+  调用方据此跳过（不产出提议）；
+- 产出接线（M5.4）：create_experience_proposal 把经验文字生成 memory_proposal，
+  走负责人确认通道——经验不直接生效（第 10 节）；
 - 模型错误（ModelError）不由本模块兜底，交给 worker 任务层按 16.9 处理：
   只记日志、不重试——经验沉淀允许偶尔丢失。
 """
@@ -14,8 +16,11 @@ import uuid
 import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.logging import setup_logging
+from app.agents.models import AgentRun, AgentSuggestion
 from app.domains.memory.history import build_work_item_conclusion_text
+from app.domains.memory.proposals import create_memory_proposal
 from app.domains.work_items.models import WorkItem
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.models.provider import get_model_provider
@@ -28,6 +33,9 @@ MEMORY_SUMMARY_TASK_TYPE = "memory.summary"
 
 #: 模型表示"无可沉淀经验"的约定输出
 NO_EXPERIENCE = "无"
+
+#: 经验总结运行记录的 agent_type（提议须经 run 推导项目归属，M5.4）
+EXPERIENCE_SUMMARY_AGENT_TYPE = "experience_summary"
 
 _SUMMARY_SYSTEM = (
     "你是项目经验总结助手。回看一次已完成工作项的过程记录，"
@@ -60,6 +68,33 @@ async def summarize_work_item(
     if not text or text == NO_EXPERIENCE:
         return None
     return text
+
+
+async def create_experience_proposal(
+    session: AsyncSession, *, item: WorkItem, summary: str
+) -> AgentSuggestion:
+    """总结产出自动生成核心记忆提议（M5.4，第 10 节）：走 M4.4 确认通道，不直接生效。
+
+    提议须挂在 agent_runs 上（FK + 项目归属推导）：补一条 experience_summary
+    运行记录（trigger_source=event，status=succeeded——总结本身即本次运行）。
+    """
+    run = AgentRun(
+        status="succeeded",
+        agent_type=EXPERIENCE_SUMMARY_AGENT_TYPE,
+        trigger_source="event",
+        work_item_id=item.id,
+        project_id=item.project_id,
+        model=settings.llm_model or None,
+    )
+    session.add(run)
+    await session.flush()
+    return await create_memory_proposal(
+        session,
+        run=run,
+        action="create",
+        content=summary,
+        reason=f"工作项「{item.title}」完成后自动沉淀的经验",
+    )
 
 
 async def enqueue_work_item_summary(item: WorkItem) -> None:

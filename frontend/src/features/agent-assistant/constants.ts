@@ -12,8 +12,7 @@ export const SUGGESTION_TYPE_META: Record<
   review: { label: "初审清单", className: "bg-amber-100 text-amber-700" },
   summary: { label: "进展摘要", className: "bg-green-100 text-green-700" },
   pipeline: { label: "需求拆解方案", className: "bg-indigo-100 text-indigo-700" },
-  dev_doc_review: { label: "文档初审", className: "bg-teal-100 text-teal-700" },
-  memory_proposal: {
+  dev_doc_review: { label: "文档初审", className: "bg-teal-100 text-teal-700" },  memory_proposal: {
     label: "核心记忆提议",
     className: "bg-orange-100 text-orange-700",
   },
@@ -65,6 +64,7 @@ export const AGENT_TYPE_LABELS: Record<string, string> = {
   summary_agent: "进展摘要",
   requirement_pipeline: "需求拆解流水线",
   dev_doc_review: "文档初审",
+  experience_summary: "经验总结",
   echo: "链路自检",
 };
 
