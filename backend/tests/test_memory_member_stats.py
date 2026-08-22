@@ -8,9 +8,14 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import update
 
-from app.domains.memory.member_stats import RECENT_DAYS, member_completion_stats
+from app.domains.memory.member_stats import (
+    MIN_SAMPLE_SIZE,
+    RECENT_DAYS,
+    member_completion_stats,
+)
 from app.domains.project.models import Project, ProjectMember
 from app.domains.work_items.models import WorkItem
 from app.infrastructure.database.engine import async_session_factory
@@ -18,11 +23,13 @@ from tests.conftest import add_member, add_member_for_existing_user
 
 
 async def _add_item(
-    project: Project, assignee: ProjectMember, status: str, *, title: str = "任务"
+    project: Project, assignee: ProjectMember, status: str, *, title: str = "任务",
+    due_at: datetime | None = None,
 ) -> uuid.UUID:
     async with async_session_factory() as session:
         item = WorkItem(
-            project_id=project.id, title=title, assignee_id=assignee.id, status=status
+            project_id=project.id, title=title, assignee_id=assignee.id, status=status,
+            due_at=due_at,
         )
         session.add(item)
         await session.commit()
@@ -96,3 +103,46 @@ async def test_inactive_member_stats_kept(project_a: Project) -> None:
         sd = next(s for s in stats if s.member_id == dave.id)
         assert sd.is_active is False
         assert sd.completed_total == 1
+
+
+# ---------- M3.2 按时完成率（宽口径 + 样本量，16.8） ----------
+
+
+async def test_on_time_rate_wide_scope(project_a: Project) -> None:
+    """逾期完成、改期后按时（最终截止时间）、无截止时间三种边界。"""
+    _, alice = await add_member(project_a, "alice", "Alice123!", display_name="爱丽丝")
+    now = datetime.now(UTC)
+    # 逾期完成：截止早于完成时间
+    await _add_item(project_a, alice, "COMPLETED", title="逾期", due_at=now - timedelta(days=1))
+    # 改期后按时：最终截止时间晚于完成时间（DDL 变更批准后 due_at 已就地更新）
+    await _add_item(project_a, alice, "COMPLETED", title="改期后按时", due_at=now + timedelta(days=1))
+    # 无截止时间：无约可逾，视为按时
+    await _add_item(project_a, alice, "COMPLETED", title="无截止")
+    # 取消不计入分母
+    await _add_item(project_a, alice, "CANCELLED", title="取消", due_at=now - timedelta(days=1))
+
+    async with async_session_factory() as session:
+        stats = {s.display_name: s for s in await member_completion_stats(session, project_id=project_a.id)}
+    s = stats["爱丽丝"]
+    assert s.completed_total == 3  # 取消不计入
+    assert s.on_time_completed == 2  # 改期后按时 + 无截止
+    assert s.on_time_rate == pytest.approx(2 / 3)
+
+
+async def test_sample_sufficiency_flag(project_a: Project) -> None:
+    """n < MIN_SAMPLE_SIZE 标记样本不足；达到阈值不标记；n=0 时率为 None。"""
+    _, bob = await add_member(project_a, "bob", "Bob12345!", display_name="鲍勃")
+    _, carol = await add_member(project_a, "carol", "Carol123!", display_name="卡罗尔")
+    _, dave = await add_member(project_a, "dave", "Dave12345!", display_name="戴夫")
+    for i in range(MIN_SAMPLE_SIZE):
+        await _add_item(project_a, bob, "COMPLETED", title=f"完成{i}")
+    await _add_item(project_a, carol, "COMPLETED", title="唯一一条")
+
+    async with async_session_factory() as session:
+        stats = {s.display_name: s for s in await member_completion_stats(session, project_id=project_a.id)}
+    assert stats["鲍勃"].sample_sufficient is True
+    assert stats["鲍勃"].on_time_rate == 1.0
+    assert stats["卡罗尔"].sample_sufficient is False  # 样本不足
+    assert stats["戴夫"].completed_total == 0
+    assert stats["戴夫"].on_time_rate is None
+    assert stats["戴夫"].sample_sufficient is False
