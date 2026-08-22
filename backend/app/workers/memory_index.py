@@ -32,7 +32,11 @@ from app.domains.memory.extractors import (
     UnsupportedFormatError,
     extract_text,
 )
-from app.domains.memory.history import build_run_history_text
+from app.domains.memory.history import (
+    HISTORY_KIND_WORK_ITEM,
+    build_run_history_text,
+    build_work_item_conclusion_text,
+)
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import enqueue_delayed
@@ -122,9 +126,16 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
             async with async_session_factory() as session:
                 service = MemoryIndexService(session)
                 if source_type == "history" and "text" not in payload:
-                    text = await build_run_history_text(session, uuid.UUID(str(source_id)))
+                    if payload.get("history_kind") == HISTORY_KIND_WORK_ITEM:
+                        text = await build_work_item_conclusion_text(
+                            session, uuid.UUID(str(source_id))
+                        )
+                    else:
+                        text = await build_run_history_text(
+                            session, uuid.UUID(str(source_id))
+                        )
                     if text is None:
-                        # 运行未完成/非拆解分配类型：不索引（15.4）
+                        # 运行/工作项未完成：不索引（15.4）
                         logger.info("history source not indexable, skipped: %s", source_id)
                         return
                 else:

@@ -6,6 +6,7 @@
   （必须填反馈）；reject → 拒绝当前交付但保持工作项继续执行（状态保持 IN_REVIEW）；
 - 同一事务写入：reviews 记录 + work_items 状态/version 更新 + 审计事件 +
   通知主执行人（16 节：反馈正文不进通知）；commit 成功后发布 SSE；
+- approve 完成后异步投递工作项结论索引任务（M5.2，best-effort 不在事务内）；
 - 审核反馈可见性（16 节）：查询仅负责人与该工作项主执行人，其余 403。
 """
 
@@ -19,6 +20,7 @@ from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
 from app.domains.deliverables.service import get_deliverable
+from app.domains.memory.history import enqueue_work_item_conclusion_index
 from app.domains.notifications.service import notify
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.reviews.models import Review
@@ -179,6 +181,11 @@ async def create_review(
     )
     await session.commit()
     await publish_after_commit(events)
+
+    # M5.2：审核通过（工作项完成）后异步投递结论索引任务，不拖慢主流程
+    if item.status == WorkItemStatus.COMPLETED.value:
+        await enqueue_work_item_conclusion_index(item)
+
     await session.refresh(review)
     logger.info(
         "review created: id=%s, work_item_id=%s, decision=%s, %s -> %s",
