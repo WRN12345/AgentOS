@@ -316,7 +316,8 @@ async def submit_suggestion_feedback_endpoint(
     权限：仅项目负责人（13.1 节建议中心为负责人页面，反馈决定建议命运）。
     状态迁移：仅 pending 可反馈，重复反馈 409 AGENT_SUGGESTION_ALREADY_REVIEWED；
     写 agent.suggestion_feedback 审计事件。反馈只落在 agent_suggestions
-    自身，不产生任何业务写入（采纳后的业务动作由前端走正式命令接口）。
+    自身，不产生任何业务写入（采纳后的业务动作由前端走正式命令接口）——
+    唯一例外：memory_proposal 被采纳时同事务落入核心记忆（M4.4，第 8 节）。
     """
     suggestion = await session.get(AgentSuggestion, suggestion_id)
     if suggestion is None:
@@ -327,7 +328,7 @@ async def submit_suggestion_feedback_endpoint(
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
     raise_if_suggestion_reviewed(suggestion)
     suggestion = await submit_suggestion_feedback(
-        session, suggestion, action=payload.action, actor_id=actor.id
+        session, suggestion, action=payload.action, member=actor
     )
     run = await session.get(AgentRun, suggestion.run_id)
     return AgentSuggestionOut(

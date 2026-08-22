@@ -47,6 +47,23 @@ async def budget_usage(
     return used, CORE_MEMORY_BUDGET_CHARS
 
 
+async def ensure_budget(
+    session: AsyncSession, *, project_id: uuid.UUID, additional: int
+) -> None:
+    """容量预算闸门：生效条目合计 + additional 超预算则 400，提示走整合精简（第 8 节）。
+
+    手写创建与 Agent 提议确认（M4.4，update 时 additional 可为负）共用本闸门。
+    """
+    used, budget = await budget_usage(session, project_id=project_id)
+    if used + additional > budget:
+        raise ApiException(
+            400,
+            ErrorCodes.CORE_MEMORY_BUDGET_EXCEEDED,
+            "核心记忆容量不足，请先作废过时条目或走整合精简提议",
+            details={"used": used, "budget": budget, "required": additional},
+        )
+
+
 async def entries_to_out(
     session: AsyncSession, entries: list[CoreMemoryEntry]
 ) -> list[CoreMemoryEntryOut]:
@@ -98,14 +115,7 @@ async def create_entry(
     if not content:
         raise ApiException(400, ErrorCodes.VALIDATION_ERROR, "核心记忆内容不能为空")
 
-    used, budget = await budget_usage(session, project_id=actor.project_id)
-    if used + len(content) > budget:
-        raise ApiException(
-            400,
-            ErrorCodes.CORE_MEMORY_BUDGET_EXCEEDED,
-            "核心记忆容量不足，请先作废过时条目或走整合精简提议",
-            details={"used": used, "budget": budget, "required": len(content)},
-        )
+    await ensure_budget(session, project_id=actor.project_id, additional=len(content))
 
     entry = CoreMemoryEntry(
         project_id=actor.project_id,

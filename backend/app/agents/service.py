@@ -12,7 +12,8 @@ T5.5 的 scheduler/event 触发复用 request_agent_analysis。
 
 T5.7（12.5 节）：list_suggestions() 建议查询（join agent_runs 补
 work_item_id/model）；submit_suggestion_feedback() 人工采纳/忽略反馈
-（仅负责人、仅 pending，写 agent. 前缀审计事件，不触碰任何业务状态）。
+（仅负责人、仅 pending，写 agent. 前缀审计事件，不触碰任何业务状态；
+唯一例外：memory_proposal 被采纳时同事务落入核心记忆，M4.4）。
 """
 
 import uuid
@@ -28,6 +29,8 @@ from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, apply_memory_proposal
+from app.domains.project.models import ProjectMember
 from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
@@ -164,22 +167,29 @@ async def submit_suggestion_feedback(
     suggestion: AgentSuggestion,
     *,
     action: str,
-    actor_id: uuid.UUID,
+    member: ProjectMember,
 ) -> AgentSuggestion:
     """写入人工采纳结果（仅 pending 可反馈；重复反馈 409，由路由层判定）。
 
     只更新 agent_suggestions 自身的 review_status/reviewed_by/reviewed_at
     并留 agent. 前缀审计事件，不触碰任何业务状态（10.3 节原则不变：
     Agent 建议不产生业务写入，采纳后的业务动作由前端走正式命令接口）。
+
+    唯一例外（记忆模块设计文档第 8 节，M4.4）：memory_proposal 被采纳时，
+    在同一事务内把提议落入核心记忆——先落业务再标记 accepted，校验失败
+    （容量超限/条目已失效/跨项目）整体回滚，建议保持 pending。
     """
+    if action == "accepted" and suggestion.suggestion_type == MEMORY_PROPOSAL_TYPE:
+        await apply_memory_proposal(session, suggestion, confirmer=member)
+
     before: dict[str, Any] = {"review_status": suggestion.review_status}
     suggestion.review_status = action
-    suggestion.reviewed_by = actor_id
+    suggestion.reviewed_by = member.id
     suggestion.reviewed_at = datetime.now(UTC)
     await record_event(
         session,
         action="agent.suggestion_feedback",
-        actor_id=actor_id,
+        actor_id=member.id,
         target_type="agent_suggestion",
         target_id=suggestion.id,
         before=before,
@@ -191,7 +201,7 @@ async def submit_suggestion_feedback(
         "agent suggestion feedback: id=%s action=%s actor=%s",
         suggestion.id,
         action,
-        actor_id,
+        member.id,
     )
     return suggestion
 
