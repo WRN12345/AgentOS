@@ -31,6 +31,7 @@ from app.workers.agent_run import execute_agent_run
 from app.workers.due_scan import scan_due_reminders
 from app.workers.heartbeat import heartbeat
 from app.workers.memory_index import execute_memory_index
+from app.workers.memory_summary import execute_memory_summary
 from app.workers.proposal_expire import expire_memory_proposals
 from app.workers.risk_scan import run_risk_scan
 
@@ -60,6 +61,9 @@ async def handle_task(task: dict, redis_client: redis.Redis) -> None:
     elif task_type == "memory.proposal_expire":
         # 核心记忆提议过期扫描（M4.5，16.6）：挂起超 7 天标记 expired
         await expire_memory_proposals()
+    elif task_type == "memory.summary":
+        # 经验总结任务（M5.3，16.9）：模型不可用静默跳过，失败只记日志不重试
+        await execute_memory_summary(task.get("payload", {}))
     else:
         logger.warning("unknown task type, skipped: id=%s type=%s", task.get("id"), task_type)
 
