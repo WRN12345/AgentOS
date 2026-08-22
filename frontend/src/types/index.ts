@@ -433,7 +433,12 @@ export interface RealtimeEvent {
 
 /* ---------- 阶段 5：多 Agent 辅助 ---------- */
 
-export type AgentSuggestionReviewStatus = "pending" | "accepted" | "ignored";
+export type AgentSuggestionReviewStatus =
+  | "pending"
+  | "accepted"
+  | "ignored"
+  /** 核心记忆提议挂起超 7 天自动过期（16.6，M4.5）：终态，不可再确认 */
+  | "expired";
 
 /**
  * Agent 建议（GET /agent-suggestions，12.5 节，T5.7）。

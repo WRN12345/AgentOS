@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { RequirementPipelineContent } from "../../types";
+import { MEMORY_PROPOSAL_ACTION_LABELS } from "./constants";
 
 /** 各 suggestion_type 的结构化 content 渲染（10.1 节六个 Agent + requirement_pipeline 的输出结构，见 backend/app/agents/prompts）。 */
 
@@ -370,6 +371,52 @@ function SummaryContent({ content }: { content: Record<string, unknown> }) {
   );
 }
 
+/** 核心记忆提议（M4.4/M4.6，设计文档第 8 节）：动作 + 内容预览 + 目标条目 + 理由。 */
+function MemoryProposalContent({ content }: { content: Record<string, unknown> }) {
+  const action = typeof content.action === "string" ? content.action : "";
+  const actionLabel = MEMORY_PROPOSAL_ACTION_LABELS[action] ?? action;
+  const reason = typeof content.reason === "string" ? content.reason : "";
+  const text = typeof content.content === "string" ? content.content : "";
+  const targetIds = [
+    ...(Array.isArray(content.entry_ids) ? content.entry_ids : []),
+    ...(typeof content.entry_id === "string" ? [content.entry_id] : []),
+  ] as string[];
+  return (
+    <>
+      <div>
+        <h4 className="mb-1 font-medium text-muted-foreground">提议动作</h4>
+        <Badge variant="outline">{actionLabel}</Badge>
+      </div>
+      {text && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">
+            {action === "deprecate" ? "条目说明" : "条目内容（确认后生效）"}
+          </h4>
+          <p className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2">
+            {text}
+          </p>
+        </div>
+      )}
+      {targetIds.length > 0 && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">目标条目</h4>
+          <ul className="space-y-0.5 text-xs text-muted-foreground">
+            {targetIds.map((id) => (
+              <li key={id}>{id}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {reason && (
+        <div>
+          <h4 className="mb-1 font-medium text-muted-foreground">理由</h4>
+          <p className="whitespace-pre-wrap">{reason}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
 const TYPE_RENDERERS: Record<
   string,
   (props: { content: Record<string, unknown> }) => React.JSX.Element | null
@@ -382,6 +429,7 @@ const TYPE_RENDERERS: Record<
   summary: SummaryContent,
   pipeline: PipelineContent,
   dev_doc_review: DevDocReviewContent,
+  memory_proposal: MemoryProposalContent,
 };
 
 /**

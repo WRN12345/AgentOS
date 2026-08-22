@@ -39,6 +39,7 @@ import type {
 import { formatDateTime } from "../work-items/constants";
 import {
   agentTypeLabel,
+  MEMORY_PROPOSAL_ACTION_LABELS,
   REVIEW_STATUS_META,
   RUN_STATUS_META,
   SUGGESTION_TYPE_META,
@@ -216,7 +217,15 @@ function SuggestionCard({
         newIdempotencyKey(),
       ),
     onSuccess: (_data, action) => {
-      toast.success(action === "accepted" ? "已采纳该建议" : "已忽略该建议");
+      if (suggestion.suggestion_type === "memory_proposal") {
+        // 记忆提议确认即生效（M4.4）：刷新核心记忆缓存
+        toast.success(
+          action === "accepted" ? "已确认，核心记忆已生效" : "已拒绝该提议",
+        );
+        queryClient.invalidateQueries({ queryKey: queryKeys.coreMemory() });
+      } else {
+        toast.success(action === "accepted" ? "已采纳该建议" : "已忽略该建议");
+      }
       queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
     },
     onError: (error) => toast.error(errorMessage(error, "反馈提交失败")),
@@ -224,6 +233,13 @@ function SuggestionCard({
 
   const typeMeta = SUGGESTION_TYPE_META[suggestion.suggestion_type];
   const statusMeta = REVIEW_STATUS_META[suggestion.review_status];
+  const isMemoryProposal = suggestion.suggestion_type === "memory_proposal";
+  // 记忆提议无 summary 字段：头部摘要回退为"动作 + 内容预览"
+  const headerSummary =
+    suggestion.content.summary ??
+    (isMemoryProposal && typeof suggestion.content.content === "string"
+      ? `${MEMORY_PROPOSAL_ACTION_LABELS[suggestion.content.action as string] ?? suggestion.content.action}：${suggestion.content.content}`
+      : undefined);
 
   return (
     <Card>
@@ -257,7 +273,7 @@ function SuggestionCard({
           </span>
         </div>
         <CardDescription>
-          {suggestion.content.summary ?? "（无摘要）"}
+          {headerSummary ?? "（无摘要）"}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -331,7 +347,7 @@ function SuggestionCard({
                     disabled={feedback.isPending}
                     onClick={() => feedback.mutate("accepted")}
                   >
-                    采纳
+                    {isMemoryProposal ? "确认生效" : "采纳"}
                   </Button>
                 )}
                 <Button
@@ -340,7 +356,7 @@ function SuggestionCard({
                   disabled={feedback.isPending}
                   onClick={() => feedback.mutate("ignored")}
                 >
-                  忽略
+                  {isMemoryProposal ? "拒绝" : "忽略"}
                 </Button>
               </div>
             )}
