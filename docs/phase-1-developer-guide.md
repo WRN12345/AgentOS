@@ -73,6 +73,8 @@
 
 `identity`、`project`、`work_items`、`collaboration`、`transfers`、`deadlines`、`deliverables`、`reviews`、`audit`、`notifications` 十个空包，与 4.1 节一一对应。注意 4.1 节还提到 `agents` 领域，本实现把它单列为顶层包 `app/agents/`（含 `graphs/specialists/prompts/schemas` 子包，对应第 10 章 LangGraph 流程），因为 Agent 编排与业务领域是不同关注点。业务代码从阶段 2 起按领域填充，新增功能应放进对应领域包，不要平铺到 `api/` 下。
 
+后续阶段新增的领域包：`files`（知识文档上传与版本链）、`dev_docs`（开发文档前置）、`admin`（全局管理控制台）、`approvals`（审批中心聚合）、`memory`（记忆模块——四层记忆：项目文档索引与检索、成员统计与档案、核心记忆条目与提议确认、历史与经验闭环，含知识库问答；设计文档 `docs/2026-08-16-memory-module-design.md`）。
+
 ### infrastructure/：基础设施层
 
 - `database/engine.py`：SQLAlchemy 2 异步引擎（`create_async_engine` + asyncpg 驱动），`pool_pre_ping=True` 让连接池取用连接前先探活（这正是 postgres 重启后 `/health` 能自动恢复 200 的原因之一）。`get_session()` 是 FastAPI 依赖注入用的会话工厂。
@@ -197,6 +199,26 @@ worker/scheduler 没有 HTTP 端口，Compose 没法用 HTTP 探活，因此采�
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务触发周期（秒），默认 60 |
 
 ## 7. 运维要点
+
+### 误传敏感文件的应急下架流程（记忆模块设计文档 16.3）
+
+知识库文档**严格不可删除**（admin 也不例外），误传含敏感信息的文件时按以下 SOP 在数据库层面对该版本做下架——这是运维操作，不是产品功能：
+
+1. **定位版本**：确认要下架的文件版本与块数量
+   ```bash
+   docker compose exec postgres psql -U agentos -d agentos -c \
+     "SELECT id, original_filename, version, index_status FROM stored_files WHERE original_filename = '<文件名>' ORDER BY version;"
+   ```
+2. **下架**（检索与问答立即不再命中该版本内容；旧块保留供事后审计）：
+   ```sql
+   UPDATE memory_chunks SET is_current = FALSE
+   WHERE source_type = 'document' AND source_id = '<版本 id>';
+   ```
+3. **清除文件字节**（可选但建议）：按该行的 `storage_key` 删除 `data/uploads/` 下对应文件（或 MinIO 中对应对象）。
+4. **记录**：在团队运维记录中写明操作人、时间、文件名/版本、原因（产品审计域不覆盖运维操作，需人工留痕）。
+5. **验证**：用项目内账号调用 `POST /api/v1/memory/search` 与 `/memory/qa` 确认不再命中敏感内容。
+
+注意：操作前先备份或在测试库演练；不要直接删除 `stored_files` 行（会破坏版本链与审计追溯）——确需物理删除时由 DBA 另行评估。
 
 ### 镜像源与构建
 

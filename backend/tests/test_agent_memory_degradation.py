@@ -20,6 +20,7 @@ from app.infrastructure.models.errors import ModelUnavailableError
 from tests.test_agent_pipeline import (
     _breakdown_stage,
     _analysis_stage,
+    _memory_none_stage,
     _patch_provider,
     _run_once,
     _trigger,
@@ -54,7 +55,7 @@ async def _run_pipeline(
         retriever_module, "get_embedding_provider", lambda: embedding
     )
     provider = _ScriptedProvider(
-        [_analysis_stage(), _breakdown_stage(), _assign_stage_null()]
+        [_analysis_stage(), _breakdown_stage(), _assign_stage_null(), _memory_none_stage()]
     )
     _patch_provider(monkeypatch, provider)
     run = await _trigger(
