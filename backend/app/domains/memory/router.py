@@ -21,10 +21,12 @@ from app.domains.memory.core_memory import (
     entries_to_out,
     list_entries,
 )
+from app.domains.memory.member_stats import member_completion_stats
 from app.domains.memory.schemas import (
     CoreMemoryEntryCreateIn,
     CoreMemoryEntryListOut,
     CoreMemoryEntryOut,
+    MemberStatsOut,
     MemorySearchRequest,
     MemorySearchResponse,
 )
@@ -120,3 +122,24 @@ async def deprecate_core_memory_entry(
     """负责人作废条目：保留供追溯；跨项目按 404（多项目规约）。"""
     entry = await deprecate_entry(session, leader, entry_id=entry_id)
     return (await entries_to_out(session, [entry]))[0]
+
+
+# ---------- 团队记忆：成员统计（设计文档第 7 节①，M3.3） ----------
+
+
+@router.get("/memory/member-stats", response_model=list[MemberStatsOut])
+async def list_member_stats(
+    project_id: uuid.UUID = Depends(project_id_from_request),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberStatsOut]:
+    """成员完成数/按时率/负载统计：项目成员可查（分配页面与 Agent 工具共用）；
+    全局 admin 只读查看（第 12 节）。统计严格项目内口径（含停用成员，16.7）。
+    """
+    member = await get_member_by_user(session, project_id, current_user.id)
+    if member is None or not member.is_active:
+        if not current_user.is_admin:
+            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
+
+    stats = await member_completion_stats(session, project_id=project_id)
+    return [MemberStatsOut.from_stats(s) for s in stats]

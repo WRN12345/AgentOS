@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.domains.memory.models import CORE_MEMORY_BUDGET_CHARS
+from app.domains.memory.member_stats import MemberStats
 from app.domains.memory.retriever import RetrievalResult
 from app.domains.memory.search import CALLER_LEADER_QUERY, CALLER_MEMBER_QA
 from app.domains.work_items.schemas import MemberBrief
@@ -82,3 +83,38 @@ class CoreMemoryEntryListOut(BaseModel):
     entries: list[CoreMemoryEntryOut]
     used_chars: int
     budget_chars: int
+
+
+# ---------- 团队记忆：成员统计（设计文档第 7 节①，M3.3） ----------
+
+
+class MemberStatsOut(BaseModel):
+    """成员完成数、负载与按时完成率（分配页面与 Agent 工具共用，M6.2）。
+
+    on_time_rate 为 None 表示无已完成样本（前端展示"暂无数据"）；
+    sample_sufficient=False 时前端标注"样本不足"（16.8）。
+    """
+
+    member_id: uuid.UUID
+    display_name: str
+    is_active: bool
+    completed_total: int
+    active_now: int
+    completed_recent: int
+    on_time_completed: int
+    on_time_rate: float | None
+    sample_sufficient: bool
+
+    @classmethod
+    def from_stats(cls, s: "MemberStats") -> "MemberStatsOut":
+        return cls(
+            member_id=s.member_id,
+            display_name=s.display_name,
+            is_active=s.is_active,
+            completed_total=s.completed_total,
+            active_now=s.active_now,
+            completed_recent=s.completed_recent,
+            on_time_completed=s.on_time_completed,
+            on_time_rate=s.on_time_rate,
+            sample_sufficient=s.sample_sufficient,
+        )
