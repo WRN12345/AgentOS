@@ -35,6 +35,7 @@ from app.workers.worker import handle_task
 
 #: 业务状态类审计 action 前缀（现有命名风格 <domain>.<verb>）；
 #: agent 自身事件若出现应为 agent.*，绝不允许这些业务前缀。
+#: 含记忆模块写操作（16.10 纳入审计域）：核心记忆与成员档案。
 BUSINESS_AUDIT_PREFIXES = (
     "work_item.",
     "transfer.",
@@ -44,6 +45,16 @@ BUSINESS_AUDIT_PREFIXES = (
     "collaboration.",
     "file.",
     "member.",
+    "member_profile.",
+    "core_memory.",
+)
+
+#: 记忆模块新增的只读检索工具（M6.1/M6.2）：护栏断言其不得沦为写通道
+MEMORY_TOOL_NAMES = (
+    "search_project_documents",
+    "search_history_records",
+    "get_member_stats",
+    "search_member_profiles",
 )
 
 
@@ -251,5 +262,80 @@ async def test_agent_run_emits_no_business_audit_events(
             e for e in events if e.action.startswith(BUSINESS_AUDIT_PREFIXES)
         ]
         assert business_events == [], f"agent 运行产生业务审计事件: {business_events}"
+    finally:
+        await redis_client.aclose()
+
+
+# ---------- M6.3 护栏扩展：记忆工具只读 + 提议记忆走建议通道 ----------
+
+
+def test_memory_tools_are_read_query_only() -> None:
+    """记忆检索工具全部注册为 read_query；写工具仍只有 write_suggestion 一个。"""
+    for name in MEMORY_TOOL_NAMES:
+        tool = agent_tools.TOOL_REGISTRY.get(name)
+        assert tool is not None, f"缺少工具 {name}"
+        assert tool.kind == "read_query", f"{name} 必须为只读工具"
+    write_tools = [t for t in agent_tools.TOOL_REGISTRY.values() if t.kind != "read_query"]
+    assert [t.name for t in write_tools] == ["write_suggestion"]
+
+
+async def test_memory_proposal_via_suggestion_channel_is_not_business_write(
+    project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"提议记忆条目"走建议写入通道（write_suggestion），不算业务写（M6.3）：
+
+    Agent 产出 memory_proposal 建议后——建议落 agent_suggestions、不产生任何
+    业务状态类审计事件（含 core_memory./member_profile.）、核心记忆表无变化
+    （未确认前红线不变，设计文档第 8 节）。
+    """
+    from app.domains.memory.models import CoreMemoryEntry
+
+    monkeypatch.setitem(
+        graph_base.CAPABILITIES,
+        "echo",
+        lambda state: {
+            "suggestion_type": "memory_proposal",
+            "content": {
+                "summary": "建议记住：改 X 表要同步改 Y",
+                "rationale": "历史上漏同步导致过线上故障",
+                "action": "create",
+                "content": "改 X 表结构一定要同步改 Y",
+            },
+            "confidence": 0.8,
+            "risks": "无",
+            "prompt_version": "echo.v1",
+        },
+    )
+
+    redis_client = create_redis_client()
+    try:
+        async with async_session_factory() as session:
+            run = await request_agent_analysis(
+                session,
+                redis_client,
+                project_id=project.id,
+                agent_type="echo",
+                prompt="触发记忆提议路径",
+            )
+        await _run_agent_once(redis_client, run.id)
+
+        async with async_session_factory() as session:
+            final = await session.get(AgentRun, run.id)
+            assert final is not None and final.status == "succeeded"
+            suggestion = (
+                await session.execute(
+                    select(AgentSuggestion).where(AgentSuggestion.run_id == run.id)
+                )
+            ).scalar_one()
+            assert suggestion.suggestion_type == "memory_proposal"
+
+            events = list((await session.execute(select(AuditEvent))).scalars().all())
+            business_events = [
+                e for e in events if e.action.startswith(BUSINESS_AUDIT_PREFIXES)
+            ]
+            assert business_events == [], f"agent 运行产生业务审计事件: {business_events}"
+
+            entries = list((await session.execute(select(CoreMemoryEntry))).scalars().all())
+            assert entries == [], "未确认前核心记忆不得变化"
     finally:
         await redis_client.aclose()
