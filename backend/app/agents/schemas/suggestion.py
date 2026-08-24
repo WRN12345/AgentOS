@@ -114,6 +114,8 @@ class PipelineSuggestionContent(SuggestionContent):
     collaboration_points: list[str]
     unresolved_mentions: list[str]
     risks: list[str]
+    #: 记忆参考状态（16.5，M6.6）：ok=已参考记忆；degraded=本次未参考记忆（降级标注）
+    memory_status: Literal["ok", "degraded"] = "ok"
 
 
 # ---------- dev_doc_review 专用载荷（设计文档 2026-07-30 §4.4） ----------

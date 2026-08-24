@@ -237,6 +237,11 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         )
         if isinstance(risk, str)
     ]
+    # 16.5 降级标注（M6.6）：任一记忆读取失败（embedding/检索/核心记忆）即退化为
+    # 无记忆模式，结果显式标注"本次未参考记忆"，拆解/分配主流程不受影响
+    memory_status = "ok" if memory_ok else "degraded"
+    if not memory_ok:
+        stage_risks.append("本次未参考记忆（记忆/检索服务不可用，已降级为无记忆模式）")
     content = {
         "summary": breakdown_stage.get("summary") or "需求拆解流水线分析完成",
         "rationale": breakdown_stage.get("rationale") or "按需求分析 → 拆解 → 分配顺序编排产出",
@@ -250,6 +255,8 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         # 未匹配点名由系统侧解析注入，不信任模型自报值
         "unresolved_mentions": unresolved,
         "risks": stage_risks,
+        # 记忆参考状态（16.5）：ok=已参考记忆；degraded=本次未参考记忆
+        "memory_status": memory_status,
     }
     member_ids = sorted(
         {row["member_id"] for row in capabilities}
