@@ -18,6 +18,9 @@ from app.infrastructure.models.embedding import (
 )
 from app.infrastructure.models.errors import ModelTimeoutError, ModelUnavailableError
 from app.infrastructure.models.ollama_embedding import OllamaEmbeddingProvider
+from app.infrastructure.models.openai_compatible_embedding import (
+    OpenAICompatibleEmbeddingProvider,
+)
 
 
 class FakeEmbeddingProvider(EmbeddingProvider):
@@ -145,3 +148,103 @@ async def test_factory_returns_ollama_embedding() -> None:
     assert provider.model == settings.embedding_model
     assert provider.dimensions == settings.embedding_dimensions
     assert get_embedding_provider() is provider
+
+
+# ---------- OpenAI 兼容 EmbeddingProvider（智谱 embedding-3 等） ----------
+
+
+def _make_openai_provider(handler, **kwargs) -> OpenAICompatibleEmbeddingProvider:
+    return OpenAICompatibleEmbeddingProvider(
+        "https://open.bigmodel.cn/api/paas/v4",
+        "test-api-key",
+        "embedding-3",
+        4,
+        transport=httpx.MockTransport(handler),
+        **kwargs,
+    )
+
+
+async def test_openai_embed_success() -> None:
+    """批量 embed 成功：路径/鉴权头/请求体（含 dimensions）正确，按 index 排序返回。"""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [0.5, 0.6, 0.7, 0.8], "index": 1},
+                    {"embedding": [0.1, 0.2, 0.3, 0.4], "index": 0},
+                ]
+            },
+        )
+
+    provider = _make_openai_provider(handler)
+    vectors = await provider.embed(["部署步骤", "发布流程"])
+
+    assert vectors == [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]]
+    req = captured[0]
+    assert req.url.path == "/api/paas/v4/embeddings"
+    assert req.headers["Authorization"] == "Bearer test-api-key"
+    body = json.loads(req.content)
+    assert body == {
+        "model": "embedding-3",
+        "input": ["部署步骤", "发布流程"],
+        "dimensions": 4,
+    }
+
+
+async def test_openai_embed_http_error_wrapped() -> None:
+    """401/500 等非 2xx → ModelUnavailableError，不重试，不漏 httpx 异常。"""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+
+    provider = _make_openai_provider(handler, max_retries=2)
+    with pytest.raises(ModelUnavailableError) as exc_info:
+        await provider.embed(["ping"])
+    assert not isinstance(exc_info.value, httpx.HTTPError)
+    assert calls == 1
+
+
+async def test_openai_embed_dimension_mismatch_no_retry() -> None:
+    """返回维度与 EMBEDDING_DIMENSIONS 不符 → ModelUnavailableError，不重试。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2], "index": 0}]})
+
+    provider = _make_openai_provider(handler, max_retries=2)
+    with pytest.raises(ModelUnavailableError):
+        await provider.embed(["测试"])
+
+
+async def test_openai_embed_timeout_wrapped() -> None:
+    """超时 → ModelTimeoutError，不漏 httpx.TimeoutException。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    provider = _make_openai_provider(handler, max_retries=0)
+    with pytest.raises(ModelTimeoutError):
+        await provider.embed(["ping"])
+
+
+def test_openai_provider_requires_api_key() -> None:
+    """缺 API Key 直接报错（配置错误尽早暴露）。"""
+    with pytest.raises(RuntimeError, match="EMBEDDING_API_KEY"):
+        OpenAICompatibleEmbeddingProvider(
+            "https://open.bigmodel.cn/api/paas/v4", "", "embedding-3", 1024
+        )
+
+
+def test_factory_returns_openai_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EMBEDDING_PROVIDER=openai_compatible 时工厂返回对应实现。"""
+    monkeypatch.setattr(settings, "embedding_provider", "openai_compatible")
+    monkeypatch.setattr(settings, "embedding_api_key", "k")
+    provider = get_embedding_provider()
+    assert isinstance(provider, OpenAICompatibleEmbeddingProvider)
+    assert provider.model == settings.embedding_model

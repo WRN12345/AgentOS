@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # 更换模型/维度时 memory_chunks 须全量重建（16.4）。
     embedding_model: str = "qwen3-embedding:0.6b"
     embedding_dimensions: int = 1024
+    # embedding Provider 切换：默认 ollama（本地）；openai_compatible 接智谱等
+    # OpenAI 兼容云端服务——此时项目文档内容将发送至第三方（16 节数据外发提示）
+    embedding_provider: str = "ollama"
+    embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    embedding_api_key: str = ""
     # 检索（设计文档第 5 节、16.13）：默认返回条数与余弦距离上限
     # （超过上限视为"知识库没有相关内容"，问答页拒答并给线索）
     memory_search_limit: int = 8

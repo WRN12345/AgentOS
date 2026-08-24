@@ -39,20 +39,39 @@ _provider: EmbeddingProvider | None = None
 def get_embedding_provider() -> EmbeddingProvider:
     """Provider 单例工厂（同 get_model_provider 模式）。
 
-    业务/worker 代码一律经此函数获取 embedding 能力；当前仅 Ollama 实现，
-    复用 OLLAMA_BASE_URL 与 LLM_TIMEOUT_SECONDS / LLM_MAX_RETRIES 配置。
+    业务/worker 代码一律经此函数获取 embedding 能力。EMBEDDING_PROVIDER：
+    - ollama（默认）：本地 Ollama，复用 OLLAMA_BASE_URL 与
+      LLM_TIMEOUT_SECONDS / LLM_MAX_RETRIES 配置；
+    - openai_compatible：智谱等 OpenAI 兼容云端服务（EMBEDDING_BASE_URL /
+      EMBEDDING_API_KEY），项目文档内容将发送至第三方（16 节）。
     """
     global _provider
     if _provider is None:
-        from app.infrastructure.models.ollama_embedding import OllamaEmbeddingProvider
+        if settings.embedding_provider == "openai_compatible":
+            from app.infrastructure.models.openai_compatible_embedding import (
+                OpenAICompatibleEmbeddingProvider,
+            )
 
-        _provider = OllamaEmbeddingProvider(
-            base_url=settings.ollama_base_url,
-            model=settings.embedding_model,
-            dimensions=settings.embedding_dimensions,
-            timeout=settings.llm_timeout_seconds,
-            max_retries=settings.llm_max_retries,
-        )
+            _provider = OpenAICompatibleEmbeddingProvider(
+                base_url=settings.embedding_base_url,
+                api_key=settings.embedding_api_key,
+                model=settings.embedding_model,
+                dimensions=settings.embedding_dimensions,
+                timeout=settings.llm_timeout_seconds,
+                max_retries=settings.llm_max_retries,
+            )
+        elif settings.embedding_provider == "ollama":
+            from app.infrastructure.models.ollama_embedding import OllamaEmbeddingProvider
+
+            _provider = OllamaEmbeddingProvider(
+                base_url=settings.ollama_base_url,
+                model=settings.embedding_model,
+                dimensions=settings.embedding_dimensions,
+                timeout=settings.llm_timeout_seconds,
+                max_retries=settings.llm_max_retries,
+            )
+        else:
+            raise RuntimeError(f"不支持的 embedding Provider: {settings.embedding_provider}")
     return _provider
 
 
