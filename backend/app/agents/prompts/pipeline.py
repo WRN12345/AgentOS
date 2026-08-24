@@ -107,8 +107,9 @@ def render_breakdown_prompt(
     open_work_items: list[dict],
     workload: list[dict],
     core_memory: str = "",
+    reference: str = "",
 ) -> str:
-    """拆解段 user 提示词（需求原文 + 分析结果 + 进行中工作项 + 负载 + 核心记忆）。"""
+    """拆解段 user 提示词（需求原文 + 分析结果 + 负载 + 核心记忆 + 按需检索片段）。"""
     import json
 
     sections = [
@@ -128,6 +129,8 @@ def render_breakdown_prompt(
     ]
     if core_memory:
         sections.extend(["", core_memory])
+    if reference:
+        sections.extend(["", reference])
     return "\n".join(sections)
 
 
@@ -139,8 +142,9 @@ def render_assign_prompt(
     workload: list[dict],
     specified: list[dict],
     core_memory: str = "",
+    team_memory: str = "",
 ) -> str:
-    """分配段 user 提示词（拆解项 + 成员能力/负载 + 指定人选硬约束 + 核心记忆）。"""
+    """分配段 user 提示词（拆解项 + 能力/负载 + 指定人选 + 核心记忆 + 团队事实记录）。"""
     import json
 
     sections = [
@@ -160,4 +164,6 @@ def render_assign_prompt(
     ]
     if core_memory:
         sections.extend(["", core_memory])
+    if team_memory:
+        sections.extend(["", team_memory])
     return "\n".join(sections)

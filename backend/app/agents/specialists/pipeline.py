@@ -26,7 +26,11 @@ from typing import TYPE_CHECKING, Any
 from app.agents.prompts import pipeline as pipeline_prompts
 from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
-from app.domains.memory.context import safe_core_memory_block
+from app.domains.memory.context import (
+    collect_retrieval_block,
+    collect_team_memory_block,
+    safe_core_memory_block,
+)
 from app.infrastructure.database.engine import async_session_factory
 
 if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
@@ -134,13 +138,23 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             session, project_id=project_id
         )
         # M6.4：核心记忆全量常驻注入（第 11 节）；读取失败降级为空（16.5，M6.6 标注）
-        core_memory, _memory_ok = await safe_core_memory_block(
+        core_memory, core_ok = await safe_core_memory_block(
             session, project_id=project_id
         )
+        # M6.5：按需检索（文档+历史 ≤8 段/3000 字符）；失败降级为空（16.5）
+        requirement = state.get("prompt", "")
+        reference, retrieval_ok = await collect_retrieval_block(
+            session, project_id=project_id, query=requirement
+        )
+        # M6.5：分配环节的团队事实记录（完成统计 + 成员档案摘录）
+        team_memory, team_ok = await collect_team_memory_block(
+            session, project_id=project_id, query=requirement
+        )
+        # 任一记忆读取失败即降级标注（M6.6 消费此标记）
+        memory_ok = core_ok and retrieval_ok and team_ok
 
     context = state.get("context", {})
     project_name = (context.get("project") or {}).get("name") or ""
-    requirement = state.get("prompt", "")
     specified, unresolved = resolve_specified_assignees(requirement, assignable)
 
     # 1. 需求分析：目标/约束/交付物/验收标准 + involved_aspects（限词表取值）
@@ -167,6 +181,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             open_work_items=open_work_items,
             workload=workload,
             core_memory=core_memory,
+            reference=reference,
         ),
     )
     breakdown_stage = _load_stage(raw_breakdown)
@@ -184,6 +199,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             workload=workload,
             specified=specified,
             core_memory=core_memory,
+            team_memory=team_memory,
         ),
     )
     assign_stage = _load_stage(raw_assign)
