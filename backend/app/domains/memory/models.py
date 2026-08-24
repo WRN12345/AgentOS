@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import settings
@@ -107,3 +107,25 @@ class MemberProfile(CoreModel):
     last_edited_by_member_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_members.id"), nullable=False
     )
+
+class QaHistory(CoreModel):
+    """知识库问答历史（迁移 0029，2026-08-24 决策修订）。
+
+    - 按人落库：问题 + 结论 + 依据/线索快照（JSONB），仅提问者本人可查；
+    - 不属审计域：审计域仍不记录提问（16.10 保留），本表是用户自己的使用记录；
+    - 只追加不修改，无删除接口。
+    """
+
+    __tablename__ = "qa_history"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
+    )
+    member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_members.id"), index=True, nullable=False
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 依据（answered）或线索（refused）快照：[{source_type, source_id, title, snippet}]
+    sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

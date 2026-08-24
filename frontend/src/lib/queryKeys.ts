@@ -31,6 +31,7 @@ export const queryKeys = {
   deliverables: (...suffix: unknown[]) => scoped("deliverables", ...suffix),
   files: (...suffix: unknown[]) => scoped("files", ...suffix),
   coreMemory: (...suffix: unknown[]) => scoped("core-memory", ...suffix),
+  qaHistory: (...suffix: unknown[]) => scoped("qa-history", ...suffix),
   reviews: (...suffix: unknown[]) => scoped("reviews", ...suffix),
   devDoc: (...suffix: unknown[]) => scoped("dev-doc", ...suffix),
   agentSuggestions: (...suffix: unknown[]) =>

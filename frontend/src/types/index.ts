@@ -157,6 +157,16 @@ export interface QaResponse {
   clues: QaSource[];
 }
 
+/** GET /memory/qa/history 条目：本人问答历史（2026-08-24 决策修订）。 */
+export interface QaHistoryItem {
+  id: string;
+  question: string;
+  status: "answered" | "refused";
+  answer: string | null;
+  sources: QaSource[];
+  created_at: string;
+}
+
 /** 协作请求状态（8.2 节）。 */
 export type CollaborationStatus =
   | "REQUESTED"

@@ -44,9 +44,14 @@ async def test_fake_provider_contract() -> None:
 
 
 def test_embedding_config_defaults() -> None:
-    """配置默认值：qwen3-embedding:0.6b / 1024 维（设计文档 15.1）。"""
-    assert settings.embedding_model == "qwen3-embedding:0.6b"
-    assert settings.embedding_dimensions == 1024
+    """配置字段默认值：qwen3-embedding:0.6b / 1024 维（设计文档 15.1）。
+
+    断字段定义默认值而非当前环境值，与宿主 .env（可能已切智谱等）解耦。
+    """
+    from app.core.config import Settings
+
+    assert Settings.model_fields["embedding_model"].default == "qwen3-embedding:0.6b"
+    assert Settings.model_fields["embedding_dimensions"].default == 1024
 
 
 @pytest.fixture(autouse=True)
@@ -140,8 +145,9 @@ async def test_ollama_embed_timeout_wrapped() -> None:
         await provider.embed(["ping"])
 
 
-async def test_factory_returns_ollama_embedding() -> None:
-    """工厂默认返回 OllamaEmbeddingProvider（单例）。"""
+async def test_factory_returns_ollama_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EMBEDDING_PROVIDER=ollama（默认）时工厂返回 OllamaEmbeddingProvider（单例）。"""
+    monkeypatch.setattr(settings, "embedding_provider", "ollama")  # 与宿主 .env 解耦
     provider = get_embedding_provider()
     assert isinstance(provider, OllamaEmbeddingProvider)
     assert isinstance(provider, EmbeddingProvider)

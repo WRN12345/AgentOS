@@ -12,9 +12,11 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.files.models import StoredFile
+from app.domains.memory.models import QaHistory
 from app.domains.memory.retriever import RetrievalResult
 from app.domains.memory.search import CALLER_MEMBER_QA, search_memory
 from app.domains.project.models import ProjectMember
@@ -170,3 +172,50 @@ async def answer_question(
         system=_QA_SYSTEM,
     )
     return QaAnswer(status="answered", answer=_strip_thinking(answer), sources=sources)
+
+
+# ---------- 问答历史（2026-08-24 决策修订：按人落库，仅本人可见） ----------
+
+
+async def save_qa_history(
+    session: AsyncSession, *, member: ProjectMember, query: str, result: QaAnswer
+) -> None:
+    """把一次问答按人落库（依据/线索做快照，事后原文变更不影响历史）。"""
+    sources = result.sources if result.status == "answered" else result.clues
+    record = QaHistory(
+        project_id=member.project_id,
+        member_id=member.id,
+        question=query,
+        status=result.status,
+        answer=result.answer,
+        sources=[
+            {
+                "source_type": s.source_type,
+                "source_id": str(s.source_id),
+                "title": s.title,
+                "snippet": s.snippet,
+            }
+            for s in sources
+        ],
+    )
+    session.add(record)
+    await session.commit()
+
+
+async def list_qa_history(
+    session: AsyncSession, *, member: ProjectMember, limit: int = 50, offset: int = 0
+) -> list[QaHistory]:
+    """本人问答历史（时间倒序）。仅本人可见——按 member_id 强过滤，
+    不提供任何"查他人历史"的路径（负责人/admin 同样看不到）。
+    """
+    stmt = (
+        select(QaHistory)
+        .where(
+            QaHistory.project_id == member.project_id,
+            QaHistory.member_id == member.id,
+        )
+        .order_by(QaHistory.created_at.desc(), QaHistory.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list((await session.execute(stmt)).scalars().all())

@@ -96,7 +96,7 @@ async def _clean_tables() -> AsyncIterator[None]:
                 "collaboration_requests, notifications, "
                 "transfer_requests, deadline_change_requests, stored_files, "
                 "agent_suggestions, agent_runs, dev_docs, "
-                "memory_chunks, core_memory_entries, member_profiles, "
+                "memory_chunks, core_memory_entries, member_profiles, qa_history, "
                 "project_members, projects"
             )
         )

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SendHorizonal } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "../../services/api";
-import type { QaResponse, QaSource } from "../../types";
+import { queryKeys } from "../../lib/queryKeys";
+import type { QaHistoryItem, QaResponse, QaSource } from "../../types";
+import { formatDateTime } from "../work-items/constants";
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   document: "项目文档",
@@ -123,14 +125,24 @@ function SourcesList({
  * 低于阈值明确拒答并列出最接近的线索（16.13 宁拒答不编造）。
  */
 export default function QaPage() {
+  const queryClient = useQueryClient();
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<QaResponse | null>(null);
   const [activeSource, setActiveSource] = useState<QaSource | null>(null);
 
+  // 本人问答历史（2026-08-24 修订：按人落库，仅本人可见）
+  const { data: history } = useQuery({
+    queryKey: queryKeys.qaHistory(),
+    queryFn: () => api.get<QaHistoryItem[]>("/memory/qa/history"),
+  });
+
   const ask = useMutation({
     mutationFn: (q: string) =>
       api.post<QaResponse>("/memory/qa", { question: q }),
-    onSuccess: (data) => setResult(data),
+    onSuccess: (data) => {
+      setResult(data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.qaHistory() });
+    },
     onError: (error) => toast.error(errorMessage(error, "提问失败，请稍后重试")),
   });
 
@@ -138,6 +150,16 @@ export default function QaPage() {
     const q = question.trim();
     if (!q || ask.isPending) return;
     ask.mutate(q);
+  };
+
+  /** 历史条目 → 结果视图（answered 的依据进 sources，refused 的快照进 clues）。 */
+  const showHistory = (item: QaHistoryItem) => {
+    setResult({
+      status: item.status,
+      answer: item.answer,
+      sources: item.status === "answered" ? item.sources : [],
+      clues: item.status === "refused" ? item.sources : [],
+    });
   };
 
   return (
@@ -237,6 +259,40 @@ export default function QaPage() {
       )}
 
       <SourceDialog source={activeSource} onClose={() => setActiveSource(null)} />
+
+      {history && history.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">历史记录</CardTitle>
+            <CardDescription>我的过往提问（仅本人可见）</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {history.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
+                    onClick={() => showHistory(item)}
+                  >
+                    <span className="truncate">{item.question}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {item.status === "answered" ? (
+                        <Badge variant="default">已回答</Badge>
+                      ) : (
+                        <Badge variant="outline">未找到</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">
+                        {formatDateTime(item.created_at)}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

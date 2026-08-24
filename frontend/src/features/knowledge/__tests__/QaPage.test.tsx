@@ -12,7 +12,7 @@ vi.mock("../../../services/api", async (importOriginal) => {
 });
 
 import QaPage from "../QaPage";
-import { mockApi } from "../../../test/mock-api";
+import { mockApi, stubGet } from "../../../test/mock-api";
 import { renderWithProviders, signInAs } from "../../../test/render";
 import { makeMember } from "../../../test/fixtures";
 import type { QaResponse } from "../../../types";
@@ -207,5 +207,69 @@ describe("QaPage 冷启动标注（M7.6，16.11）", () => {
     await waitFor(() =>
       expect(screen.getByText("本项目积累尚少")).toBeInTheDocument(),
     );
+  });
+});
+
+
+describe("QaPage 历史记录（2026-08-24 修订）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    signInAs(makeMember());
+  });
+
+  it("展示本人历史列表，点击回看该次问答", async () => {
+    stubGet({
+      "/memory/qa/history": [
+        {
+          id: "h-1",
+          question: "怎么部署",
+          status: "answered",
+          answer: "发布前先构建镜像 [1]。",
+          sources: [
+            {
+              source_type: "document",
+              source_id: "file-1",
+              title: "部署指南.md",
+              snippet: "发布步骤：先构建镜像",
+            },
+          ],
+          created_at: "2026-08-24T08:00:00Z",
+        },
+      ],
+    });
+    renderWithProviders(<QaPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText("历史记录")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("已回答")).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByText("怎么部署"));
+    await waitFor(() =>
+      expect(screen.getByText("发布前先构建镜像 [1]。")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("依据 1 条")).toBeInTheDocument();
+  });
+
+  it("提问成功后刷新历史列表", async () => {
+    stubGet({ "/memory/qa/history": [] });
+    mockApi.post.mockResolvedValue(answered);
+    renderWithProviders(<QaPage />);
+
+    await userEvent.setup().type(screen.getByLabelText("问题"), "怎么部署");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+
+    await waitFor(() =>
+      expect(mockApi.post).toHaveBeenCalledWith("/memory/qa", {
+        question: "怎么部署",
+      }),
+    );
+    // 历史查询被失效重取（第二次调用 /memory/qa/history）
+    await waitFor(() => {
+      const calls = mockApi.get.mock.calls.filter((c) =>
+        String(c[0]).startsWith("/memory/qa/history"),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
 from app.domains.identity.dependencies import get_current_user
 from app.domains.identity.models import User
 from app.domains.memory.core_memory import (
@@ -23,7 +24,7 @@ from app.domains.memory.core_memory import (
 )
 from app.domains.memory.member_profiles import get_profile, profile_to_out, upsert_profile
 from app.domains.memory.member_stats import member_completion_stats
-from app.domains.memory.qa import answer_question
+from app.domains.memory.qa import answer_question, list_qa_history, save_qa_history
 from app.domains.memory.schemas import (
     CoreMemoryEntryCreateIn,
     CoreMemoryEntryListOut,
@@ -35,6 +36,7 @@ from app.domains.memory.schemas import (
     MemoryQaResponse,
     MemorySearchRequest,
     MemorySearchResponse,
+    QaHistoryOut,
     QaSourceOut,
 )
 from app.domains.memory.search import (
@@ -53,6 +55,8 @@ from app.infrastructure.database.engine import get_session
 from app.infrastructure.models.errors import ModelError
 
 router = APIRouter(tags=["memory"])
+
+logger = setup_logging("backend")
 
 
 @router.post("/memory/search", response_model=MemorySearchResponse)
@@ -216,6 +220,14 @@ async def ask_knowledge_base(
         raise ApiException(
             503, ErrorCodes.INTERNAL_ERROR, "模型服务暂不可用，请稍后重试"
         ) from exc
+
+    # 问答历史按人落库（2026-08-24 修订，仅本人可见）；best-effort：
+    # 历史写入失败不影响问答本身
+    try:
+        await save_qa_history(session, member=member, query=body.question, result=result)
+    except Exception:  # noqa: BLE001
+        logger.warning("qa history save failed, answer unaffected", exc_info=True)
+
     return MemoryQaResponse(
         status=result.status,
         answer=result.answer,
@@ -238,3 +250,34 @@ async def ask_knowledge_base(
             for c in result.clues
         ],
     )
+
+
+@router.get("/memory/qa/history", response_model=list[QaHistoryOut])
+async def list_my_qa_history(
+    limit: int = 50,
+    offset: int = 0,
+    member: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[QaHistoryOut]:
+    """本人问答历史（时间倒序，分页）。仅本人可见——负责人/admin 无成员身份
+    或查他人历史均无此路径（2026-08-24 决策修订）。"""
+    records = await list_qa_history(session, member=member, limit=limit, offset=offset)
+    return [
+        QaHistoryOut(
+            id=r.id,
+            question=r.question,
+            status=r.status,
+            answer=r.answer,
+            sources=[
+                QaSourceOut(
+                    source_type=s["source_type"],
+                    source_id=uuid.UUID(s["source_id"]),
+                    title=s["title"],
+                    snippet=s["snippet"],
+                )
+                for s in r.sources
+            ],
+            created_at=r.created_at,
+        )
+        for r in records
+    ]

@@ -170,3 +170,14 @@ class MemoryQaResponse(BaseModel):
     answer: str | None
     sources: list[QaSourceOut]
     clues: list[QaSourceOut]
+
+
+class QaHistoryOut(BaseModel):
+    """问答历史条目（仅本人可见）：问题 + 结论 + 依据/线索快照。"""
+
+    id: uuid.UUID
+    question: str
+    status: str
+    answer: str | None
+    sources: list[QaSourceOut]
+    created_at: datetime
