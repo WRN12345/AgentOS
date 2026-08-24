@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from app.agents.prompts import pipeline as pipeline_prompts
 from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
+from app.domains.memory.context import safe_core_memory_block
 from app.infrastructure.database.engine import async_session_factory
 
 if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
@@ -132,6 +133,10 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         assignable = await TOOL_REGISTRY["list_assignable_members"].func(
             session, project_id=project_id
         )
+        # M6.4：核心记忆全量常驻注入（第 11 节）；读取失败降级为空（16.5，M6.6 标注）
+        core_memory, _memory_ok = await safe_core_memory_block(
+            session, project_id=project_id
+        )
 
     context = state.get("context", {})
     project_name = (context.get("project") or {}).get("name") or ""
@@ -145,6 +150,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             project_name=project_name,
             requirement=requirement,
             capability_tags=capability_tags,
+            core_memory=core_memory,
         ),
     )
     analysis = _load_stage(raw_analysis)
@@ -160,6 +166,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             analysis=analysis,
             open_work_items=open_work_items,
             workload=workload,
+            core_memory=core_memory,
         ),
     )
     breakdown_stage = _load_stage(raw_breakdown)
@@ -176,6 +183,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             capabilities=capabilities,
             workload=workload,
             specified=specified,
+            core_memory=core_memory,
         ),
     )
     assign_stage = _load_stage(raw_assign)
