@@ -14,7 +14,7 @@ Agent 与问答页面必须共用同一条带权限校验的路径（第 12 节�
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -50,8 +50,14 @@ class MemoryRetriever:
         source_types: list[str] | None = None,
         limit: int | None = None,
         max_distance: float | None = None,
+        include_cross_project_profiles: bool = False,
     ) -> list[RetrievalResult]:
-        """项目内向量检索，按余弦距离升序返回 top-k（超过距离上限的丢弃）。"""
+        """项目内向量检索，按余弦距离升序返回 top-k（超过距离上限的丢弃）。
+
+        include_cross_project_profiles=True 时（仅 leader_query / agent_assignment
+        两个调用方，16.12），额外命中 project_id 为 NULL 的 profile 块——
+        档案随人走、跨项目可见的唯一例外；是否放行由 search.py 权限层判定。
+        """
         if not query.strip():
             return []
         limit = limit if limit is not None else settings.memory_search_limit
@@ -61,10 +67,20 @@ class MemoryRetriever:
 
         query_vector = (await self._provider.embed([query]))[0]
         distance = MemoryChunk.embedding.cosine_distance(query_vector).label("distance")
+        if include_cross_project_profiles:
+            project_filter = or_(
+                MemoryChunk.project_id == project_id,
+                and_(
+                    MemoryChunk.project_id.is_(None),
+                    MemoryChunk.source_type == "profile",
+                ),
+            )
+        else:
+            project_filter = MemoryChunk.project_id == project_id
         stmt = (
             select(MemoryChunk, distance)
             .where(
-                MemoryChunk.project_id == project_id,
+                project_filter,
                 MemoryChunk.is_current.is_(True),
                 MemoryChunk.model_version == settings.embedding_model,
             )

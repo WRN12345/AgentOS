@@ -54,6 +54,15 @@ async def search_memory(
     elif not is_admin:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
 
+    # 档案跨项目放行（16.12，M3.9）：仅 leader_query / agent_assignment 两个场景
+    # 可命中 project_id 为 NULL 的 profile 块；member_qa 不命中任何档案
+    # （普通成员问答不命中他项目无关人员档案）。
+    allow_profiles = caller in (CALLER_LEADER_QUERY, CALLER_AGENT_ASSIGNMENT)
+    if not allow_profiles and source_types and "profile" in source_types:
+        source_types = [t for t in source_types if t != "profile"]
+        if not source_types:
+            return []
+
     retriever = MemoryRetriever(session)
     return await retriever.search(
         query,
@@ -61,4 +70,5 @@ async def search_memory(
         source_types=source_types,
         limit=limit,
         max_distance=max_distance,
+        include_cross_project_profiles=allow_profiles,
     )
