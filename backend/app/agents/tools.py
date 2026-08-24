@@ -36,6 +36,7 @@ from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.files.models import StoredFile
 from app.domains.identity.models import User
+from app.domains.memory.member_stats import member_completion_stats
 from app.domains.memory.search import CALLER_AGENT_ASSIGNMENT, search_memory
 from app.domains.project.models import MemberCapability, ProjectMember
 from app.domains.transfers.models import TransferRequest
@@ -612,6 +613,58 @@ async def search_history_records(
     ]
 
 
+async def get_member_stats(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> list[dict]:
+    """成员完成统计（M3.1/M3.2）：各成员完成数/按时率/负载/样本量。
+
+    分配环节参考"他在本项目做过什么、做得怎么样"（事实记录，第 7 节①）；
+    is_active=False 为停用成员（16.7 统计保留，不进分配候选）。
+    """
+    stats = await member_completion_stats(session, project_id=project_id)
+    return [
+        {
+            "member_id": str(s.member_id),
+            "display_name": s.display_name,
+            "is_active": s.is_active,
+            "completed_total": s.completed_total,
+            "active_now": s.active_now,
+            "completed_recent": s.completed_recent,
+            "on_time_rate": s.on_time_rate,
+            "sample_sufficient": s.sample_sufficient,
+        }
+        for s in stats
+    ]
+
+
+async def search_member_profiles(
+    session: AsyncSession,
+    query: str,
+    *,
+    project_id: uuid.UUID,
+    limit: int = 5,
+) -> list[dict]:
+    """检索成员文字档案（M3.5/M3.7 入索引）：统计体现不出来的成员特质。
+
+    走 M3.9 放行规则——agent_assignment 场景可命中随人走的跨项目档案
+    （16.12），供分配决策参考"某人对支付模块的历史包袱很熟"这类信息。
+    """
+    results = await search_memory(
+        session,
+        member=None,
+        is_admin=False,
+        project_id=project_id,
+        query=query,
+        caller=CALLER_AGENT_ASSIGNMENT,
+        source_types=["profile"],
+        limit=limit,
+    )
+    return [
+        {"content": r.content, "source_id": str(r.source_id), "distance": r.distance}
+        for r in results
+    ]
+
+
 # ---------- 写入建议工具（write_suggestion，唯一写工具） ----------
 
 
@@ -738,6 +791,18 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
             kind="read_query",
             func=search_history_records,
             description="检索历史拆解/分配记录与已完成工作项结论（参考以往经验）",
+        ),
+        AgentTool(
+            name="get_member_stats",
+            kind="read_query",
+            func=get_member_stats,
+            description="查询成员完成统计：完成数/按时率/负载/样本量（分配参考事实记录）",
+        ),
+        AgentTool(
+            name="search_member_profiles",
+            kind="read_query",
+            func=search_member_profiles,
+            description="检索成员文字档案（成员特质与历史背景，分配参考）",
         ),
         AgentTool(
             name="write_suggestion",

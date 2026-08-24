@@ -85,3 +85,69 @@ def test_tools_registered_as_read_query() -> None:
     for name in ("search_project_documents", "search_history_records"):
         tool = TOOL_REGISTRY[name]
         assert tool.kind == "read_query"
+
+
+# ---------- M6.2 成员统计与档案查询工具 ----------
+
+
+async def test_get_member_stats_tool(project_a: Project) -> None:
+    """工具返回完成统计；停用成员带 is_active=False（不进分配候选，16.7）。"""
+    from app.agents.tools import get_member_stats
+    from tests.conftest import add_member
+    from tests.test_memory_member_stats import _add_item
+
+    _, alice = await add_member(project_a, "alice", "Alice123!", display_name="爱丽丝")
+    _, dave = await add_member(project_a, "dave", "Dave12345!", display_name="戴夫")
+    await _add_item(project_a, alice, "COMPLETED")
+    await _add_item(project_a, dave, "IN_PROGRESS")
+    async with async_session_factory() as session:
+        from app.domains.project.models import ProjectMember as PM
+
+        member = await session.get(PM, dave.id)
+        assert member is not None
+        member.is_active = False
+        await session.commit()
+
+        stats = {s["display_name"]: s for s in await get_member_stats(session, project_id=project_a.id)}
+    assert stats["爱丽丝"]["completed_total"] == 1
+    assert stats["爱丽丝"]["on_time_rate"] == 1.0
+    assert stats["爱丽丝"]["sample_sufficient"] is False
+    assert stats["戴夫"]["active_now"] == 1
+    assert stats["戴夫"]["is_active"] is False
+
+
+async def test_search_member_profiles_tool(
+    project_a: Project, project_b: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """档案工具走 M3.9 放行：agent_assignment 命中随人走的跨项目档案。"""
+    from app.agents.tools import search_member_profiles
+    from app.core.config import settings
+    from app.domains.memory.models import MemoryChunk
+
+    source_id = uuid.uuid4()
+    # 与 FakeEmbeddingProvider 输出同向（[0.1]*dims），保证余弦距离 0 必命中
+    vec = [0.1] * settings.embedding_dimensions
+    async with async_session_factory() as session:
+        session.add(
+            MemoryChunk(
+                project_id=None,  # profile 随人走
+                source_type="profile",
+                source_id=source_id,
+                content="对支付模块的历史包袱很熟",
+                embedding=vec,
+                model_version=settings.embedding_model,
+            )
+        )
+        await session.commit()
+
+        hits = await search_member_profiles(session, "支付", project_id=project_a.id)
+        assert len(hits) == 1
+        assert hits[0]["source_id"] == str(source_id)
+        # B 项目视角同样可命中（随人走，16.12 放行两场景之一）
+        hits = await search_member_profiles(session, "支付", project_id=project_b.id)
+        assert len(hits) == 1
+
+
+def test_m62_tools_registered_as_read_query() -> None:
+    for name in ("get_member_stats", "search_member_profiles"):
+        assert TOOL_REGISTRY[name].kind == "read_query"
