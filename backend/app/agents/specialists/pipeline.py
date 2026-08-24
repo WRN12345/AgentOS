@@ -7,6 +7,9 @@
    collaboration_points[]）；
 3. 分配（复用 assignment_advisor 的成员能力/负载只读数据查询），为每个拆解项
    产出 recommended_assignee + candidates + 理由。
+4. 记忆评估（M6.7，记忆模块设计文档第 8 节）：判断本次过程是否有值得沉淀的
+   约定/决策/教训，产出 memory_proposal 走负责人确认通道（不直接生效）；
+   容量快满时优先整合精简提议。
 
 指定人选处理（§3）：需求文本中点名的人选按 display_name/username 匹配
 ProjectMember（排除 role=admin 与 is_active=false），作为 hard constraint
@@ -20,18 +23,28 @@ validate_output 产生 json_parse / schema_validate 诊断（与 build_output
 """
 
 import json
+import logging
 import re
+import uuid
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.models import AgentRun
 from app.agents.prompts import pipeline as pipeline_prompts
 from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
+from app.core.errors import ApiException
 from app.domains.memory.context import (
     collect_retrieval_block,
     collect_team_memory_block,
     safe_core_memory_block,
 )
+from app.domains.memory.core_memory import budget_nearly_full, list_entries
+from app.domains.memory.proposals import create_memory_proposal
 from app.infrastructure.database.engine import async_session_factory
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
     from app.agents.graphs.base import AgentGraphState
@@ -116,6 +129,43 @@ def _stage_parse_error(raw: str) -> str:
     except json.JSONDecodeError as exc:
         return str(exc)
     return "输出不是 JSON 对象" if not isinstance(payload, dict) else ""
+
+
+async def _emit_memory_proposal(
+    session: AsyncSession, state: "AgentGraphState", memory_stage: dict[str, Any]
+) -> None:
+    """记忆评估段的产出落为 memory_proposal（M4.4 通道，确认前核心记忆不变）。
+
+    模型输出不可信：动作非 create/consolidate、entry_ids 非法或负载校验失败
+    只记日志跳过，绝不影响主建议（M6.3 护栏：提议不产生业务状态写入）。
+    """
+    action = memory_stage.get("action")
+    if action not in ("create", "consolidate"):
+        return  # none 或其他：无提议
+    entry_ids: list[uuid.UUID] | None = None
+    if action == "consolidate":
+        try:
+            entry_ids = [uuid.UUID(str(i)) for i in (memory_stage.get("entry_ids") or [])]
+        except (ValueError, TypeError):
+            logger.info("memory proposal dropped: invalid entry_ids", exc_info=True)
+            return
+    try:
+        run = await session.get(AgentRun, uuid.UUID(str(state["run_id"])))
+    except (ValueError, TypeError):
+        return
+    if run is None:
+        return
+    try:
+        await create_memory_proposal(
+            session,
+            run=run,
+            action=action,
+            content=memory_stage.get("content") or None,
+            entry_ids=entry_ids,
+            reason=memory_stage.get("reason") or None,
+        )
+    except ApiException:
+        logger.info("memory proposal dropped: invalid payload", exc_info=True)
 
 
 async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
@@ -206,6 +256,31 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     if assign_stage is None:
         return raw_assign
     assignments = assign_stage.get("assignments") or []
+
+    # 4. 记忆评估（M6.7，第 8 节）：值得记住 → memory_proposal（确认后才生效，
+    # 核心记忆不变）；容量快满（M4.6 判断）时提示模型优先整合精简
+    if project_id is not None:
+        async with async_session_factory() as session:
+            entries = await list_entries(session, project_id=project_id)
+            active_entries = [e for e in entries if e.status == "active"]
+            nearly_full, used_chars, budget_chars = await budget_nearly_full(
+                session, project_id=project_id
+            )
+            raw_memory = await _call_stage_json(
+                system=pipeline_prompts.MEMORY_SYSTEM_PROMPT,
+                user_prompt=pipeline_prompts.render_memory_prompt(
+                    project_name=project_name,
+                    requirement=requirement,
+                    breakdown_summary=str(breakdown_stage.get("summary") or ""),
+                    core_entries=[{"id": str(e.id), "content": e.content} for e in active_entries],
+                    used_chars=used_chars,
+                    budget_chars=budget_chars,
+                    nearly_full=nearly_full,
+                ),
+            )
+            memory_stage = _load_stage(raw_memory)
+            if memory_stage is not None:
+                await _emit_memory_proposal(session, state, memory_stage)
 
     # 合并：assignments 与拆解项按下标一一对应；user_specified 由系统侧按
     # 点名解析结果权威标记，不信任模型自报值（Agent 不得更改用户指定）。

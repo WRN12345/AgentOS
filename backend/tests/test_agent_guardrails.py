@@ -49,6 +49,10 @@ BUSINESS_AUDIT_PREFIXES = (
     "core_memory.",
 )
 
+#: 允许在 agent run 内产生的审计动作：提议不是业务状态变更——
+#: 核心记忆在负责人确认前不变（M6.7，设计文档第 8 节红线）
+ALLOWED_AGENT_AUDIT_ACTIONS = ("core_memory.proposed",)
+
 #: 记忆模块新增的只读检索工具（M6.1/M6.2）：护栏断言其不得沦为写通道
 MEMORY_TOOL_NAMES = (
     "search_project_documents",
@@ -331,7 +335,10 @@ async def test_memory_proposal_via_suggestion_channel_is_not_business_write(
 
             events = list((await session.execute(select(AuditEvent))).scalars().all())
             business_events = [
-                e for e in events if e.action.startswith(BUSINESS_AUDIT_PREFIXES)
+                e
+                for e in events
+                if e.action.startswith(BUSINESS_AUDIT_PREFIXES)
+                and e.action not in ALLOWED_AGENT_AUDIT_ACTIONS
             ]
             assert business_events == [], f"agent 运行产生业务审计事件: {business_events}"
 

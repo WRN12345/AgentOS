@@ -177,6 +177,11 @@ def _assign_stage(zhangsan: ProjectMember, lisi: ProjectMember) -> str:
     )
 
 
+def _memory_none_stage() -> str:
+    """记忆评估段脚本（M6.7）：本次过程无值得沉淀的经验。"""
+    return json.dumps({"action": "none", "content": "", "entry_ids": []}, ensure_ascii=False)
+
+
 # ---------- 指定人选解析（纯函数单元测试） ----------
 
 
@@ -316,7 +321,7 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         "部署给赵六，代码审查给王管理，数据迁移给老钱"
     )
     provider = _ScriptedProvider(
-        [_analysis_stage(), _breakdown_stage(), _assign_stage(zhangsan, lisi)]
+        [_analysis_stage(), _breakdown_stage(), _assign_stage(zhangsan, lisi), _memory_none_stage()]
     )
     _patch_provider(monkeypatch, provider)
 
@@ -366,7 +371,8 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert str(lisi.id) in suggestion.fact_refs["member_ids"]
 
         # 模型上下文：分析段带技能标签词表；分配段带成员能力数据与指定人选硬约束
-        assert len(provider.calls) == 3
+        # （共 4 段调用：分析/拆解/分配 + M6.7 记忆评估段）
+        assert len(provider.calls) == 4
         assert all(call["json_output"] is True for call in provider.calls)
         assert '"RAG"' in provider.calls[0]["prompt"]
         assert "搭建一个 RAG 问答平台" in provider.calls[0]["prompt"]
@@ -426,6 +432,7 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
             '{"work_item_breakdown": [{"title": "缺括号"',  # 非法 JSON：对象未闭合
             _breakdown_stage(),
             _assign_stage(zhangsan, lisi),
+            _memory_none_stage(),
         ]
     )
     _patch_provider(monkeypatch, provider)
@@ -439,8 +446,8 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
             final = await session.get(AgentRun, run.id)
             assert final is not None and final.status == "succeeded", final.error
 
-        # 共 4 次模型调用：拆解段多了一次重试，且重试提示词带解析错误反馈
-        assert len(provider.calls) == 4
+        # 共 5 次模型调用：拆解段多了一次重试（M6.7 记忆评估段为第 4 段）
+        assert len(provider.calls) == 5
         assert "无法解析为合法 JSON" in provider.calls[2]["prompt"]
     finally:
         await redis_client.aclose()
@@ -462,7 +469,12 @@ async def test_pipeline_schema_invalid_merge_fails_run(
         ensure_ascii=False,
     )
     provider = _ScriptedProvider(
-        [_analysis_stage(), empty_breakdown, json.dumps({"assignments": [], "risks": []})]
+        [
+            _analysis_stage(),
+            empty_breakdown,
+            json.dumps({"assignments": [], "risks": []}),
+            _memory_none_stage(),
+        ]
     )
     _patch_provider(monkeypatch, provider)
     monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 一次定终态（17.3 节）

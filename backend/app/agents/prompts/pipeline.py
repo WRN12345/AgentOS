@@ -167,3 +167,57 @@ def render_assign_prompt(
     if team_memory:
         sections.extend(["", team_memory])
     return "\n".join(sections)
+
+
+# ---------- 记忆评估段（M6.7，设计文档第 8、10 节） ----------
+
+MEMORY_SYSTEM_PROMPT = (
+    "你是项目记忆管家。回看一次需求拆解/分配的过程，判断其中是否有值得团队"
+    "长期记住的信息——技术约定、关键决策、踩坑教训（不是过程复述、不是任务内容本身）。"
+    "只输出一个 JSON 对象，不要输出任何其他文字、解释或 Markdown 代码块标记。"
+    "JSON 结构："
+    '{"action": "create 或 consolidate 或 none", '
+    '"content": "条目正文（一两句话）", '
+    '"entry_ids": ["被合并的核心记忆条目 id"], '
+    '"reason": "为什么值得记住"}。'
+    "规则：没有值得记住的信息时 action 为 none，content 给空字符串；"
+    "create 用于新增一条经验；"
+    "当容量快满（nearly_full=true）时优先 consolidate——从给定的核心记忆条目"
+    "id 列表中选出至少两条过时或重复的条目合并精简，entry_ids 必须原样引用"
+    "输入中的条目 id（至少两个），content 为合并精简后的正文；"
+    "entry_ids 仅 consolidate 需要，其余动作给空数组；"
+    "你不直接写入任何数据，你的产出只是建议，需负责人确认后才会生效。"
+    + RETRIEVED_CONTENT_DECLARATION
+)
+
+
+def render_memory_prompt(
+    *,
+    project_name: str,
+    requirement: str,
+    breakdown_summary: str,
+    core_entries: list[dict],
+    used_chars: int,
+    budget_chars: int,
+    nearly_full: bool,
+) -> str:
+    """记忆评估段 user 提示词（过程摘要 + 当前核心记忆与容量占用）。"""
+    import json
+
+    return "\n".join(
+        [
+            f"项目：{project_name or '（未知）'}",
+            "",
+            "需求原文：",
+            requirement.strip() or "（空）",
+            "",
+            "本次拆解结果摘要：",
+            breakdown_summary or "（无）",
+            "",
+            "当前核心记忆条目（id → 内容；consolidate 的 entry_ids 只能从中挑选）：",
+            json.dumps(core_entries, ensure_ascii=False, indent=2),
+            "",
+            f"容量占用：{used_chars} / {budget_chars} 字符；"
+            f"nearly_full={'true' if nearly_full else 'false'}",
+        ]
+    )
