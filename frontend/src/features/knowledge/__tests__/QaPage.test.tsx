@@ -153,3 +153,59 @@ describe("QaPage 依据列表与原文查看（M7.5）", () => {
     );
   });
 });
+
+
+describe("QaPage 冷启动标注（M7.6，16.11）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    signInAs(makeMember());
+  });
+
+  it("检索结果稀少时标注「本项目积累尚少」", async () => {
+    mockApi.post.mockResolvedValue(answered); // 仅 1 条依据
+    renderWithProviders(<QaPage />);
+
+    await userEvent.setup().type(screen.getByLabelText("问题"), "怎么部署");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("本项目积累尚少")).toBeInTheDocument(),
+    );
+  });
+
+  it("积累充足（多条依据）时不出现标注", async () => {
+    mockApi.post.mockResolvedValue({
+      ...answered,
+      sources: [
+        ...answered.sources,
+        {
+          source_type: "history",
+          source_id: "wi-2",
+          title: "工作项：部署流水线",
+          snippet: "工作项完成记录",
+        },
+      ],
+    });
+    renderWithProviders(<QaPage />);
+
+    await userEvent.setup().type(screen.getByLabelText("问题"), "怎么部署");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("依据 2 条")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("本项目积累尚少")).not.toBeInTheDocument();
+  });
+
+  it("拒答且线索稀少时同样标注", async () => {
+    mockApi.post.mockResolvedValue(refused); // 仅 1 条线索
+    renderWithProviders(<QaPage />);
+
+    await userEvent.setup().type(screen.getByLabelText("问题"), "部署流程");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("本项目积累尚少")).toBeInTheDocument(),
+    );
+  });
+});

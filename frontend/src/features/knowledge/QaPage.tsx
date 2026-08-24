@@ -30,6 +30,12 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   core_memory: "核心记忆",
 };
 
+/** 冷启动标注（M7.6，16.11）：本次检索结果稀少时如实提示"本项目积累尚少"。 */
+function isSparseResult(result: QaResponse): boolean {
+  if (result.status === "answered") return result.sources.length <= 1;
+  return result.clues.length <= 1;
+}
+
 /** 依据原文弹窗（M7.5，设计文档第 11 节）：片段原文 + 按来源类型的追溯入口。 */
 function SourceDialog({
   source,
@@ -184,6 +190,9 @@ export default function QaPage() {
                 <Badge variant="default">依据 {result.sources.length} 条</Badge>
               ) : (
                 <Badge variant="outline">未找到相关内容</Badge>
+              )}
+              {isSparseResult(result) && (
+                <Badge variant="secondary">本项目积累尚少</Badge>
               )}
             </div>
           </CardHeader>
