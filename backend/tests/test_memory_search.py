@@ -114,3 +114,40 @@ async def test_unknown_caller_rejected(project_a) -> None:
                 query="x",
                 caller="someone",
             )
+
+
+async def test_three_caller_types_accepted_at_service_layer(project_a, monkeypatch) -> None:
+    """M3.8：leader_query / agent_assignment / member_qa 三种标识均可传入并在服务层可判。
+
+    - member_qa / leader_query：HTTP 路径（成员/负责人身份）；
+    - agent_assignment：Agent 内部调用（无成员身份，信任锚为 run 的项目归属）。
+    """
+    from app.domains.memory.search import (
+        CALLER_AGENT_ASSIGNMENT,
+        CALLER_LEADER_QUERY,
+        CALLER_MEMBER_QA,
+    )
+
+    await _seed_chunk(project_a.id)
+    _, member = await add_member(project_a, "alice", "Alice123!")
+
+    from app.domains.memory import retriever as retriever_module
+
+    monkeypatch.setattr(
+        retriever_module, "get_embedding_provider", lambda: _FakeProvider()
+    )
+    async with async_session_factory() as session:
+        for caller, m in (
+            (CALLER_MEMBER_QA, member),
+            (CALLER_LEADER_QUERY, member),
+            (CALLER_AGENT_ASSIGNMENT, None),  # Agent 内部调用无成员身份
+        ):
+            results = await search_memory(
+                session,
+                member=m,
+                is_admin=False,
+                project_id=project_a.id,
+                query="文档",
+                caller=caller,
+            )
+            assert [r.content for r in results] == ["项目内文档"], caller
