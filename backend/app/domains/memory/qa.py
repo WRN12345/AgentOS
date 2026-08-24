@@ -8,6 +8,7 @@
 - 阈值沿用 settings.memory_search_max_distance（M2.8 已参数化，可配置）。
 """
 
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -77,6 +78,14 @@ _QA_SYSTEM = (
     "的知识，也不得猜测；片段不足以回答时，直接说『根据现有资料无法回答』。"
     "回答末尾用 [1] [2] 标注每个结论出自哪一段资料（编号与输入一致）。"
 )
+
+# 推理模型（如 MiniMax-M2.x）会在 content 里内联 <think> 思考段；
+# 回答展示只保留结论，剥掉思考过程
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
 
 
 @dataclass(frozen=True)
@@ -160,4 +169,4 @@ async def answer_question(
         f"问题：{query}\n\n资料片段：\n{snippets}",
         system=_QA_SYSTEM,
     )
-    return QaAnswer(status="answered", answer=answer.strip(), sources=sources)
+    return QaAnswer(status="answered", answer=_strip_thinking(answer), sources=sources)

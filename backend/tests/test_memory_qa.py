@@ -211,3 +211,41 @@ async def test_refusal_does_not_call_model(
     assert result.answer is None
     assert len(result.clues) == 1
     assert provider.calls == []
+
+
+def test_strip_thinking() -> None:
+    """推理模型的 <think> 思考段被剥离，只留结论（MiniMax-M2.x 形态）。"""
+    from app.domains.memory.qa import _strip_thinking
+
+    raw = "<think>用户在问部署流程，我应该先看第 1 段资料……这段讲的是发布步骤，所以答案是……</think>发布前先构建镜像 [1]。"
+    assert _strip_thinking(raw) == "发布前先构建镜像 [1]。"
+    # 无思考段时原样返回
+    assert _strip_thinking("发布前先构建镜像。") == "发布前先构建镜像。"
+    # 多段/换行的思考过程也能剥离
+    raw2 = "<think>第一段\n思考</think>结论一<think>第二段\n思考</think>结论二"
+    assert _strip_thinking(raw2) == "结论一结论二"
+
+
+async def test_answer_strips_thinking(
+    project_a: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端到端：模型返回带 <think> 的回答，接口层只展示结论。"""
+    from app.domains.memory import qa as qa_module
+    from app.domains.memory.qa import answer_question
+
+    _, leader = await add_member(project_a, "leader", "Leader123!", role="leader")
+    _, member = await add_member(project_a, "alice", "Alice123!")
+    monkeypatch.setattr(
+        qa_module,
+        "get_model_provider",
+        lambda: _ScriptedQAProvider("<think>先分析资料</think>发布前先构建镜像 [1]。"),
+    )
+    await _seed_document_with_file(project_a, leader, "部署指南.md", "发布步骤：先构建镜像")
+
+    async with async_session_factory() as session:
+        result = await answer_question(
+            session, member=member, project_id=project_a.id, query="怎么部署"
+        )
+    assert result.status == "answered"
+    assert result.answer == "发布前先构建镜像 [1]。"
+    assert "<think>" not in (result.answer or "")
