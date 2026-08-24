@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { SendHorizonal } from "lucide-react";
 import { toast } from "sonner";
@@ -11,10 +12,104 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "../../services/api";
-import type { QaResponse } from "../../types";
+import type { QaResponse, QaSource } from "../../types";
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  document: "项目文档",
+  history: "历史记录",
+  core_memory: "核心记忆",
+};
+
+/** 依据原文弹窗（M7.5，设计文档第 11 节）：片段原文 + 按来源类型的追溯入口。 */
+function SourceDialog({
+  source,
+  onClose,
+}: {
+  source: QaSource | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={source !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{source?.title}</DialogTitle>
+          <DialogDescription>
+            {SOURCE_TYPE_LABELS[source?.source_type ?? ""] ?? source?.source_type}
+            · 答案依据的原文片段
+          </DialogDescription>
+        </DialogHeader>
+        <p className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2 text-sm">
+          {source?.snippet}
+        </p>
+        {source?.source_type === "document" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => api.downloadFile(`/files/${source.source_id}/download`)}
+          >
+            下载原文
+          </Button>
+        )}
+        {source?.source_type === "history" && (
+          <Link to={`/work-items/${source.source_id}`}>
+            <Button variant="outline" size="sm">
+              查看关联工作项
+            </Button>
+          </Link>
+        )}
+        {source?.source_type === "core_memory" && (
+          <Link to="/core-memory">
+            <Button variant="outline" size="sm">
+              查看核心记忆
+            </Button>
+          </Link>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 依据列表（M7.5）：答案下方列出全部依据，点击查看原文。 */
+function SourcesList({
+  sources,
+  onOpen,
+}: {
+  sources: QaSource[];
+  onOpen: (source: QaSource) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-medium text-muted-foreground">依据（点击查看原文）</h4>
+      <ul className="space-y-2">
+        {sources.map((s, i) => (
+          <li key={`${s.source_type}-${s.source_id}-${i}`}>
+            <button
+              type="button"
+              className="w-full rounded-md bg-muted px-3 py-2 text-left text-sm hover:bg-muted/70"
+              onClick={() => onOpen(s)}
+            >
+              <span className="mr-2 text-xs text-muted-foreground">[{i + 1}]</span>
+              <span className="font-medium">{s.title}</span>
+              <span className="block text-muted-foreground line-clamp-2">
+                {s.snippet}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * 知识库问答页（M7.4，设计文档第 11 节②）：
@@ -24,6 +119,7 @@ import type { QaResponse } from "../../types";
 export default function QaPage() {
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<QaResponse | null>(null);
+  const [activeSource, setActiveSource] = useState<QaSource | null>(null);
 
   const ask = useMutation({
     mutationFn: (q: string) =>
@@ -93,7 +189,12 @@ export default function QaPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {result.status === "answered" ? (
-              <p className="whitespace-pre-wrap">{result.answer}</p>
+              <>
+                <p className="whitespace-pre-wrap">{result.answer}</p>
+                {result.sources.length > 0 && (
+                  <SourcesList sources={result.sources} onOpen={setActiveSource} />
+                )}
+              </>
             ) : (
               <div className="space-y-2">
                 <p className="text-sm">
@@ -109,12 +210,15 @@ export default function QaPage() {
             {result.status === "refused" && result.clues.length > 0 && (
               <ul className="space-y-2">
                 {result.clues.map((c) => (
-                  <li
-                    key={`${c.source_type}-${c.source_id}`}
-                    className="rounded-md bg-muted px-3 py-2 text-sm"
-                  >
-                    <span className="font-medium">{c.title}</span>
-                    <span className="block text-muted-foreground">{c.snippet}</span>
+                  <li key={`${c.source_type}-${c.source_id}`}>
+                    <button
+                      type="button"
+                      className="w-full rounded-md bg-muted px-3 py-2 text-left text-sm hover:bg-muted/70"
+                      onClick={() => setActiveSource(c)}
+                    >
+                      <span className="font-medium">{c.title}</span>
+                      <span className="block text-muted-foreground">{c.snippet}</span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -122,6 +226,8 @@ export default function QaPage() {
           </CardContent>
         </Card>
       )}
+
+      <SourceDialog source={activeSource} onClose={() => setActiveSource(null)} />
     </div>
   );
 }
