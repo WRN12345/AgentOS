@@ -10,17 +10,24 @@
 
 import uuid
 
+import redis.asyncio as redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.identity.models import User
+from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE
 from app.domains.memory.models import MemberProfile
 from app.domains.memory.schemas import MemberProfileOut
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_member_by_user
 from app.domains.work_items.schemas import MemberBrief
+from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.queue.queue import enqueue
+
+logger = setup_logging("backend")
 
 
 async def get_profile(session: AsyncSession, user_id: uuid.UUID) -> MemberProfile | None:
@@ -121,4 +128,29 @@ async def upsert_profile(
     # updated_at 的 onupdate=func.now() 在 UPDATE 后被 SQLAlchemy 标记过期，
     # 异步会话属性访问无法隐式重载（MissingGreenlet），序列化前显式刷新
     await session.refresh(profile)
+    # M3.7：档案创建/变更即入索引（source_type=profile，project_id=NULL 随人走），
+    # 重建语义——编辑后旧块被整体替换；best-effort，不拖垮主流程
+    await _dispatch_profile_index(profile)
     return profile
+
+
+async def _dispatch_profile_index(profile: MemberProfile) -> None:
+    """投递档案索引任务（纯文本路径）；投递失败只记日志。"""
+    redis_client: redis.Redis = create_redis_client()
+    try:
+        await enqueue(
+            redis_client,
+            MEMORY_INDEX_TASK_TYPE,
+            {
+                "project_id": None,  # profile 随人走，不挂项目（16.12）
+                "source_type": "profile",
+                "source_id": str(profile.id),
+                "text": profile.content,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "profile index task enqueue failed: profile=%s", profile.id, exc_info=True
+        )
+    finally:
+        await redis_client.aclose()
