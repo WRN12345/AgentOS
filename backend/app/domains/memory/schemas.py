@@ -118,3 +118,23 @@ class MemberStatsOut(BaseModel):
             on_time_rate=s.on_time_rate,
             sample_sufficient=s.sample_sufficient,
         )
+
+
+# ---------- 团队记忆：成员文字档案（设计文档第 7 节②，M3.5） ----------
+
+
+class MemberProfileUpsertIn(BaseModel):
+    """负责人创建/更新成员档案（写完直接生效，不走确认流程）。"""
+
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class MemberProfileOut(BaseModel):
+    """成员档案：随人走（users.id），项目内全员可读含本人（16.1）。"""
+
+    user_id: uuid.UUID
+    content: str
+    created_by: MemberBrief
+    last_edited_by: MemberBrief
+    created_at: datetime
+    updated_at: datetime

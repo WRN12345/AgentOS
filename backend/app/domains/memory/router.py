@@ -21,11 +21,14 @@ from app.domains.memory.core_memory import (
     entries_to_out,
     list_entries,
 )
+from app.domains.memory.member_profiles import get_profile, profile_to_out, upsert_profile
 from app.domains.memory.member_stats import member_completion_stats
 from app.domains.memory.schemas import (
     CoreMemoryEntryCreateIn,
     CoreMemoryEntryListOut,
     CoreMemoryEntryOut,
+    MemberProfileOut,
+    MemberProfileUpsertIn,
     MemberStatsOut,
     MemorySearchRequest,
     MemorySearchResponse,
@@ -143,3 +146,39 @@ async def list_member_stats(
 
     stats = await member_completion_stats(session, project_id=project_id)
     return [MemberStatsOut.from_stats(s) for s in stats]
+
+
+# ---------- 团队记忆：成员文字档案（设计文档第 7 节②，M3.5） ----------
+
+
+@router.get("/memory/member-profiles/{user_id}", response_model=MemberProfileOut)
+async def get_member_profile(
+    user_id: uuid.UUID,
+    project_id: uuid.UUID = Depends(project_id_from_request),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MemberProfileOut:
+    """读取成员档案：项目内全员可读（含被评价者本人，16.1），档案随人走跨项目可读；
+    全局 admin 只读（第 12 节）。无档案 404（新成员尚无档案属正常）。
+    """
+    member = await get_member_by_user(session, project_id, current_user.id)
+    if member is None or not member.is_active:
+        if not current_user.is_admin:
+            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
+
+    profile = await get_profile(session, user_id)
+    if profile is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "该成员暂无档案")
+    return await profile_to_out(session, profile)
+
+
+@router.put("/memory/member-profiles/{user_id}", response_model=MemberProfileOut)
+async def upsert_member_profile(
+    user_id: uuid.UUID,
+    body: MemberProfileUpsertIn,
+    leader: ProjectMember = Depends(get_current_leader),
+    session: AsyncSession = Depends(get_session),
+) -> MemberProfileOut:
+    """创建/更新成员档案：仅负责人（15.6），写完直接生效（第 7 节）。"""
+    profile = await upsert_profile(session, leader, user_id=user_id, content=body.content)
+    return await profile_to_out(session, profile)
