@@ -143,3 +143,30 @@ class MemberProfileOut(BaseModel):
     membership_active: bool | None
     created_at: datetime
     updated_at: datetime
+
+
+# ---------- 知识库问答（设计文档第 11 节②，M7.3） ----------
+
+
+class MemoryQaRequest(BaseModel):
+    """一问一答入参（本期无多轮、无流式，第 11 节）。"""
+
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class QaSourceOut(BaseModel):
+    """依据/线索：来源定位 + 片段内容（点击可查看原文）。"""
+
+    source_type: str
+    source_id: uuid.UUID
+    title: str
+    snippet: str
+
+
+class MemoryQaResponse(BaseModel):
+    """answered 附依据列表；refused 附最接近的线索（16.13 宁拒答不编造）。"""
+
+    status: str  # "answered" | "refused"
+    answer: str | None
+    sources: list[QaSourceOut]
+    clues: list[QaSourceOut]

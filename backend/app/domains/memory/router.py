@@ -23,6 +23,7 @@ from app.domains.memory.core_memory import (
 )
 from app.domains.memory.member_profiles import get_profile, profile_to_out, upsert_profile
 from app.domains.memory.member_stats import member_completion_stats
+from app.domains.memory.qa import answer_question
 from app.domains.memory.schemas import (
     CoreMemoryEntryCreateIn,
     CoreMemoryEntryListOut,
@@ -30,18 +31,26 @@ from app.domains.memory.schemas import (
     MemberProfileOut,
     MemberProfileUpsertIn,
     MemberStatsOut,
+    MemoryQaRequest,
+    MemoryQaResponse,
     MemorySearchRequest,
     MemorySearchResponse,
+    QaSourceOut,
 )
 from app.domains.memory.search import (
     CALLER_LEADER_QUERY,
     CALLER_MEMBER_QA,
     search_memory,
 )
-from app.domains.project.dependencies import get_current_leader, project_id_from_request
+from app.domains.project.dependencies import (
+    get_current_leader,
+    get_current_member,
+    project_id_from_request,
+)
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.project.service import get_member_by_user
 from app.infrastructure.database.engine import get_session
+from app.infrastructure.models.errors import ModelError
 
 router = APIRouter(tags=["memory"])
 
@@ -182,3 +191,50 @@ async def upsert_member_profile(
     """创建/更新成员档案：仅负责人（15.6），写完直接生效（第 7 节）。"""
     profile = await upsert_profile(session, leader, user_id=user_id, content=body.content)
     return await profile_to_out(session, profile, project_id=leader.project_id)
+
+
+# ---------- 知识库问答（设计文档第 11 节②，M7.3） ----------
+
+
+@router.post("/memory/qa", response_model=MemoryQaResponse)
+async def ask_knowledge_base(
+    body: MemoryQaRequest,
+    member: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> MemoryQaResponse:
+    """一问一答：项目成员提问，命中则生成回答并附依据，低于阈值拒答并给线索。
+
+    仅项目成员可用：问答是生成服务而非内容查看，全局 admin 的只读查看
+    走列表/检索接口（第 12 节），不经此路径。模型不可用时返回 503
+    （明确失败，不编造）；查询与问答不审计（16.10）。
+    """
+    try:
+        result = await answer_question(
+            session, member=member, project_id=member.project_id, query=body.question
+        )
+    except ModelError as exc:
+        raise ApiException(
+            503, ErrorCodes.INTERNAL_ERROR, "模型服务暂不可用，请稍后重试"
+        ) from exc
+    return MemoryQaResponse(
+        status=result.status,
+        answer=result.answer,
+        sources=[
+            QaSourceOut(
+                source_type=s.source_type,
+                source_id=s.source_id,
+                title=s.title,
+                snippet=s.snippet,
+            )
+            for s in result.sources
+        ],
+        clues=[
+            QaSourceOut(
+                source_type=c.source_type,
+                source_id=c.source_id,
+                title=c.title,
+                snippet=c.snippet,
+            )
+            for c in result.clues
+        ],
+    )
