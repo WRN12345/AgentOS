@@ -610,7 +610,7 @@
 
 ### M8.2 档案例外专项断言
 
-- 状态：待开始
+- 状态：已完成（test_memory_profile_exception.py：leader_query/agent_assignment 两放行场景 + member_qa 检索与问答均不放行 + admin 只读但检索不放行，4 项全绿）
 
 **内容**：档案跨项目可见作为唯一例外单独断言：放行两场景 + `member_qa` 不放行 + admin 只读。
 
