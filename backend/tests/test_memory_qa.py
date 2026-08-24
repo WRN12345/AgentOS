@@ -97,3 +97,117 @@ async def test_qa_never_hits_member_profiles(project_a: Project) -> None:
         )
     assert result.answerable is False  # 档案不命中 → 无可作答依据
     assert result.clues == []
+
+
+# ---------- M7.2 答案生成与依据列表 ----------
+
+
+class _ScriptedQAProvider:
+    name = "scripted"
+    model = "scripted-qa"
+    is_external = False
+
+    def __init__(self, text: str = "根据 [1]，发布步骤是先构建镜像。"):
+        self._text = text
+        self.calls: list[dict] = []
+
+    async def generate(self, prompt, *, system=None, json_output=False):
+        self.calls.append({"prompt": prompt, "system": system})
+        return self._text
+
+
+async def _seed_document_with_file(
+    project: Project, member, filename: str, content: str
+) -> None:
+    """文档块 + 对应 StoredFile 行（依据定位到文件名）。"""
+    from app.domains.files.models import StoredFile
+
+    async with async_session_factory() as session:
+        stored = StoredFile(
+            project_id=project.id,
+            storage_key=f"test/{uuid.uuid4().hex}",
+            original_filename=filename,
+            size_bytes=len(content),
+            mime_type="text/markdown",
+            sha256="a" * 64,
+            uploaded_by=member.id,
+        )
+        session.add(stored)
+        await session.flush()
+        session.add(
+            MemoryChunk(
+                project_id=project.id,
+                source_type="document",
+                source_id=stored.id,
+                content=content,
+                embedding=[0.1] * settings.embedding_dimensions,
+                model_version=settings.embedding_model,
+            )
+        )
+        await session.commit()
+
+
+async def test_answer_with_resolvable_sources(
+    project_a: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """有依据时生成回答；依据可追溯到原文定位（文件名/工作项标题）。"""
+    from app.domains.memory import qa as qa_module
+    from app.domains.memory.qa import answer_question
+    from tests.test_memory_member_stats import _add_item
+
+    _, leader = await add_member(project_a, "leader", "Leader123!", role="leader", display_name="负责人")
+    _, member = await add_member(project_a, "alice", "Alice123!")
+    provider = _ScriptedQAProvider()
+    monkeypatch.setattr(qa_module, "get_model_provider", lambda: provider)
+
+    await _seed_document_with_file(project_a, leader, "部署指南.md", "发布步骤：先构建镜像")
+    # 历史来源：工作项结论（定位到工作项标题）
+    item_id = await _add_item(project_a, member, "COMPLETED", title="支付接口改造")
+    async with async_session_factory() as session:
+        session.add(
+            MemoryChunk(
+                project_id=project_a.id,
+                source_type="history",
+                source_id=item_id,
+                content="工作项完成记录：支付接口改造",
+                embedding=[0.1] * settings.embedding_dimensions,
+                model_version=settings.embedding_model,
+            )
+        )
+        await session.commit()
+
+        result = await answer_question(
+            session, member=member, project_id=project_a.id, query="怎么部署"
+        )
+
+    assert result.status == "answered"
+    assert result.answer == "根据 [1]，发布步骤是先构建镜像。"
+    titles = [s.title for s in result.sources]
+    assert "部署指南.md" in titles  # 文档 → 文件名
+    assert "工作项：支付接口改造" in titles  # 历史 → 工作项标题
+    # 提示词：问题 + 编号片段都在；系统提示词要求答案基于所给片段
+    assert "怎么部署" in provider.calls[0]["prompt"]
+    assert "[1]" in provider.calls[0]["prompt"]
+    assert "只根据给定的资料片段" in provider.calls[0]["system"]
+
+
+async def test_refusal_does_not_call_model(
+    project_a: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """拒答时不调用模型（不生成回答），只返回线索（16.13）。"""
+    from app.domains.memory import qa as qa_module
+    from app.domains.memory.qa import answer_question
+
+    _, member = await add_member(project_a, "alice", "Alice123!")
+    provider = _ScriptedQAProvider()
+    monkeypatch.setattr(qa_module, "get_model_provider", lambda: provider)
+    await _seed(project_a.id, "毫不相干的记录", same_direction=False)
+
+    async with async_session_factory() as session:
+        result = await answer_question(
+            session, member=member, project_id=project_a.id, query="部署流程"
+        )
+    assert result.status == "refused"
+    assert result.answer is None
+    assert len(result.clues) == 1
+    assert provider.calls == []
