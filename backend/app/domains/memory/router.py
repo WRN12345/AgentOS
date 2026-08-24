@@ -169,7 +169,7 @@ async def get_member_profile(
     profile = await get_profile(session, user_id)
     if profile is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "该成员暂无档案")
-    return await profile_to_out(session, profile)
+    return await profile_to_out(session, profile, project_id=project_id)
 
 
 @router.put("/memory/member-profiles/{user_id}", response_model=MemberProfileOut)
@@ -181,4 +181,4 @@ async def upsert_member_profile(
 ) -> MemberProfileOut:
     """创建/更新成员档案：仅负责人（15.6），写完直接生效（第 7 节）。"""
     profile = await upsert_profile(session, leader, user_id=user_id, content=body.content)
-    return await profile_to_out(session, profile)
+    return await profile_to_out(session, profile, project_id=leader.project_id)

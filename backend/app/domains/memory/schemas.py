@@ -130,11 +130,16 @@ class MemberProfileUpsertIn(BaseModel):
 
 
 class MemberProfileOut(BaseModel):
-    """成员档案：随人走（users.id），项目内全员可读含本人（16.1）。"""
+    """成员档案：随人走（users.id），项目内全员可读含本人（16.1）。
+
+    membership_active：目标在当前项目的成员状态（16.7 停用标记）——
+    True/False = 本项目在职/停用；null = 不是本项目成员。
+    """
 
     user_id: uuid.UUID
     content: str
     created_by: MemberBrief
     last_edited_by: MemberBrief
+    membership_active: bool | None
     created_at: datetime
     updated_at: datetime

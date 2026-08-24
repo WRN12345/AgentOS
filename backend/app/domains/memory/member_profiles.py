@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
+from app.domains.audit.service import record_event
 from app.domains.identity.models import User
 from app.domains.memory.models import MemberProfile
 from app.domains.memory.schemas import MemberProfileOut
@@ -32,11 +33,19 @@ async def get_profile(session: AsyncSession, user_id: uuid.UUID) -> MemberProfil
 
 
 async def profile_to_out(
-    session: AsyncSession, profile: MemberProfile
+    session: AsyncSession, profile: MemberProfile, *, project_id: uuid.UUID | None = None
 ) -> MemberProfileOut:
-    """档案序列化：创建/编辑者显示名（project_members 可能跨项目，按 id 直取）。"""
+    """档案序列化：创建/编辑者显示名（project_members 可能跨项目，按 id 直取）。
+
+    project_id 提供时附带目标在当前项目的成员状态（16.7 停用标记）：
+    True/False = 在本项目在职/停用；None = 不是本项目成员。
+    """
     creator = await session.get(ProjectMember, profile.created_by_member_id)
     editor = await session.get(ProjectMember, profile.last_edited_by_member_id)
+    membership_active: bool | None = None
+    if project_id is not None:
+        target = await get_member_by_user(session, project_id, profile.user_id)
+        membership_active = target.is_active if target is not None else None
     return MemberProfileOut(
         user_id=profile.user_id,
         content=profile.content,
@@ -48,6 +57,7 @@ async def profile_to_out(
             id=profile.last_edited_by_member_id,
             display_name=editor.display_name if editor else "",
         ),
+        membership_active=membership_active,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
@@ -81,10 +91,32 @@ async def upsert_profile(
             last_edited_by_member_id=actor.id,
         )
         session.add(profile)
+        await session.flush()
+        # 审计（16.10）：谁建的、何时、内容
+        await record_event(
+            session,
+            action="member_profile.created",
+            actor_id=actor.user_id,
+            target_type="member_profile",
+            target_id=profile.id,
+            after={"user_id": str(user_id), "content": content},
+            project_id=actor.project_id,
+        )
     else:
+        before = {"content": profile.content}
         profile.content = content
         profile.last_edited_by_member_id = actor.id
-    await session.flush()
+        # 审计（16.10）：谁改的、何时、改了什么
+        await record_event(
+            session,
+            action="member_profile.updated",
+            actor_id=actor.user_id,
+            target_type="member_profile",
+            target_id=profile.id,
+            before=before,
+            after={"content": content},
+            project_id=actor.project_id,
+        )
     await session.commit()
     # updated_at 的 onupdate=func.now() 在 UPDATE 后被 SQLAlchemy 标记过期，
     # 异步会话属性访问无法隐式重载（MissingGreenlet），序列化前显式刷新

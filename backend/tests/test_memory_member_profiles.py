@@ -6,8 +6,11 @@
 """
 
 import httpx
+from sqlalchemy import select
 
+from app.domains.audit.models import AuditEvent
 from app.domains.project.models import Project
+from app.infrastructure.database.engine import async_session_factory
 from tests.conftest import add_member, auth_headers
 
 LEADER_PW = "Leader123!"
@@ -19,6 +22,8 @@ async def _setup_users(client: httpx.AsyncClient, project: Project) -> dict:
     alice_user, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     return {
         "alice_user": alice_user,
+        "alice_member": alice,
+        "leader_member": leader,
         "leader_headers": await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id)),
         "alice_headers": await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id)),
     }
@@ -128,3 +133,79 @@ async def test_read_missing_profile_404(client: httpx.AsyncClient, project_a: Pr
         headers=ctx["alice_headers"],
     )
     assert resp.status_code == 404
+
+
+# ---------- M3.6 档案审计与停用标记（16.7、16.10） ----------
+
+
+async def test_profile_audit_events(client: httpx.AsyncClient, project_a: Project) -> None:
+    """创建/编辑均入审计域：谁改的、何时、改了什么（16.10）。"""
+    ctx = await _setup_users(client, project_a)
+    uid = str(ctx["alice_user"].id)
+    await client.put(
+        f"/api/v1/memory/member-profiles/{uid}",
+        headers=ctx["leader_headers"],
+        json={"content": "初版档案"},
+    )
+    await client.put(
+        f"/api/v1/memory/member-profiles/{uid}",
+        headers=ctx["leader_headers"],
+        json={"content": "修订档案"},
+    )
+
+    async with async_session_factory() as session:
+        events = (
+            await session.execute(
+                select(AuditEvent)
+                .where(AuditEvent.target_type == "member_profile")
+                .order_by(AuditEvent.created_at)
+            )
+        ).scalars().all()
+        assert [e.action for e in events] == [
+            "member_profile.created",
+            "member_profile.updated",
+        ]
+        leader = ctx["leader_member"]
+        assert all(e.actor_id == leader.user_id for e in events)
+        assert all(e.project_id == project_a.id for e in events)
+        assert events[0].after is not None and events[0].after["content"] == "初版档案"
+        assert events[1].before == {"content": "初版档案"}
+        assert events[1].after == {"content": "修订档案"}
+        assert all(e.created_at is not None for e in events)
+
+
+async def test_deactivated_member_marked_and_excluded(
+    client: httpx.AsyncClient, project_a: Project
+) -> None:
+    """停用成员档案保留并标记停用（16.7）；分配候选中排除。"""
+    ctx = await _setup_users(client, project_a)
+    uid = str(ctx["alice_user"].id)
+    await client.put(
+        f"/api/v1/memory/member-profiles/{uid}",
+        headers=ctx["leader_headers"],
+        json={"content": "档案保留"},
+    )
+    # 负责人停用 alice（项目内禁用）
+    alice_member = ctx["alice_member"]
+    resp = await client.patch(
+        f"/api/v1/members/{alice_member.id}",
+        headers=ctx["leader_headers"],
+        json={"is_active": False},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # 档案仍可读，标记停用
+    resp = await client.get(
+        f"/api/v1/memory/member-profiles/{uid}", headers=ctx["leader_headers"]
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["content"] == "档案保留"
+    assert resp.json()["membership_active"] is False
+
+    # 分配候选（Agent 分配工具的候选清单）中排除停用成员
+    async with async_session_factory() as session:
+        from app.agents.tools import list_assignable_members
+
+        candidates = await list_assignable_members(session, project_id=project_a.id)
+    assert str(alice_member.id) not in [c["member_id"] for c in candidates]
+    assert all("爱丽丝" != c["display_name"] for c in candidates)
