@@ -83,3 +83,27 @@ class CoreMemoryEntry(CoreModel):
     effective_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class MemberProfile(CoreModel):
+    """成员文字档案（设计文档第 7 节②，迁移 0028）。
+
+    - 随人走、不挂项目（跨项目可见的唯一例外，16.12）：键为 users.id；
+    - 负责人维护（15.6）：记录统计体现不出来的信息（"对支付模块历史包袱很熟"）；
+    - 项目内全员可读，含被评价者本人（16.1，不做暗箱评价）；
+    - 成员停用以 users.is_active 为准（16.7 档案保留、不进分配候选），
+      本表不冗余停用标记。
+    """
+
+    __tablename__ = "member_profiles"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_members.id"), nullable=False
+    )
+    last_edited_by_member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_members.id"), nullable=False
+    )
