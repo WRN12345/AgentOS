@@ -8,6 +8,7 @@ import {
   Bot,
   ChevronsUpDown,
   ClipboardCheck,
+  HelpCircle,
   LayoutDashboard,
   ListTodo,
   LogOut,
@@ -44,6 +45,7 @@ const navItems = [
   { to: "/agent-assistant", label: "AI 助手", icon: Bot, end: false },
   { to: "/documents", label: "知识库文档", icon: BookOpen, end: false },
   { to: "/core-memory", label: "核心记忆", icon: Sparkles, end: false },
+  { to: "/knowledge-qa", label: "知识库问答", icon: HelpCircle, end: false },
 ];
 
 /** 应用主布局：左侧导航 + 顶栏当前用户与登出入口。 */

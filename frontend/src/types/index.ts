@@ -139,6 +139,24 @@ export interface CoreMemoryEntryList {
   budget_chars: number;
 }
 
+/* ---------- 记忆模块：知识库问答（设计文档第 11 节②，M7.3） ---------- */
+
+/** 依据/线索：来源定位 + 片段内容。 */
+export interface QaSource {
+  source_type: string;
+  source_id: string;
+  title: string;
+  snippet: string;
+}
+
+/** POST /memory/qa 响应：answered 附依据；refused 附最接近的线索（16.13）。 */
+export interface QaResponse {
+  status: "answered" | "refused";
+  answer: string | null;
+  sources: QaSource[];
+  clues: QaSource[];
+}
+
 /** 协作请求状态（8.2 节）。 */
 export type CollaborationStatus =
   | "REQUESTED"
