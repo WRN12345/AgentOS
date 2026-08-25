@@ -68,13 +68,15 @@ function SourceDialog({
             下载原文
           </Button>
         )}
-        {source?.source_type === "history" && (
-          <Link to={`/work-items/${source.source_id}`}>
-            <Button variant="outline" size="sm">
-              查看关联工作项
-            </Button>
-          </Link>
-        )}
+        {source?.source_type === "history" &&
+          // 仅"工作项结论"来源可跳工作项；拆解/分配记录挂 agent_run，无对应页面
+          source.history_kind === "work_item" && (
+            <Link to={`/work-items/${source.source_id}`}>
+              <Button variant="outline" size="sm">
+                查看关联工作项
+              </Button>
+            </Link>
+          )}
         {source?.source_type === "core_memory" && (
           <Link to="/core-memory">
             <Button variant="outline" size="sm">

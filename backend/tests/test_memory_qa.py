@@ -185,6 +185,9 @@ async def test_answer_with_resolvable_sources(
     titles = [s.title for s in result.sources]
     assert "部署指南.md" in titles  # 文档 → 文件名
     assert "工作项：支付接口改造" in titles  # 历史 → 工作项标题
+    # history_kind 透传：工作项结论 → work_item（前端据此决定是否提供跳转）
+    history_source = next(s for s in result.sources if s.source_type == "history")
+    assert history_source.history_kind == "work_item"
     # 提示词：问题 + 编号片段都在；系统提示词要求答案基于所给片段
     assert "怎么部署" in provider.calls[0]["prompt"]
     assert "[1]" in provider.calls[0]["prompt"]
@@ -249,3 +252,33 @@ async def test_answer_strips_thinking(
     assert result.status == "answered"
     assert result.answer == "发布前先构建镜像 [1]。"
     assert "<think>" not in (result.answer or "")
+
+
+async def test_history_kind_agent_run_for_run_records(
+    project_a: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """拆解/分配记录（挂 agent_run id）→ history_kind=agent_run，前端不提供工作项跳转。"""
+    from app.domains.memory import qa as qa_module
+    from app.domains.memory.qa import answer_question
+
+    _, member = await add_member(project_a, "alice", "Alice123!")
+    monkeypatch.setattr(
+        qa_module, "get_model_provider", lambda: _ScriptedQAProvider("答案 [1]。")
+    )
+    async with async_session_factory() as session:
+        session.add(
+            MemoryChunk(
+                project_id=project_a.id,
+                source_type="history",
+                source_id=uuid.uuid4(),  # 不命中任何工作项 → 视为 agent_run
+                content="需求拆解记录：导入功能上次拆成 4 个工作项",
+                embedding=[0.1] * settings.embedding_dimensions,
+                model_version=settings.embedding_model,
+            )
+        )
+        await session.commit()
+
+        result = await answer_question(
+            session, member=member, project_id=project_a.id, query="导入怎么拆"
+        )
+    assert result.sources[0].history_kind == "agent_run"

@@ -98,6 +98,10 @@ class QaSource:
     source_id: uuid.UUID
     title: str  # 文件名 / 工作项标题 / 核心记忆条目等展示定位
     snippet: str
+    # history 来源的实际种类：work_item（工作项结论，M5.2）/ agent_run（拆解
+    # 分配记录，M5.1）——前端据此决定是否提供"查看关联工作项"跳转（M7.5 修复：
+    # 此前一律按工作项拼链接，agent_run 来源会跳错）；非 history 为 None
+    history_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,15 @@ async def _resolve_source_title(session: AsyncSession, r: RetrievalResult) -> st
     return r.source_type
 
 
+async def _resolve_history_kind(session: AsyncSession, r: RetrievalResult) -> str | None:
+    """history 来源种类：source_id 能命中工作项 → work_item，否则为 agent_run
+    （拆解/分配记录挂 run id，M5.1）；非 history 返回 None。"""
+    if r.source_type != "history":
+        return None
+    item = await session.get(WorkItem, r.source_id)
+    return "work_item" if item is not None else "agent_run"
+
+
 async def _to_sources(
     session: AsyncSession, results: list[RetrievalResult]
 ) -> list[QaSource]:
@@ -134,6 +147,7 @@ async def _to_sources(
             source_id=r.source_id,
             title=await _resolve_source_title(session, r),
             snippet=r.content,
+            history_kind=await _resolve_history_kind(session, r),
         )
         for r in results
     ]
@@ -194,6 +208,7 @@ async def save_qa_history(
                 "source_id": str(s.source_id),
                 "title": s.title,
                 "snippet": s.snippet,
+                "history_kind": s.history_kind,
             }
             for s in sources
         ],

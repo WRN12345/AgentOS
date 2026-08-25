@@ -134,6 +134,7 @@ describe("QaPage 依据列表与原文查看（M7.5）", () => {
           source_id: "wi-9",
           title: "工作项：支付接口改造",
           snippet: "工作项完成记录：支付接口改造",
+          history_kind: "work_item",
         },
       ],
     });
@@ -273,3 +274,34 @@ describe("QaPage 历史记录（2026-08-24 修订）", () => {
     });
   });
 });
+
+
+  it("拆解记录（agent_run）依据不提供工作项跳转", async () => {
+    mockApi.post.mockResolvedValue({
+      ...answered,
+      sources: [
+        {
+          source_type: "history",
+          source_id: "run-9",
+          title: "需求拆解/分配记录",
+          snippet: "输入需求：做一个导入功能",
+          history_kind: "agent_run",
+        },
+      ],
+    });
+    renderWithProviders(<QaPage />);
+
+    await userEvent.setup().type(screen.getByLabelText("问题"), "导入");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+    await waitFor(() =>
+      expect(screen.getByText("需求拆解/分配记录")).toBeInTheDocument(),
+    );
+
+    await userEvent.setup().click(screen.getByText("需求拆解/分配记录"));
+    await waitFor(() =>
+      expect(screen.getByText(/答案依据的原文片段/)).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("link", { name: "查看关联工作项" }),
+    ).not.toBeInTheDocument();
+  });

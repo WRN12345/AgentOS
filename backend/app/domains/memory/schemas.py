@@ -155,12 +155,17 @@ class MemoryQaRequest(BaseModel):
 
 
 class QaSourceOut(BaseModel):
-    """依据/线索：来源定位 + 片段内容（点击可查看原文）。"""
+    """依据/线索：来源定位 + 片段内容（点击可查看原文）。
+
+    history_kind：history 来源的实际种类（work_item / agent_run）——
+    前端据此决定是否提供"查看关联工作项"跳转；非 history 为 null。
+    """
 
     source_type: str
     source_id: uuid.UUID
     title: str
     snippet: str
+    history_kind: str | None = None
 
 
 class MemoryQaResponse(BaseModel):

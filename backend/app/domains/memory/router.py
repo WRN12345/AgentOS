@@ -237,6 +237,7 @@ async def ask_knowledge_base(
                 source_id=s.source_id,
                 title=s.title,
                 snippet=s.snippet,
+                history_kind=s.history_kind,
             )
             for s in result.sources
         ],
@@ -246,6 +247,7 @@ async def ask_knowledge_base(
                 source_id=c.source_id,
                 title=c.title,
                 snippet=c.snippet,
+                history_kind=c.history_kind,
             )
             for c in result.clues
         ],
@@ -274,6 +276,7 @@ async def list_my_qa_history(
                     source_id=uuid.UUID(s["source_id"]),
                     title=s["title"],
                     snippet=s["snippet"],
+                    history_kind=s.get("history_kind"),
                 )
                 for s in r.sources
             ],

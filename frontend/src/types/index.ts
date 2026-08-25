@@ -147,6 +147,8 @@ export interface QaSource {
   source_id: string;
   title: string;
   snippet: string;
+  /** history 来源的实际种类：work_item（可跳工作项）/ agent_run（拆解记录，不可跳） */
+  history_kind?: "work_item" | "agent_run" | null;
 }
 
 /** POST /memory/qa 响应：answered 附依据；refused 附最接近的线索（16.13）。 */
