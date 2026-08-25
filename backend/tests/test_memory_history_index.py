@@ -98,6 +98,30 @@ async def test_build_text_completed_run(project_a: Project) -> None:
     assert "- 导入向导页" in text
 
 
+async def test_build_text_excludes_pending_suggestions(project_a: Project) -> None:
+    """首次反馈重建历史时，未确认的同运行建议不能进入可检索文本。"""
+    run = await _make_run(project_a.id)
+    await _add_suggestion(
+        run,
+        review_status="accepted",
+        content={"summary": "已确认的拆解方案", "rationale": "负责人已采纳"},
+    )
+    await _add_suggestion(
+        run,
+        review_status="pending",
+        content={"summary": "待确认的敏感建议", "rationale": "尚未人工确认"},
+    )
+
+    async with async_session_factory() as session:
+        text = await build_run_history_text(session, run.id)
+
+    assert text is not None
+    assert "已确认的拆解方案" in text
+    assert "待确认的敏感建议" not in text
+    assert "尚未人工确认" not in text
+    assert "待反馈" not in text
+
+
 async def test_build_text_skips_unfinished_and_other_types(project_a: Project) -> None:
     running = await _make_run(project_a.id, status="running")
     echo = await _make_run(project_a.id, agent_type="echo")

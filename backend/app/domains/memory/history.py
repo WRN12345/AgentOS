@@ -1,7 +1,7 @@
 """历史与经验：拆解/分配记录与工作项结论入索引（设计文档第 9 节，M5.1/M5.2）。
 
-- 拆解/分配记录（M5.1）：只索引"已完成"的运行（15.4）——run 成功且建议
-  已有反馈定论，触发时机挂在 submit_suggestion_feedback（反馈落定后重建）；
+- 拆解/分配记录（M5.1）：只索引"已完成"的运行（15.4）——run 成功且仅收录
+  已落定（非 pending）的建议，触发时机挂在 submit_suggestion_feedback（反馈落定后重建）；
 - 工作项结论（M5.2）：审核通过（approve → COMPLETED）时异步入索引，
   内容含做了什么（标题/描述/验收标准）、验收结果与评审意见（含反馈正文，
   按 2026-08-16 设计文档第 9 节与第 12 节"记忆内容项目内全员可见"，
@@ -68,6 +68,10 @@ async def build_run_history_text(
 
     parts = [f"需求拆解/分配记录\n\n输入需求：\n{run.prompt}"]
     for s in suggestions:
+        # 一次运行可产出多条建议。首次反馈时其余建议仍可能待确认，不能让
+        # 未经人工定论的内容进入可检索历史；后续反馈会整体重建该来源。
+        if s.review_status == "pending":
+            continue
         label = _REVIEW_STATUS_LABELS.get(s.review_status, s.review_status)
         section = f"\n\n## 建议（{s.suggestion_type}）—— {label}"
         summary = s.content.get("summary")
