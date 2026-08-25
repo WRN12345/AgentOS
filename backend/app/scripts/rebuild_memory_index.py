@@ -9,7 +9,8 @@
    （worker 从文件原文重新提取→切块→转向量）；
 3. 成员档案按现内容重投纯文本索引任务；
 4. 已完成的拆解/分配运行与已完成工作项重投历史索引任务
-   （worker 从 run/工作项记录现取文本）。
+   （worker 从 run/工作项记录现取文本）；
+5. active 核心记忆条目重投 core_memory 索引任务（worker 按条目当前状态重建或作废）。
 
 重建期间知识库不可用（设计文档 16.4 已接受）。worker 必须在运行中消费任务。
 
@@ -27,7 +28,7 @@ from app.agents.models import AgentRun
 from app.domains.files.models import StoredFile
 from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE
-from app.domains.memory.models import MemberProfile, MemoryChunk
+from app.domains.memory.models import CoreMemoryEntry, MemberProfile, MemoryChunk
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.state_machine import WorkItemStatus
 from app.infrastructure.cache.redis import create_redis_client
@@ -77,15 +78,24 @@ async def main() -> None:
             .scalars()
             .all()
         )
+        core_entries = (
+            (
+                await session.execute(
+                    select(CoreMemoryEntry).where(CoreMemoryEntry.status == "active")
+                )
+            )
+            .scalars()
+            .all()
+        )
         chunk_count = (
             await session.execute(select(MemoryChunk.id))
         ).scalars().all()
 
-    total = len(files) + len(profiles) + len(runs) + len(work_items)
+    total = len(files) + len(profiles) + len(runs) + len(work_items) + len(core_entries)
     print(
         f"将清空 {len(chunk_count)} 个向量块，重建 {total} 个来源："
         f"文档 {len(files)}、档案 {len(profiles)}、拆解/分配运行 {len(runs)}、"
-        f"已完成工作项 {len(work_items)}"
+        f"已完成工作项 {len(work_items)}、核心记忆 {len(core_entries)}"
     )
     if not args.yes:
         print("预览模式：未做任何修改。加 --yes 执行重建。")
@@ -143,6 +153,16 @@ async def main() -> None:
                     "source_type": "history",
                     "source_id": str(w.id),
                     "history_kind": "work_item",
+                },
+            )
+        for e in core_entries:
+            await enqueue(
+                redis_client,
+                MEMORY_INDEX_TASK_TYPE,
+                {
+                    "project_id": str(e.project_id),
+                    "source_type": "core_memory",
+                    "source_id": str(e.id),
                 },
             )
     finally:
