@@ -170,48 +170,55 @@ async def submit_suggestion_feedback(
     action: str,
     member: ProjectMember,
 ) -> AgentSuggestion:
-    """写入人工采纳结果（仅 pending 可反馈；重复反馈 409，由路由层判定）。
+    """原子写入人工采纳结果，确保一条建议只会被处理一次。
 
-    只更新 agent_suggestions 自身的 review_status/reviewed_by/reviewed_at
-    并留 agent. 前缀审计事件，不触碰任何业务状态（10.3 节原则不变：
-    Agent 建议不产生业务写入，采纳后的业务动作由前端走正式命令接口）。
-
-    唯一例外（记忆模块设计文档第 8 节，M4.4）：memory_proposal 被采纳时，
-    在同一事务内把提议落入核心记忆——先落业务再标记 accepted，校验失败
-    （容量超限/条目已失效/跨项目）整体回滚，建议保持 pending。
+    以 ``SELECT ... FOR UPDATE`` 重新读取建议行。状态检查、memory_proposal
+    的核心记忆副作用、审计事件和状态写入都在该锁覆盖的同一事务中，因此并发
+    accepted/ignored 或请求重放只能有一个请求成功；其余请求在获得锁后返回 409。
     """
-    if action == "accepted" and suggestion.suggestion_type == MEMORY_PROPOSAL_TYPE:
-        await apply_memory_proposal(session, suggestion, confirmer=member)
+    locked_suggestion = (
+        await session.execute(
+            select(AgentSuggestion)
+            .where(AgentSuggestion.id == suggestion.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked_suggestion is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
+    raise_if_suggestion_reviewed(locked_suggestion)
 
-    before: dict[str, Any] = {"review_status": suggestion.review_status}
-    suggestion.review_status = action
-    suggestion.reviewed_by = member.id
-    suggestion.reviewed_at = datetime.now(UTC)
+    if action == "accepted" and locked_suggestion.suggestion_type == MEMORY_PROPOSAL_TYPE:
+        await apply_memory_proposal(session, locked_suggestion, confirmer=member)
+
+    before: dict[str, Any] = {"review_status": locked_suggestion.review_status}
+    locked_suggestion.review_status = action
+    locked_suggestion.reviewed_by = member.id
+    locked_suggestion.reviewed_at = datetime.now(UTC)
     await record_event(
         session,
         action="agent.suggestion_feedback",
         actor_id=member.id,
         target_type="agent_suggestion",
-        target_id=suggestion.id,
+        target_id=locked_suggestion.id,
         before=before,
         after={"review_status": action},
     )
     await session.commit()
-    await session.refresh(suggestion)
+    await session.refresh(locked_suggestion)
 
     # M5.1：拆解/分配运行的建议反馈落定后，重投历史索引任务（整体重建，
     # 块内容反映最新采纳状态）；best-effort，投递失败只记日志
-    run = await session.get(AgentRun, suggestion.run_id)
+    run = await session.get(AgentRun, locked_suggestion.run_id)
     if run is not None and run.agent_type in HISTORY_RUN_AGENT_TYPES:
         await enqueue_run_history_index(run)
 
     logger.info(
         "agent suggestion feedback: id=%s action=%s actor=%s",
-        suggestion.id,
+        locked_suggestion.id,
         action,
         member.id,
     )
-    return suggestion
+    return locked_suggestion
 
 
 def raise_if_suggestion_reviewed(suggestion: AgentSuggestion) -> None:

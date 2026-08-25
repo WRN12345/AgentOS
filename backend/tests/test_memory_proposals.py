@@ -6,6 +6,8 @@
 - 提议与确认均入审计域（16.10）。
 """
 
+import asyncio
+
 import httpx
 import pytest
 from sqlalchemy import select
@@ -181,6 +183,76 @@ async def test_confirm_cross_project_entry_not_found(
         with pytest.raises(ApiException) as exc_info:
             await submit_suggestion_feedback(session, proposal, action="accepted", member=leader)
         assert exc_info.value.status_code == 404
+
+
+async def test_concurrent_feedback_only_applies_memory_proposal_once(
+    client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
+) -> None:
+    """并发 accepted 只允许一个请求获得建议处理权，不能重复创建核心记忆。"""
+    run = await _make_run(project_a.id)
+    async with async_session_factory() as session:
+        proposal = await create_memory_proposal(
+            session, run=run, action="create", content="并发确认只能创建一次"
+        )
+    headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
+
+    responses = await asyncio.gather(
+        *[
+            client.post(
+                f"/api/v1/agent-suggestions/{proposal.id}/feedback",
+                headers=headers,
+                json={"action": "accepted"},
+            )
+            for _ in range(2)
+        ]
+    )
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert any(
+        response.json().get("code") == ErrorCodes.AGENT_SUGGESTION_ALREADY_REVIEWED
+        for response in responses
+        if response.status_code == 409
+    )
+    async with async_session_factory() as session:
+        entries = await list_entries(session, project_id=project_a.id)
+        suggestion = await session.get(AgentSuggestion, proposal.id)
+    assert len(entries) == 1
+    assert entries[0].content == "并发确认只能创建一次"
+    assert suggestion is not None
+    assert suggestion.review_status == "accepted"
+
+
+async def test_concurrent_conflicting_feedback_cannot_apply_ignored_proposal(
+    client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
+) -> None:
+    """accepted 与 ignored 并发时，最终状态和核心记忆副作用必须一致。"""
+    run = await _make_run(project_a.id)
+    async with async_session_factory() as session:
+        proposal = await create_memory_proposal(
+            session, run=run, action="create", content="冲突反馈不应留下幽灵记忆"
+        )
+    headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
+
+    accepted, ignored = await asyncio.gather(
+        client.post(
+            f"/api/v1/agent-suggestions/{proposal.id}/feedback",
+            headers=headers,
+            json={"action": "accepted"},
+        ),
+        client.post(
+            f"/api/v1/agent-suggestions/{proposal.id}/feedback",
+            headers=headers,
+            json={"action": "ignored"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in (accepted, ignored)) == [200, 409]
+    async with async_session_factory() as session:
+        entries = await list_entries(session, project_id=project_a.id)
+        suggestion = await session.get(AgentSuggestion, proposal.id)
+    assert suggestion is not None
+    assert suggestion.review_status in {"accepted", "ignored"}
+    assert len(entries) == (1 if suggestion.review_status == "accepted" else 0)
 
 
 async def test_feedback_endpoint_applies_proposal(

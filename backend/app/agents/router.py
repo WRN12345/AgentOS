@@ -26,7 +26,6 @@ from app.agents.schemas.analysis import AgentAnalysisIn, AgentRunOut, ProjectAge
 from app.agents.schemas.suggestions import AgentSuggestionFeedbackIn, AgentSuggestionOut
 from app.agents.service import (
     list_suggestions,
-    raise_if_suggestion_reviewed,
     request_agent_analysis,
     retry_agent_run,
     submit_suggestion_feedback,
@@ -326,7 +325,6 @@ async def submit_suggestion_feedback_endpoint(
     run = await session.get(AgentRun, suggestion.run_id)
     if run is None or run.project_id != actor.project_id:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
-    raise_if_suggestion_reviewed(suggestion)
     suggestion = await submit_suggestion_feedback(
         session, suggestion, action=payload.action, member=actor
     )
