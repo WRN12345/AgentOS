@@ -121,7 +121,6 @@ async def main() -> None:
                     "project_id": None,
                     "source_type": "profile",
                     "source_id": str(p.id),
-                    "text": p.content,
                 },
             )
         for r in runs:

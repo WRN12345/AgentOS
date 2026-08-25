@@ -49,7 +49,8 @@ async def test_upsert_dispatches_profile_index_task(
     assert len(tasks) == 1
     payload = tasks[0]["payload"]
     assert payload["project_id"] is None  # 随人走，不挂项目
-    assert payload["text"] == "对支付模块的历史包袱很熟"
+    assert payload["source_id"]
+    assert "text" not in payload  # worker 执行时读取最新档案，避免旧任务覆盖新编辑
 
 
 async def test_worker_indexes_profile_and_rebuild_on_edit(
@@ -104,3 +105,53 @@ async def test_worker_indexes_profile_and_rebuild_on_edit(
         ).scalars().all()
         assert all("支付模块" not in c.content for c in chunks)
         assert any("带新人" in c.content for c in chunks)
+
+
+async def test_old_profile_index_task_uses_latest_content(
+    client: httpx.AsyncClient,
+    project_a: Project,
+    redis_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """延迟重试的旧任务不能把已编辑档案的 chunks 覆盖回旧内容。"""
+    monkeypatch.setattr(
+        indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
+    )
+    ctx = await _setup_users(client, project_a)
+    user_id = str(ctx["alice_user"].id)
+
+    first = await client.put(
+        f"/api/v1/memory/member-profiles/{user_id}",
+        headers=ctx["leader_headers"],
+        json={"content": "旧档案：熟悉支付模块"},
+    )
+    assert first.status_code == 200, first.text
+    old_task = json.loads((await redis_client.lrange(QUEUE_KEY, 0, -1))[0])
+    # 模拟部署前已有的延迟重试任务：payload 仍携带过期文本快照。
+    old_task["payload"]["text"] = "旧档案：熟悉支付模块"
+
+    second = await client.put(
+        f"/api/v1/memory/member-profiles/{user_id}",
+        headers=ctx["leader_headers"],
+        json={"content": "新档案：擅长带新人"},
+    )
+    assert second.status_code == 200, second.text
+    await execute_memory_index(old_task["payload"], None)  # type: ignore[arg-type]
+
+    async with async_session_factory() as session:
+        profile = (
+            await session.execute(
+                select(MemberProfile).where(MemberProfile.user_id == ctx["alice_user"].id)
+            )
+        ).scalar_one()
+        chunks = (
+            await session.execute(
+                select(MemoryChunk).where(
+                    MemoryChunk.source_type == "profile",
+                    MemoryChunk.source_id == profile.id,
+                )
+            )
+        ).scalars().all()
+    assert chunks
+    assert all("旧档案" not in chunk.content for chunk in chunks)
+    assert any("新档案" in chunk.content for chunk in chunks)

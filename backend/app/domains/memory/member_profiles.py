@@ -145,7 +145,6 @@ async def _dispatch_profile_index(profile: MemberProfile) -> None:
                 "project_id": None,  # profile 随人走，不挂项目（16.12）
                 "source_type": "profile",
                 "source_id": str(profile.id),
-                "text": profile.content,
             },
         )
     except Exception:  # noqa: BLE001

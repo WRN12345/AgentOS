@@ -3,8 +3,8 @@
 任务类型 `memory.index`，payload 两种形态：
 - 文档索引（M2.6）：`stored_file_id`（必带）+ `project_id` / `source_type` / `source_id`，
   任务负责"读文件 → 提取文本 → 切块入库 → 驱动索引状态机"全流程；
-- 纯文本索引（M1.8 桩，档案/历史/核心记忆复用）：`project_id` / `source_type` /
-  `source_id` / `text`，直接切块入库；
+- 纯文本索引：`history` 可携带 `text`，`profile` 与 `core_memory` 仅携带来源 ID，
+  worker 在执行时读取当前数据库内容，避免延迟任务覆盖后续编辑；
 - `attempt`：已重试次数（重入队时自增）。
 
 失败语义（第 6 节）：
@@ -41,7 +41,7 @@ from app.domains.memory.history import (
     build_run_history_text,
     build_work_item_conclusion_text,
 )
-from app.domains.memory.models import CoreMemoryEntry
+from app.domains.memory.models import CoreMemoryEntry, MemberProfile
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import enqueue, enqueue_delayed
@@ -186,8 +186,8 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
         if stored_file_id:
             written = await _index_stored_file(uuid.UUID(str(stored_file_id)))
         else:
-            # 纯文本路径：档案/核心记忆直接携带文本；history 类型由 worker 从
-            # run 记录现取文本（M5.1），保证块内容反映最新采纳状态
+            # history 由 worker 从运行记录现取文本；profile/core_memory 也从来源
+            # 实体读取当前内容，避免延迟重试使用旧快照覆盖后续编辑。
             project_id = (
                 uuid.UUID(payload["project_id"]) if payload.get("project_id") else None
             )
@@ -208,27 +208,35 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
                             source_id=entry.id,
                             text=entry.content,
                         )
-                elif source_type == "history" and "text" not in payload:
-                    if payload.get("history_kind") == HISTORY_KIND_WORK_ITEM:
-                        text = await build_work_item_conclusion_text(
-                            session, uuid.UUID(str(source_id))
-                        )
-                    else:
-                        text = await build_run_history_text(
-                            session, uuid.UUID(str(source_id))
-                        )
-                    if text is None:
-                        # 运行/工作项未完成：不索引（15.4）
-                        logger.info("history source not indexable, skipped: %s", source_id)
-                        return
                 else:
-                    text = str(payload.get("text", ""))
-                written = await service.rebuild_chunks(
-                    project_id=project_id,
-                    source_type=str(source_type),
-                    source_id=uuid.UUID(str(source_id)),
-                    text=text,
-                )
+                    if source_type == "profile":
+                        # 忽略旧任务可能携带的 text 快照；始终索引当前档案内容。
+                        profile = await session.get(MemberProfile, uuid.UUID(str(source_id)))
+                        if profile is None:
+                            logger.info("member profile source not found, skipped: %s", source_id)
+                            return
+                        text = profile.content
+                    elif source_type == "history" and "text" not in payload:
+                        if payload.get("history_kind") == HISTORY_KIND_WORK_ITEM:
+                            text = await build_work_item_conclusion_text(
+                                session, uuid.UUID(str(source_id))
+                            )
+                        else:
+                            text = await build_run_history_text(
+                                session, uuid.UUID(str(source_id))
+                            )
+                        if text is None:
+                            # 运行/工作项未完成：不索引（15.4）
+                            logger.info("history source not indexable, skipped: %s", source_id)
+                            return
+                    else:
+                        text = str(payload.get("text", ""))
+                    written = await service.rebuild_chunks(
+                        project_id=project_id,
+                        source_type=str(source_type),
+                        source_id=uuid.UUID(str(source_id)),
+                        text=text,
+                    )
         logger.info(
             "memory index done: type=%s id=%s chunks=%d", source_type, source_id, written
         )
