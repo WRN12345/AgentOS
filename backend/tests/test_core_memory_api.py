@@ -5,9 +5,13 @@
 - 写操作仅负责人：创建 201 立即生效，超容量预算 400，作废后状态 deprecated。
 """
 
+import asyncio
+
 import httpx
 
+from app.domains.memory.core_memory import budget_usage
 from app.domains.project.models import Project, ProjectMember
+from app.infrastructure.database.engine import async_session_factory
 from tests.conftest import add_member, auth_headers
 
 LEADER_PW = "Leader123!"
@@ -115,6 +119,26 @@ async def test_budget_exceeded_contract(
     body = resp.json()
     assert body["code"] == "CORE_MEMORY_BUDGET_EXCEEDED"
     assert body["details"]["budget"] == 4000
+
+
+async def test_concurrent_creates_cannot_exceed_budget(
+    client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
+) -> None:
+    """项目预算锁应使并发创建中只有一条基于空预算成功。"""
+    headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
+
+    responses = await asyncio.gather(
+        _create(client, headers, "x" * 2500),
+        _create(client, headers, "y" * 2500),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 400]
+    rejected = next(response for response in responses if response.status_code == 400)
+    assert rejected.json()["code"] == "CORE_MEMORY_BUDGET_EXCEEDED"
+    async with async_session_factory() as session:
+        used, budget = await budget_usage(session, project_id=project_a.id)
+    assert used == 2500
+    assert budget == 4000
 
 
 async def test_deprecate_flow_and_isolation(

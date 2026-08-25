@@ -25,7 +25,7 @@ from app.domains.memory.models import (
     CoreMemoryEntry,
 )
 from app.domains.memory.schemas import CoreMemoryEntryOut
-from app.domains.project.models import ProjectMember
+from app.domains.project.models import Project, ProjectMember
 from app.domains.project.service import require_leader
 from app.domains.work_items.schemas import MemberBrief
 from app.infrastructure.cache.redis import create_redis_client
@@ -64,7 +64,14 @@ async def ensure_budget(
     """容量预算闸门：生效条目合计 + additional 超预算则 400，提示走整合精简（第 8 节）。
 
     手写创建与 Agent 提议确认（M4.4，update 时 additional 可为负）共用本闸门。
+    锁定项目行而非当前条目集合：空集合也必须受锁保护，才能防止并发插入都
+    基于同一旧使用量通过校验。
     """
+    locked_project_id = await session.scalar(
+        select(Project.id).where(Project.id == project_id).with_for_update()
+    )
+    if locked_project_id is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
     used, budget = await budget_usage(session, project_id=project_id)
     if used + additional > budget:
         raise ApiException(
