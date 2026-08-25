@@ -2,8 +2,8 @@
 
 用于智谱 bigmodel（embedding-3）等 OpenAI 兼容的云端 embedding 服务：
 POST {EMBEDDING_BASE_URL}/embeddings，Bearer Key 鉴权，OpenAI 响应格式
-（data[].embedding/index），请求携带 dimensions 保证维度与
-EMBEDDING_DIMENSIONS 一致（智谱 embedding-3 支持自定义维度）。
+（data[].embedding/index）。请求携带固定的 1024 维 dimensions，与
+memory_chunks 的 PostgreSQL vector 列保持一致。
 
 - 数据外发提示（16 节）：项目文档/档案/历史内容将发送至该第三方服务，
   部署方需自行评估；降级语义与 Ollama 实现一致（16.5，上层据此转无记忆模式）；

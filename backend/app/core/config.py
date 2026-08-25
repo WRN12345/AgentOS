@@ -1,5 +1,7 @@
 """统一配置：全部从环境变量加载，禁止在代码中硬编码密钥。"""
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,11 +26,11 @@ class Settings(BaseSettings):
     # 推理模型的 thinking 也占用该额度，默认太小会导致 JSON 输出被截断。
     llm_max_tokens: int = 4096
 
-    # 记忆模块 embedding（设计文档第 5 节、15.1）：默认本地 Ollama 跑 qwen3-embedding 0.6B，
-    # 复用 ollama_base_url 与 llm_timeout_seconds；dimensions 须与所选模型一致，
-    # 更换模型/维度时 memory_chunks 须全量重建（16.4）。
+    # memory_chunks 的 PostgreSQL vector 列由迁移 0023 固定为 1024 维。
+    # 可切换同为 1024 维的模型；切换模型后需全量重建索引。维度变更需要专门的
+    # 数据库迁移，不能仅通过环境变量和重建脚本完成。
     embedding_model: str = "qwen3-embedding:0.6b"
-    embedding_dimensions: int = 1024
+    embedding_dimensions: Literal[1024] = 1024
     # embedding Provider 切换：默认 ollama（本地）；openai_compatible 接智谱等
     # OpenAI 兼容云端服务——此时项目文档内容将发送至第三方（16 节数据外发提示）
     embedding_provider: str = "ollama"

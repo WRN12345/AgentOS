@@ -193,9 +193,9 @@ worker/scheduler 没有 HTTP 端口，Compose 没法用 HTTP 探活，因此采�
 | `LLM_PROVIDER` | 模型提供方（第 15 章）：`ollama` 或 OpenAI 兼容 |
 | `LLM_MODEL` | 模型名（如 `qwen2.5` 等），留空表示未配置 |
 | `OLLAMA_BASE_URL` | 宿主机 Ollama 地址，容器内经 `host.docker.internal:11434` 访问 |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | 记忆模块 embedding 模型与维度（默认 `qwen3-embedding:0.6b` / 1024）；首次部署需在宿主机执行 `ollama pull qwen3-embedding:0.6b`；更换模型/维度时 memory_chunks 须全量重建（设计文档 16.4，命令：`docker compose exec backend python -m app.scripts.rebuild_memory_index --yes`） |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | 记忆模块 embedding 模型与维度（默认 `qwen3-embedding:0.6b` / 1024）；当前 `memory_chunks` 列固定为 1024 维，仅可切换同为 1024 维的模型，切换后须全量重建（命令：`docker compose exec backend python -m app.scripts.rebuild_memory_index --yes`）。变更维度必须先执行专门的数据库迁移，不能仅运行重建脚本。首次部署需在宿主机执行 `ollama pull qwen3-embedding:0.6b`。 |
 | `EMBEDDING_PROVIDER` | embedding 提供方：`ollama`（默认，本地）或 `openai_compatible`（智谱等 OpenAI 兼容云端服务——项目文档内容将发送至第三方，16 节数据外发） |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` | `openai_compatible` 通道的地址与密钥（智谱：`https://open.bigmodel.cn/api/paas/v4` + 控制台 API Key，模型 `embedding-3`，维度可选 256/512/1024/2048，须与 `EMBEDDING_DIMENSIONS` 一致） |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` | `openai_compatible` 通道的地址与密钥（智谱：`https://open.bigmodel.cn/api/paas/v4` + 控制台 API Key；当前数据库仅支持 1024 维输出） |
 | `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | OpenAI 兼容云 API 的地址与密钥（可切换的备选通道） |
 | `LOG_DIR` | 容器内日志目录，挂载到 `data/logs/` |
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务触发周期（秒），默认 60 |

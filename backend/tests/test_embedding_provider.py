@@ -9,6 +9,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.infrastructure.models.embedding import (
@@ -52,6 +53,14 @@ def test_embedding_config_defaults() -> None:
 
     assert Settings.model_fields["embedding_model"].default == "qwen3-embedding:0.6b"
     assert Settings.model_fields["embedding_dimensions"].default == 1024
+
+
+def test_embedding_config_rejects_non_1024_dimensions() -> None:
+    """数据库向量列固定 1024 维，启动时拒绝不兼容的环境配置。"""
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError, match="embedding_dimensions"):
+        Settings(embedding_dimensions=1536)
 
 
 @pytest.fixture(autouse=True)
