@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.models import AgentRun, AgentSuggestion
 from app.core.errors import ApiException, ErrorCodes
 from app.domains.audit.service import record_event
-from app.domains.memory.core_memory import ensure_budget
+from app.domains.memory.core_memory import ensure_budget, invalidate_core_memory_index
 from app.domains.memory.models import CORE_MEMORY_BUDGET_CHARS, CoreMemoryEntry
 from app.domains.project.models import ProjectMember
 
@@ -178,6 +178,7 @@ async def apply_memory_proposal(
         await ensure_budget(session, project_id=project_id, additional=len(content) - freed)
         for t in targets:
             t.status = "deprecated"
+            await invalidate_core_memory_index(session, t.id, commit=False)
             await record_event(
                 session,
                 action="core_memory.deprecated",
@@ -246,6 +247,7 @@ async def apply_memory_proposal(
         )
     else:  # deprecate
         target.status = "deprecated"
+        await invalidate_core_memory_index(session, target.id, commit=False)
         await record_event(
             session,
             action="core_memory.deprecated",

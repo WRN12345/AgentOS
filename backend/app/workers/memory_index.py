@@ -30,6 +30,7 @@ from app.domains.files.service import (
     INDEX_UNINDEXED,
     transition_index_status,
 )
+from app.domains.memory.core_memory import invalidate_core_memory_index
 from app.domains.memory.extractors import (
     ExtractionFailedError,
     UnsupportedFormatError,
@@ -40,6 +41,7 @@ from app.domains.memory.history import (
     build_run_history_text,
     build_work_item_conclusion_text,
 )
+from app.domains.memory.models import CoreMemoryEntry
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import enqueue, enqueue_delayed
@@ -191,7 +193,22 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
             )
             async with async_session_factory() as session:
                 service = MemoryIndexService(session)
-                if source_type == "history" and "text" not in payload:
+                if source_type == "core_memory":
+                    entry = await session.get(CoreMemoryEntry, uuid.UUID(str(source_id)))
+                    if entry is None or entry.project_id != project_id:
+                        logger.info("core memory source not found, skipped: %s", source_id)
+                        return
+                    if entry.status != "active":
+                        await invalidate_core_memory_index(session, entry.id)
+                        written = 0
+                    else:
+                        written = await service.rebuild_chunks(
+                            project_id=project_id,
+                            source_type="core_memory",
+                            source_id=entry.id,
+                            text=entry.content,
+                        )
+                elif source_type == "history" and "text" not in payload:
                     if payload.get("history_kind") == HISTORY_KIND_WORK_ITEM:
                         text = await build_work_item_conclusion_text(
                             session, uuid.UUID(str(source_id))

@@ -11,11 +11,14 @@
 
 import uuid
 
+import redis.asyncio as redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.domains.memory.models import (
     CORE_MEMORY_BUDGET_CHARS,
     CORE_MEMORY_NEAR_FULL_RATIO,
@@ -25,6 +28,10 @@ from app.domains.memory.schemas import CoreMemoryEntryOut
 from app.domains.project.models import ProjectMember
 from app.domains.project.service import require_leader
 from app.domains.work_items.schemas import MemberBrief
+from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.queue.queue import enqueue
+
+logger = setup_logging("backend")
 
 
 async def list_entries(
@@ -115,6 +122,40 @@ async def entries_to_out(
     ]
 
 
+async def enqueue_core_memory_index_id(
+    project_id: uuid.UUID, entry_id: uuid.UUID
+) -> None:
+    """投递核心记忆重建/失效任务；worker 执行时读取条目当前状态。"""
+    redis_client: redis.Redis = create_redis_client()
+    try:
+        await enqueue(
+            redis_client,
+            MEMORY_INDEX_TASK_TYPE,
+            {
+                "project_id": str(project_id),
+                "source_type": "core_memory",
+                "source_id": str(entry_id),
+            },
+        )
+    except Exception:  # noqa: BLE001 - 索引失败由 worker/后续重建处理，不阻塞业务写入
+        logger.warning("core memory index task enqueue failed: entry=%s", entry_id, exc_info=True)
+    finally:
+        await redis_client.aclose()
+
+
+async def enqueue_core_memory_index(entry: CoreMemoryEntry) -> None:
+    await enqueue_core_memory_index_id(entry.project_id, entry.id)
+
+
+async def invalidate_core_memory_index(
+    session: AsyncSession, entry_id: uuid.UUID, *, commit: bool = True
+) -> None:
+    """作废核心记忆对应的向量块，保留块供追溯但排除检索。"""
+    await MemoryIndexService(session).mark_source_stale(
+        source_type="core_memory", source_id=entry_id, commit=commit
+    )
+
+
 async def create_entry(
     session: AsyncSession, actor: ProjectMember, *, content: str
 ) -> CoreMemoryEntry:
@@ -149,6 +190,7 @@ async def create_entry(
         project_id=actor.project_id,
     )
     await session.commit()
+    await enqueue_core_memory_index(entry)
     return entry
 
 
@@ -176,5 +218,6 @@ async def deprecate_entry(
         after={"status": "deprecated"},
         project_id=actor.project_id,
     )
+    await invalidate_core_memory_index(session, entry.id, commit=False)
     await session.commit()
     return entry

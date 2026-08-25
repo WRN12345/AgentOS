@@ -30,7 +30,8 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES, enqueue_run_history_index
-from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, apply_memory_proposal
+from app.domains.memory.core_memory import enqueue_core_memory_index, enqueue_core_memory_index_id
+from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, MemoryProposalPayload, apply_memory_proposal
 from app.domains.project.models import ProjectMember
 from app.infrastructure.queue.queue import enqueue
 
@@ -187,8 +188,13 @@ async def submit_suggestion_feedback(
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
     raise_if_suggestion_reviewed(locked_suggestion)
 
+    applied_entry = None
+    proposal_payload = None
     if action == "accepted" and locked_suggestion.suggestion_type == MEMORY_PROPOSAL_TYPE:
-        await apply_memory_proposal(session, locked_suggestion, confirmer=member)
+        applied_entry = await apply_memory_proposal(
+            session, locked_suggestion, confirmer=member
+        )
+        proposal_payload = MemoryProposalPayload.model_validate(locked_suggestion.content)
 
     before: dict[str, Any] = {"review_status": locked_suggestion.review_status}
     locked_suggestion.review_status = action
@@ -205,6 +211,14 @@ async def submit_suggestion_feedback(
     )
     await session.commit()
     await session.refresh(locked_suggestion)
+
+    if applied_entry is not None and proposal_payload is not None:
+        await enqueue_core_memory_index(applied_entry)
+        if proposal_payload.action == "consolidate":
+            run = await session.get(AgentRun, locked_suggestion.run_id)
+            if run is not None:
+                for entry_id in proposal_payload.entry_ids or []:
+                    await enqueue_core_memory_index_id(run.project_id, entry_id)
 
     # M5.1：拆解/分配运行的建议反馈落定后，重投历史索引任务（整体重建，
     # 块内容反映最新采纳状态）；best-effort，投递失败只记日志

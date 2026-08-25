@@ -13,7 +13,8 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.domains.memory import indexer as indexer_module
-from app.domains.memory.models import MemoryChunk
+from app.domains.memory.core_memory import create_entry
+from app.domains.memory.models import CoreMemoryEntry, MemoryChunk
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.models.embedding import EmbeddingProvider
@@ -76,6 +77,60 @@ async def test_index_task_success(redis_client, project_a, monkeypatch: pytest.M
     assert count > 1
     assert version == settings.embedding_model
     assert await redis_client.zcard(DELAYED_QUEUE_KEY) == 0
+
+
+async def test_core_memory_index_reads_current_state(
+    redis_client, project_a, leader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """核心记忆任务按数据库当前内容重建，作废后只失效旧块。"""
+    monkeypatch.setattr(
+        indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
+    )
+    async with async_session_factory() as session:
+        entry = await create_entry(session, leader, content="项目约定：先写测试")
+
+    await execute_memory_index(
+        {
+            "project_id": str(project_a.id),
+            "source_type": "core_memory",
+            "source_id": str(entry.id),
+        },
+        redis_client,
+    )
+    async with async_session_factory() as session:
+        chunk = (
+            await session.execute(
+                select(MemoryChunk).where(
+                    MemoryChunk.source_type == "core_memory",
+                    MemoryChunk.source_id == entry.id,
+                )
+            )
+        ).scalar_one()
+        assert chunk.content == "项目约定：先写测试"
+        assert chunk.is_current is True
+        stored = await session.get(CoreMemoryEntry, entry.id)
+        assert stored is not None
+        stored.status = "deprecated"
+        await session.commit()
+
+    await execute_memory_index(
+        {
+            "project_id": str(project_a.id),
+            "source_type": "core_memory",
+            "source_id": str(entry.id),
+        },
+        redis_client,
+    )
+    async with async_session_factory() as session:
+        chunk = (
+            await session.execute(
+                select(MemoryChunk).where(
+                    MemoryChunk.source_type == "core_memory",
+                    MemoryChunk.source_id == entry.id,
+                )
+            )
+        ).scalar_one()
+        assert chunk.is_current is False
 
 
 async def test_index_task_failure_retries_with_backoff(
