@@ -8,44 +8,97 @@ import re
 import uuid
 from datetime import datetime
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.domains.work_items.schemas import MemberBrief
 
 
-_GITHUB_PULL_REQUEST_PATH = re.compile(
-    r"^/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?$"
+_PULL_REQUEST_PATHS = {
+    "github.com": re.compile(r"^/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?$"),
+    "gitee.com": re.compile(r"^/([^/]+)/([^/]+)/pulls/([1-9][0-9]*)/?$"),
+}
+_GITLAB_MERGE_REQUEST_PATH = re.compile(
+    r"^/(.+)/-/merge_requests/([1-9][0-9]*)/?$"
 )
+_STANDARD_COMMIT_PATH = re.compile(
+    r"^/([^/]+)/([^/]+)/commit/([0-9a-fA-F]{7,40})/?$"
+)
+_GITLAB_COMMIT_PATH = re.compile(r"^/(.+)/-/commit/([0-9a-fA-F]{7,40})/?$")
+_INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 
 
-def _normalize_github_pull_request_url(value: str) -> str:
-    """校验标准 GitHub PR URL，并返回无尾部斜杠的规范地址。"""
+def _normalize_git_delivery_url(value: str) -> str:
+    """校验受支持的 Git 交付 URL，并返回规范地址。"""
     candidate = value.strip()
     try:
         parsed = urlsplit(candidate)
         port = parsed.port
     except ValueError as exc:
-        raise ValueError("请输入有效的 GitHub PR 链接") from exc
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接") from exc
 
     if (
         parsed.scheme.lower() != "https"
         or parsed.hostname is None
-        or parsed.hostname.lower() != "github.com"
         or port is not None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("请输入有效的 GitHub PR 链接")
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
 
-    match = _GITHUB_PULL_REQUEST_PATH.fullmatch(parsed.path)
+    path_segments = parsed.path.removeprefix("/").split("/")
+    if path_segments and path_segments[-1] == "":
+        path_segments.pop()
+    if (
+        not parsed.path.startswith("/")
+        or not path_segments
+        or any(not segment for segment in path_segments)
+        or _INVALID_PERCENT_ESCAPE.search(parsed.path)
+    ):
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
+    try:
+        decoded_segments = [
+            unquote(segment, errors="strict") for segment in path_segments
+        ]
+    except UnicodeError as exc:
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接") from exc
+    if any(
+        segment in {".", ".."} or "/" in segment or "\\" in segment
+        for segment in decoded_segments
+    ):
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
+
+    hostname = parsed.hostname.lower()
+    if hostname in _PULL_REQUEST_PATHS:
+        commit_match = _STANDARD_COMMIT_PATH.fullmatch(parsed.path)
+        if commit_match is not None:
+            owner, repository, commit_sha = commit_match.groups()
+            return f"https://{hostname}/{owner}/{repository}/commit/{commit_sha.lower()}"
+
+    pattern = _PULL_REQUEST_PATHS.get(hostname)
+    match = pattern.fullmatch(parsed.path) if pattern is not None else None
+    if hostname == "gitlab.com":
+        commit_match = _GITLAB_COMMIT_PATH.fullmatch(parsed.path)
+        if commit_match is not None:
+            repository_path, commit_sha = commit_match.groups()
+            if len(repository_path.split("/")) >= 2:
+                return f"https://gitlab.com/{repository_path}/-/commit/{commit_sha.lower()}"
+        gitlab_match = _GITLAB_MERGE_REQUEST_PATH.fullmatch(parsed.path)
+        if gitlab_match is not None:
+            repository_path, merge_request_number = gitlab_match.groups()
+            if len(repository_path.split("/")) >= 2:
+                return (
+                    f"https://gitlab.com/{repository_path}/-/merge_requests/"
+                    f"{merge_request_number}"
+                )
     if match is None:
-        raise ValueError("请输入有效的 GitHub PR 链接")
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
     owner, repository, pull_number = match.groups()
-    return f"https://github.com/{owner}/{repository}/pull/{pull_number}"
+    review_segment = "pull" if hostname == "github.com" else "pulls"
+    return f"https://{hostname}/{owner}/{repository}/{review_segment}/{pull_number}"
 
 
 class DeliverableCreateIn(BaseModel):
@@ -63,7 +116,7 @@ class DeliverableCreateIn(BaseModel):
             if self.file_id is not None:
                 raise ValueError("git_link/text 类型不应携带 file_id")
             if self.type == "git_link":
-                self.content = _normalize_github_pull_request_url(self.content)
+                self.content = _normalize_git_delivery_url(self.content)
         else:  # file
             if self.file_id is None:
                 raise ValueError("file 类型必须携带 file_id")

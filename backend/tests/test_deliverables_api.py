@@ -273,10 +273,92 @@ async def test_git_link_is_normalized_when_submitted(
     assert response.json()["content"] == "https://github.com/org/repo/pull/42"
 
 
+async def test_gitee_pull_request_is_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """Gitee Pull Request 使用同一交付接口并保存规范地址。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "  https://gitee.com/org/repo/pulls/42/  ",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "https://gitee.com/org/repo/pulls/42"
+
+
+async def test_gitlab_merge_request_with_nested_group_is_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """GitLab Merge Request 支持嵌套 group，并移除尾部斜杠。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "https://gitlab.com/group/subgroup/repo/-/merge_requests/42/",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == (
+        "https://gitlab.com/group/subgroup/repo/-/merge_requests/42"
+    )
+
+
+async def test_supported_commit_urls_are_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """三平台 Commit 接受 7–40 位 SHA，并统一保存为小写。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    cases = (
+        (
+            "https://github.com/org/repo/commit/ABCDEF1/",
+            "https://github.com/org/repo/commit/abcdef1",
+        ),
+        (
+            "https://gitee.com/org/repo/commit/0123456789ABCDEF0123456789ABCDEF01234567",
+            "https://gitee.com/org/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        ),
+        (
+            "https://gitlab.com/group/subgroup/repo/-/commit/ABC12345",
+            "https://gitlab.com/group/subgroup/repo/-/commit/abc12345",
+        ),
+    )
+    for content, expected in cases:
+        response = await _deliver(
+            client,
+            ctx["alice_headers"],  # type: ignore[arg-type]
+            item_id,
+            {"type": "git_link", "content": content},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["content"] == expected
+
+
 async def test_git_link_rejects_unsupported_urls_without_creating_versions(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """Git 链接只接受标准 HTTPS GitHub PR URL，失败请求不产生版本。"""
+    """Git 链接只接受三平台支持的评审或 Commit URL，失败请求不产生版本。"""
     ctx = await _setup(client, project)
     alice = ctx["alice"]
     item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
@@ -291,10 +373,22 @@ async def test_git_link_rejects_unsupported_urls_without_creating_versions(
         "https://github.com/org/repo/pull/42/files",
         "https://github.com/org/repo/pull/42?diff=split",
         "https://github.com/org/repo/pull/42#discussion",
+        "https://github.com/org/../pull/42",
+        "https://github.com/org/%2e%2e/pull/42",
+        "https://github.com/org/foo/../repo/pull/42",
+        "https://github.com/org/%ZZ/pull/42",
         "https://user@github.com/org/repo/pull/42",
         "https://github.com:443/org/repo/pull/42",
         "https://github.com/org/repo/pull/0",
         "https://github.com/org/repo/pull/not-a-number",
+        "https://github.com/org/repo/commit/abcdef",
+        "https://github.com/org/repo/commit/abcdefg",
+        "https://github.com/org/repo/commit/12345678901234567890123456789012345678901",
+        "https://github.com/org/repo/commit/abcdef1/files",
+        "https://gitee.com/org/repo/pulls/42?note=1",
+        "https://gitlab.com/group/repo/-/merge_requests/42/diffs",
+        "https://gitlab.com/group//repo/-/merge_requests/42",
+        "https://gitlab.com/repo/-/commit/abcdef1",
         "javascript:alert(1)",
         "not-a-url",
     )
