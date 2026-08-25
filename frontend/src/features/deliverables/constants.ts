@@ -25,6 +25,34 @@ export const REVIEW_DECISION_META: Record<
   reject: { label: "拒绝", className: "bg-red-100 text-red-700" },
 };
 
+/** Git 链接交付只接受标准 HTTPS GitHub PR 页面；不联网检查 PR 是否存在。 */
+export function normalizeGitHubPullRequestUrl(value: string): string | null {
+  try {
+    const candidate = value.trim();
+    const url = new URL(candidate);
+    if (
+      !/^https:\/\/github\.com\//i.test(candidate) ||
+      url.protocol !== "https:" ||
+      url.hostname.toLowerCase() !== "github.com" ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      return null;
+    }
+    const match = url.pathname.match(
+      /^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)\/?$/,
+    );
+    if (!match) return null;
+    const [, owner, repository, pullNumber] = match;
+    return `https://github.com/${owner}/${repository}/pull/${pullNumber}`;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------- 文件上传前置校验（与后端白名单一致，14 章） ---------- */
 
 /** 上传大小上限：20MB（与后端配置一致）。 */

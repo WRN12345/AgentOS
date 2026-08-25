@@ -46,6 +46,7 @@ import type {
 import { formatDateTime } from "../work-items/constants";
 import {
   DELIVERABLE_TYPE_META,
+  normalizeGitHubPullRequestUrl,
   REVIEW_DECISION_META,
 } from "./constants";
 import { DeliverableBody } from "./DeliverableBody";
@@ -248,6 +249,12 @@ function SubmitDeliverableDialog({
         type === "git_link" ? "请输入 Git 链接" : "请输入文本说明",
       );
       return;
+    } else if (
+      type === "git_link" &&
+      normalizeGitHubPullRequestUrl(content) === null
+    ) {
+      setFieldError("请输入有效的 GitHub PR 链接");
+      return;
     }
     setFieldError(null);
     submit.mutate();
@@ -294,6 +301,7 @@ function SubmitDeliverableDialog({
               <Label htmlFor="deliverable-git-link">Git 链接</Label>
               <Input
                 id="deliverable-git-link"
+                type="url"
                 placeholder="https://github.com/org/repo/pull/123"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}

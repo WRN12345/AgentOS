@@ -166,6 +166,30 @@ describe("成员核心路径", () => {
     });
   });
 
+  it("提交交付：无效 GitHub PR 链接在前端被拦截", async () => {
+    const user = userEvent.setup();
+    signInAs(me);
+    stubGet({
+      "/work-items/wi-1/deliverables": [],
+      "/work-items/wi-1/reviews": [],
+    });
+
+    renderWithProviders(<DeliverableSection workItem={myWorkItem} />);
+    await user.click(
+      await screen.findByRole("button", { name: /提交交付/ }),
+    );
+    await user.type(
+      screen.getByLabelText("Git 链接"),
+      "https://github.com:443/org/repo/pull/42",
+    );
+    await user.click(screen.getByRole("button", { name: "提交" }));
+
+    expect(
+      screen.getByText("请输入有效的 GitHub PR 链接"),
+    ).toBeInTheDocument();
+    expect(mockApi.post).not.toHaveBeenCalled();
+  });
+
   it("权限差异：成员在工作项列表看不到「创建工作项」，成员页看不到「新建成员」与管理操作", async () => {
     signInAs(me);
     stubGet({
