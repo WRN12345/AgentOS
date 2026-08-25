@@ -177,11 +177,15 @@ async def submit_suggestion_feedback(
     的核心记忆副作用、审计事件和状态写入都在该锁覆盖的同一事务中，因此并发
     accepted/ignored 或请求重放只能有一个请求成功；其余请求在获得锁后返回 409。
     """
+    # populate_existing 必须存在：路由层已 session.get 把实例装入 identity map，
+    # 否则 FOR UPDATE 锁等待期间对端提交的新行数据会被 ORM 丢弃，状态检查读到
+    # 陈旧快照，409 保护被绕过（同一提议可被采纳两次）。
     locked_suggestion = (
         await session.execute(
             select(AgentSuggestion)
             .where(AgentSuggestion.id == suggestion.id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if locked_suggestion is None:

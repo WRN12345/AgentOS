@@ -2,6 +2,7 @@
 
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,15 @@ class Settings(BaseSettings):
     # 数据库迁移，不能仅通过环境变量和重建脚本完成。
     embedding_model: str = "qwen3-embedding:0.6b"
     embedding_dimensions: Literal[1024] = 1024
+
+    @field_validator("embedding_dimensions", mode="before")
+    @classmethod
+    def _coerce_embedding_dimensions(cls, value: object) -> object:
+        # 环境变量（docker-compose 注入的 EMBEDDING_DIMENSIONS）总是字符串，
+        # Literal[1024] 不会自动把 "1024" 转成 int，不 coerce 会直接启动失败。
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return value
     # embedding Provider 切换：默认 ollama（本地）；openai_compatible 接智谱等
     # OpenAI 兼容云端服务——此时项目文档内容将发送至第三方（16 节数据外发提示）
     embedding_provider: str = "ollama"
