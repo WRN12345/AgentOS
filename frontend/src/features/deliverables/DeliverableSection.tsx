@@ -46,7 +46,7 @@ import type {
 import { formatDateTime } from "../work-items/constants";
 import {
   DELIVERABLE_TYPE_META,
-  normalizeGitHubPullRequestUrl,
+  normalizeGitDeliveryUrl,
   REVIEW_DECISION_META,
 } from "./constants";
 import { DeliverableBody } from "./DeliverableBody";
@@ -251,9 +251,9 @@ function SubmitDeliverableDialog({
       return;
     } else if (
       type === "git_link" &&
-      normalizeGitHubPullRequestUrl(content) === null
+      normalizeGitDeliveryUrl(content) === null
     ) {
-      setFieldError("请输入有效的 GitHub PR 链接");
+      setFieldError("请输入受支持的 PR、MR 或 Commit 链接");
       return;
     }
     setFieldError(null);

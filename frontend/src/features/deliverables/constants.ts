@@ -25,15 +25,20 @@ export const REVIEW_DECISION_META: Record<
   reject: { label: "拒绝", className: "bg-red-100 text-red-700" },
 };
 
-/** Git 链接交付只接受标准 HTTPS GitHub PR 页面；不联网检查 PR 是否存在。 */
-export function normalizeGitHubPullRequestUrl(value: string): string | null {
+/**
+ * Git 链接交付接受 GitHub/Gitee 的 PR 或 Commit，以及 GitLab 的 MR 或 Commit。
+ * 这里只做格式前置校验，不联网检查远端对象是否存在。
+ */
+export function normalizeGitDeliveryUrl(value: string): string | null {
   try {
     const candidate = value.trim();
+    const authorityMatch = candidate.match(
+      /^https:\/\/(github\.com|gitee\.com|gitlab\.com)(\/[^?#]*)$/i,
+    );
+    if (!authorityMatch) return null;
     const url = new URL(candidate);
     if (
-      !/^https:\/\/github\.com\//i.test(candidate) ||
       url.protocol !== "https:" ||
-      url.hostname.toLowerCase() !== "github.com" ||
       url.port !== "" ||
       url.username !== "" ||
       url.password !== "" ||
@@ -42,12 +47,66 @@ export function normalizeGitHubPullRequestUrl(value: string): string | null {
     ) {
       return null;
     }
-    const match = url.pathname.match(
-      /^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)\/?$/,
+
+    const rawSegments = authorityMatch[2].slice(1).split("/");
+    if (rawSegments[rawSegments.length - 1] === "") rawSegments.pop();
+    if (
+      rawSegments.length === 0 ||
+      rawSegments.some((segment) => segment === "") ||
+      /%(?![0-9a-f]{2})/i.test(authorityMatch[2])
+    ) {
+      return null;
+    }
+    const decodedSegments = rawSegments.map((segment) =>
+      decodeURIComponent(segment),
     );
-    if (!match) return null;
-    const [, owner, repository, pullNumber] = match;
-    return `https://github.com/${owner}/${repository}/pull/${pullNumber}`;
+    if (
+      decodedSegments.some(
+        (segment) =>
+          segment === "." ||
+          segment === ".." ||
+          segment.includes("/") ||
+          segment.includes("\\"),
+      )
+    ) {
+      return null;
+    }
+
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "github.com" || hostname === "gitee.com") {
+      const reviewSegment = hostname === "github.com" ? "pull" : "pulls";
+      const reviewMatch = url.pathname.match(
+        new RegExp(`^/([^/]+)/([^/]+)/${reviewSegment}/([1-9]\\d*)/?$`),
+      );
+      if (reviewMatch) {
+        const [, owner, repository, reviewNumber] = reviewMatch;
+        return `https://${hostname}/${owner}/${repository}/${reviewSegment}/${reviewNumber}`;
+      }
+      const commitMatch = url.pathname.match(
+        /^\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]{7,40})\/?$/i,
+      );
+      if (commitMatch) {
+        const [, owner, repository, commitSha] = commitMatch;
+        return `https://${hostname}/${owner}/${repository}/commit/${commitSha.toLowerCase()}`;
+      }
+      return null;
+    }
+
+    if (hostname === "gitlab.com") {
+      const reviewMatch = url.pathname.match(
+        /^\/(.+)\/-\/merge_requests\/([1-9]\d*)\/?$/,
+      );
+      if (reviewMatch && reviewMatch[1].split("/").length >= 2) {
+        return `https://gitlab.com/${reviewMatch[1]}/-/merge_requests/${reviewMatch[2]}`;
+      }
+      const commitMatch = url.pathname.match(
+        /^\/(.+)\/-\/commit\/([0-9a-f]{7,40})\/?$/i,
+      );
+      if (commitMatch && commitMatch[1].split("/").length >= 2) {
+        return `https://gitlab.com/${commitMatch[1]}/-/commit/${commitMatch[2].toLowerCase()}`;
+      }
+    }
+    return null;
   } catch {
     return null;
   }

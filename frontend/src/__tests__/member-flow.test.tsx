@@ -150,7 +150,7 @@ describe("成员核心路径", () => {
 
     await user.type(
       screen.getByLabelText("Git 链接"),
-      "https://github.com/org/repo/pull/42",
+      "https://gitee.com/org/repo/pulls/42",
     );
     await user.click(screen.getByRole("button", { name: "提交" }));
 
@@ -159,7 +159,7 @@ describe("成员核心路径", () => {
         "/work-items/wi-1/deliverables",
         {
           type: "git_link",
-          content: "https://github.com/org/repo/pull/42",
+          content: "https://gitee.com/org/repo/pulls/42",
         },
         expect.any(String),
       );
@@ -185,7 +185,7 @@ describe("成员核心路径", () => {
     await user.click(screen.getByRole("button", { name: "提交" }));
 
     expect(
-      screen.getByText("请输入有效的 GitHub PR 链接"),
+      screen.getByText("请输入受支持的 PR、MR 或 Commit 链接"),
     ).toBeInTheDocument();
     expect(mockApi.post).not.toHaveBeenCalled();
   });
