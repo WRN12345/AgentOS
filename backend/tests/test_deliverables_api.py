@@ -124,7 +124,7 @@ async def test_three_submissions_create_versions_1_2_3_and_history(
 
     for payload in (
         {"type": "text", "content": "第一版说明"},
-        {"type": "git_link", "content": "https://git.example.com/repo/commit/abc"},
+        {"type": "git_link", "content": "https://github.com/org/repo/pull/42"},
         {"type": "text", "content": "第三版说明"},
     ):
         resp = await _deliver(client, ctx["alice_headers"], item_id, payload)  # type: ignore[arg-type]
@@ -146,7 +146,7 @@ async def test_three_submissions_create_versions_1_2_3_and_history(
         f"/api/v1/work-items/{item_id}/deliverables/2", headers=ctx["alice_headers"]  # type: ignore[arg-type]
     )
     assert second.json()["type"] == "git_link"
-    assert second.json()["content"] == "https://git.example.com/repo/commit/abc"
+    assert second.json()["content"] == "https://github.com/org/repo/pull/42"
     assert second.json()["submitted_by"]["id"] == str(alice.id)  # type: ignore[union-attr]
 
 
@@ -248,6 +248,71 @@ async def test_type_payload_validation(client: httpx.AsyncClient, project: Proje
     ):
         resp = await _deliver(client, ctx["alice_headers"], item_id, payload)  # type: ignore[arg-type]
         assert resp.status_code == 422, payload
+
+
+async def test_git_link_is_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """标准 GitHub PR 链接会去除首尾空白和尾部斜杠后保存。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "  https://github.com/org/repo/pull/42/  ",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "https://github.com/org/repo/pull/42"
+
+
+async def test_git_link_rejects_unsupported_urls_without_creating_versions(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """Git 链接只接受标准 HTTPS GitHub PR URL，失败请求不产生版本。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    invalid_urls = (
+        "http://github.com/org/repo/pull/42",
+        "https://github.com.evil.example/org/repo/pull/42",
+        "https://gitlab.com/org/repo/pull/42",
+        "https://github.com/org/repo",
+        "https://github.com/org/repo/issues/42",
+        "https://github.com/org/repo/pull/42/files",
+        "https://github.com/org/repo/pull/42?diff=split",
+        "https://github.com/org/repo/pull/42#discussion",
+        "https://user@github.com/org/repo/pull/42",
+        "https://github.com:443/org/repo/pull/42",
+        "https://github.com/org/repo/pull/0",
+        "https://github.com/org/repo/pull/not-a-number",
+        "javascript:alert(1)",
+        "not-a-url",
+    )
+    for content in invalid_urls:
+        response = await _deliver(
+            client,
+            ctx["alice_headers"],  # type: ignore[arg-type]
+            item_id,
+            {"type": "git_link", "content": content},
+        )
+        assert response.status_code == 422, content
+
+    history = await client.get(
+        f"/api/v1/work-items/{item_id}/deliverables",
+        headers=ctx["alice_headers"],  # type: ignore[arg-type]
+    )
+    assert history.status_code == 200
+    assert history.json() == []
 
 
 # ---------- file 类型：sha256 追溯与归属 ----------

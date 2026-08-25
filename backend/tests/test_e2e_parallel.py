@@ -191,7 +191,11 @@ async def test_dual_items_parallel_end_to_end(
     del_a, del_b = await asyncio.gather(
         create_deliverable(client, ah, item_a_id, type="text", content="RAG 评估结果 87%"),
         create_deliverable(
-            client, bh, item_b_id, type="git_link", content="https://git.example.com/team/agent-tools.git"
+            client,
+            bh,
+            item_b_id,
+            type="git_link",
+            content="https://github.com/team/agent-tools/pull/42",
         ),
     )
     resp_sub_a, resp_sub_b = await asyncio.gather(
