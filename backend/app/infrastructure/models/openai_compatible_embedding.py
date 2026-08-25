@@ -7,7 +7,8 @@ memory_chunks 的 PostgreSQL vector 列保持一致。
 
 - 数据外发提示（16 节）：项目文档/档案/历史内容将发送至该第三方服务，
   部署方需自行评估；降级语义与 Ollama 实现一致（16.5，上层据此转无记忆模式）；
-- 统一错误封装：超时 → ModelTimeoutError，连接失败/非 2xx → ModelUnavailableError；
+- 统一错误封装：超时 → ModelTimeoutError，连接失败、非 2xx 或非法响应 →
+  ModelUnavailableError；
 - 返回维度与 settings.embedding_dimensions 不一致时视为服务异常
   （多半是 EMBEDDING_DIMENSIONS 配错）。
 """
@@ -71,20 +72,25 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                     raise ModelUnavailableError(
                         f"embedding 服务返回 HTTP {resp.status_code}: {resp.text[:500]}"
                     )
-                data = resp.json()["data"]
-                # OpenAI 格式：按 index 排序保证与输入顺序一致
-                embeddings = [
-                    item["embedding"] for item in sorted(data, key=lambda d: d["index"])
-                ]
-                if len(embeddings) != len(texts) or any(
-                    len(v) != self.dimensions for v in embeddings
-                ):
-                    raise ModelUnavailableError(
-                        f"embedding 服务返回维度/数量与预期不符："
-                        f"期望 {len(texts)}×{self.dimensions}，"
-                        f"实际 {len(embeddings)}×{len(embeddings[0]) if embeddings else 0}"
-                    )
-                return [list(map(float, v)) for v in embeddings]
+                try:
+                    data = resp.json()["data"]
+                    # OpenAI 格式：按 index 排序保证与输入顺序一致
+                    embeddings = [
+                        item["embedding"]
+                        for item in sorted(data, key=lambda item: item["index"])
+                    ]
+                    if len(embeddings) != len(texts) or any(
+                        len(vector) != self.dimensions for vector in embeddings
+                    ):
+                        raise ModelUnavailableError(
+                            f"embedding 服务返回维度/数量与预期不符："
+                            f"期望 {len(texts)}×{self.dimensions}，"
+                            f"实际 {len(embeddings)}×"
+                            f"{len(embeddings[0]) if embeddings else 0}"
+                        )
+                    return [list(map(float, vector)) for vector in embeddings]
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ModelUnavailableError("embedding 服务返回非法响应") from exc
             except httpx.TimeoutException as exc:
                 last_error = ModelTimeoutError(
                     f"embedding 调用超时（{self.timeout}s，第 {attempt + 1} 次）"

@@ -127,6 +127,22 @@ async def test_ollama_embed_dimension_mismatch_no_retry() -> None:
     assert calls == 1
 
 
+async def test_ollama_embed_invalid_success_response_wrapped() -> None:
+    """HTTP 200 但响应体非法时也统一为 ModelUnavailableError，且不重试。"""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=b"not json")
+
+    provider = _make_provider(handler, max_retries=2)
+    with pytest.raises(ModelUnavailableError) as exc_info:
+        await provider.embed(["测试"])
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert calls == 1
+
+
 async def test_ollama_embed_unavailable_wrapped() -> None:
     """Ollama 停机（连接失败）→ ModelUnavailableError，重试 max_retries 次，不漏 httpx 异常。"""
     calls = 0
@@ -235,6 +251,22 @@ async def test_openai_embed_dimension_mismatch_no_retry() -> None:
     provider = _make_openai_provider(handler, max_retries=2)
     with pytest.raises(ModelUnavailableError):
         await provider.embed(["测试"])
+
+
+async def test_openai_embed_invalid_success_response_wrapped() -> None:
+    """HTTP 200 但缺少 OpenAI data 字段时统一为 ModelUnavailableError。"""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"unexpected": []})
+
+    provider = _make_openai_provider(handler, max_retries=2)
+    with pytest.raises(ModelUnavailableError) as exc_info:
+        await provider.embed(["测试"])
+    assert isinstance(exc_info.value.__cause__, KeyError)
+    assert calls == 1
 
 
 async def test_openai_embed_timeout_wrapped() -> None:
