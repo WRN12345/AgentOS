@@ -5,6 +5,7 @@
 - 旧块保留在库（人工追溯），只是不参与检索。
 """
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -114,9 +115,43 @@ async def test_race_late_index_of_superseded_version_writes_stale(
     headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
 
     v1 = await _upload(client, headers, "v1 内容。")
-    v2 = await _upload(client, headers, "v2 内容。")  # v1 尚未索引即被取代
+    await _upload(client, headers, "v2 内容。")  # v1 尚未索引即被取代
     await _run_worker(v1, storage)
 
     v1_chunks = await _chunks_of(v1)
     assert len(v1_chunks) > 0
     assert all(not c.is_current for c in v1_chunks)
+
+
+async def test_race_replacement_during_index_writes_stale_chunks(
+    client: httpx.AsyncClient,
+    project: Project,
+    storage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v1 已被 worker 读取时上传 v2，v1 的新块仍必须立即失效。"""
+    index_started = asyncio.Event()
+    continue_index = asyncio.Event()
+
+    class BlockingEmbeddingProvider(FakeEmbeddingProvider):
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            index_started.set()
+            await continue_index.wait()
+            return await super().embed(texts)
+
+    monkeypatch.setattr(
+        indexer_module, "get_embedding_provider", lambda: BlockingEmbeddingProvider()
+    )
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    v1 = await _upload(client, headers, "v1 在索引过程中被替代。")
+
+    worker = asyncio.create_task(_run_worker(v1, storage))
+    await index_started.wait()
+    await _upload(client, headers, "v2 已成为当前版本。")
+    continue_index.set()
+    await worker
+
+    v1_chunks = await _chunks_of(v1)
+    assert len(v1_chunks) > 0
+    assert all(not chunk.is_current for chunk in v1_chunks)

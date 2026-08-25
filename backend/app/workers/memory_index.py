@@ -88,6 +88,9 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
             source_id=stored.id,
             text=text,
         )
+        # rebuild_chunks() 已提交块写入；会话禁用了 expire_on_commit，必须显式刷新，
+        # 否则索引开始后被新版本替代时仍会读到缓存的 superseded_by=None。
+        await session.refresh(stored, attribute_names=["superseded_by"])
         if stored.superseded_by is not None:
             # 索引完成时该版本已被新版本取代（竞态：上传在索引途中发生）：
             # 块写入后立即标失效，保证检索永远只命中最新版本（设计文档第 3 节）
