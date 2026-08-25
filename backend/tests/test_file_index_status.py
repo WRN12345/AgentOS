@@ -8,11 +8,13 @@
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.domains.files.models import StoredFile
 from app.domains.files.service import (
     INDEX_FAILED,
@@ -28,6 +30,8 @@ from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import QUEUE_KEY
 from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import get_storage_provider
+from app.workers import memory_index as memory_index_module
+from app.workers.memory_index import recover_stale_file_indexes
 from app.main import app
 from tests.conftest import add_member, auth_headers
 
@@ -109,6 +113,61 @@ async def test_retry_endpoint_failed_to_pending_and_enqueues(
         assert task["type"] == "memory.index"
         assert task["payload"]["stored_file_id"] == file_id
         assert task["payload"]["source_type"] == "document"
+    finally:
+        await redis_client.delete(QUEUE_KEY)
+        await redis_client.aclose()
+
+
+async def test_stale_indexing_file_is_requeued(
+    client: httpx.AsyncClient, project: Project, storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """worker 中断遗留的超时 indexing 文件会重新入队并续租。"""
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    resp = await client.post(
+        "/api/v1/files",
+        headers=headers,
+        files={"file": ("stale.md", b"content", "text/markdown")},
+    )
+    assert resp.status_code == 201, resp.text
+    file_id = resp.json()["id"]
+    now = datetime.now(UTC)
+    async with async_session_factory() as session:
+        stored = await session.get(StoredFile, uuid.UUID(file_id))
+        assert stored is not None
+        transition_index_status(stored, INDEX_INDEXING)
+        stored.index_started_at = now - timedelta(
+            seconds=settings.file_index_lease_seconds + 1
+        )
+        await session.commit()
+
+    redis_client = create_redis_client()
+    await redis_client.delete(QUEUE_KEY)
+    original_enqueue = memory_index_module.enqueue
+
+    async def _enqueue_fails(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("redis unavailable")
+
+    try:
+        monkeypatch.setattr(memory_index_module, "enqueue", _enqueue_fails)
+        assert await recover_stale_file_indexes(redis_client, now=now) == 0
+        async with async_session_factory() as session:
+            stored = await session.get(StoredFile, uuid.UUID(file_id))
+            assert stored is not None
+            assert stored.index_status == INDEX_INDEXING
+            assert stored.index_started_at < now
+
+        monkeypatch.setattr(memory_index_module, "enqueue", original_enqueue)
+        assert await recover_stale_file_indexes(redis_client, now=now) == 1
+        async with async_session_factory() as session:
+            stored = await session.get(StoredFile, uuid.UUID(file_id))
+            assert stored is not None
+            assert stored.index_status == INDEX_INDEXING
+            assert stored.index_started_at == now
+        queued = [json.loads(raw) for raw in await redis_client.lrange(QUEUE_KEY, 0, -1)]
+        assert len(queued) == 1
+        assert queued[0]["type"] == "memory.index"
+        assert queued[0]["payload"]["stored_file_id"] == file_id
     finally:
         await redis_client.delete(QUEUE_KEY)
         await redis_client.aclose()

@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # （超过上限视为"知识库没有相关内容"，问答页拒答并给线索）
     memory_search_limit: int = 8
     memory_search_max_distance: float = 0.6
+    # 文档索引租约：worker 异常退出或任务重投丢失后，超时 indexing 文件自动恢复。
+    file_index_lease_seconds: float = 900.0
+    file_index_recovery_interval_seconds: float = 60.0
 
     # Agent 运行级失败重试（17.3 节，T5.6）：指数退避，间隔 = base * 2^attempt。
     # 与 provider 层 LLM_MAX_RETRIES（单次调用内的线性重试，应对瞬时抖动）是

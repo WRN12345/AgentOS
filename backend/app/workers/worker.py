@@ -8,9 +8,11 @@ Worker 与 API 共用 domains/ 与 infrastructure/ 的同一套领域模型和�
 """
 
 import asyncio
+import time
 
 import redis.asyncio as redis
 
+from app.core.config import settings
 from app.core.logging import setup_logging
 
 # 导入全部领域模型，确保 SQLAlchemy 跨领域外键（如 notifications.recipient_id
@@ -30,7 +32,7 @@ from app.infrastructure.queue.queue import dequeue, promote_due_delayed
 from app.workers.agent_run import execute_agent_run
 from app.workers.due_scan import scan_due_reminders
 from app.workers.heartbeat import heartbeat
-from app.workers.memory_index import execute_memory_index
+from app.workers.memory_index import execute_memory_index, recover_stale_file_indexes
 from app.workers.memory_summary import execute_memory_summary
 from app.workers.proposal_expire import expire_memory_proposals
 from app.workers.risk_scan import run_risk_scan
@@ -88,9 +90,17 @@ async def safe_handle_task(task: dict, redis_client: redis.Redis) -> None:
 async def run() -> None:
     logger.info("worker started, waiting for tasks")
     redis_client = create_redis_client()
+    last_file_index_recovery = 0.0
     try:
         while True:
             await heartbeat(redis_client, "worker")
+            now = time.monotonic()
+            if now - last_file_index_recovery >= settings.file_index_recovery_interval_seconds:
+                try:
+                    await recover_stale_file_indexes(redis_client)
+                except Exception:  # noqa: BLE001 - 恢复扫描失败不能停止任务消费
+                    logger.exception("stale file index recovery failed")
+                last_file_index_recovery = now
             # 先把到点的延迟任务（T5.6 退避重试）搬回即时队列
             await promote_due_delayed(redis_client)
             task = await dequeue(redis_client, timeout=5)

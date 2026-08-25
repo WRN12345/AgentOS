@@ -14,9 +14,12 @@
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import redis.asyncio as redis
+from sqlalchemy import and_, or_, select
 
+from app.core.config import settings
 from app.core.logging import setup_logging
 from app.domains.files.models import StoredFile
 from app.domains.files.service import (
@@ -39,7 +42,7 @@ from app.domains.memory.history import (
 )
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
-from app.infrastructure.queue.queue import enqueue_delayed
+from app.infrastructure.queue.queue import enqueue, enqueue_delayed
 from app.infrastructure.storage.provider import get_storage_provider
 
 logger = setup_logging("worker.memory_index")
@@ -61,6 +64,7 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
             return 0  # 幂等：终态不重复处理（重复投递/新版本已取代）
         if stored.index_status == INDEX_PENDING:
             transition_index_status(stored, INDEX_INDEXING)
+            stored.index_started_at = datetime.now(UTC)
             await session.commit()
         # 状态为 indexing 时说明是任务重试，直接继续
 
@@ -98,6 +102,65 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
         transition_index_status(stored, INDEX_INDEXED)
         await session.commit()
         return written
+
+
+async def recover_stale_file_indexes(
+    redis_client: redis.Redis,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """恢复超过租约的索引任务并重新投递，返回恢复数量。
+
+    新代码写入 index_started_at；迁移前异常遗留的 indexing 记录没有该字段，
+    使用其 updated_at 作为保守回退，避免它们永久卡住。
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(seconds=settings.file_index_lease_seconds)
+    async with async_session_factory() as session:
+        stale_files = list(
+            (
+                await session.execute(
+                    select(StoredFile)
+                    .where(
+                        StoredFile.index_status == INDEX_INDEXING,
+                        or_(
+                            StoredFile.index_started_at < cutoff,
+                            and_(
+                                StoredFile.index_started_at.is_(None),
+                                StoredFile.updated_at < cutoff,
+                            ),
+                        ),
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        recovered = 0
+        for stored in stale_files:
+            try:
+                await enqueue(
+                    redis_client,
+                    TASK_TYPE,
+                    {
+                        "project_id": str(stored.project_id),
+                        "source_type": "document",
+                        "source_id": str(stored.id),
+                        "stored_file_id": str(stored.id),
+                    },
+                )
+            except Exception:  # noqa: BLE001 - 保留过期租约，下一轮继续尝试
+                logger.exception("failed to requeue stale file index task: file=%s", stored.id)
+                continue
+            # 只有任务已入队才续租。入队失败时保留过期时间，避免 pending 无任务。
+            stored.index_started_at = now
+            recovered += 1
+        await session.commit()
+
+    if recovered:
+        logger.warning("recovered stale file index tasks: count=%d", recovered)
+    return recovered
 
 
 async def _mark_file_failed(file_id: uuid.UUID) -> None:
