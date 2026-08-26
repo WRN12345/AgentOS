@@ -13,8 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
-from app.domains.identity.dependencies import get_current_user
-from app.domains.identity.models import User
 from app.domains.memory.core_memory import (
     budget_usage,
     create_entry,
@@ -47,10 +45,10 @@ from app.domains.memory.search import (
 from app.domains.project.dependencies import (
     get_current_leader,
     get_current_member,
+    get_member_or_readonly_admin,
     project_id_from_request,
 )
 from app.domains.project.models import ROLE_LEADER, ProjectMember
-from app.domains.project.service import get_member_by_user
 from app.infrastructure.database.engine import get_session
 from app.infrastructure.models.errors import ModelError
 
@@ -63,15 +61,10 @@ logger = setup_logging("backend")
 async def search_memory_endpoint(
     body: MemorySearchRequest,
     request_id: uuid.UUID = Depends(project_id_from_request),
-    current_user: User = Depends(get_current_user),
+    auth: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MemorySearchResponse:
-    member = await get_member_by_user(session, request_id, current_user.id)
-    is_admin = bool(current_user.is_admin)
-    if member is None or not member.is_active:
-        if not is_admin:
-            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
-        member = None  # 全局 admin：只读查看（第 12 节）
+    member, is_admin = auth
 
     caller = body.caller or CALLER_MEMBER_QA
     if caller not in (CALLER_MEMBER_QA, CALLER_LEADER_QUERY):
@@ -100,15 +93,10 @@ async def search_memory_endpoint(
 @router.get("/memory/core-entries", response_model=CoreMemoryEntryListOut)
 async def list_core_memory_entries(
     project_id: uuid.UUID = Depends(project_id_from_request),
-    current_user: User = Depends(get_current_user),
+    _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> CoreMemoryEntryListOut:
     """核心记忆条目列表 + 容量占用：项目成员可读；全局 admin 只读查看（第 12 节）。"""
-    member = await get_member_by_user(session, project_id, current_user.id)
-    if member is None or not member.is_active:
-        if not current_user.is_admin:
-            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
-
     entries = await list_entries(session, project_id=project_id)
     used, budget = await budget_usage(session, project_id=project_id)
     return CoreMemoryEntryListOut(
@@ -146,17 +134,12 @@ async def deprecate_core_memory_entry(
 @router.get("/memory/member-stats", response_model=list[MemberStatsOut])
 async def list_member_stats(
     project_id: uuid.UUID = Depends(project_id_from_request),
-    current_user: User = Depends(get_current_user),
+    _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberStatsOut]:
     """成员完成数/按时率/负载统计：项目成员可查（分配页面与 Agent 工具共用）；
     全局 admin 只读查看（第 12 节）。统计严格项目内口径（含停用成员，16.7）。
     """
-    member = await get_member_by_user(session, project_id, current_user.id)
-    if member is None or not member.is_active:
-        if not current_user.is_admin:
-            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
-
     stats = await member_completion_stats(session, project_id=project_id)
     return [MemberStatsOut.from_stats(s) for s in stats]
 
@@ -168,17 +151,12 @@ async def list_member_stats(
 async def get_member_profile(
     user_id: uuid.UUID,
     project_id: uuid.UUID = Depends(project_id_from_request),
-    current_user: User = Depends(get_current_user),
+    _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProfileOut:
     """读取成员档案：项目内全员可读（含被评价者本人，16.1），档案随人走跨项目可读；
     全局 admin 只读（第 12 节）。无档案 404（新成员尚无档案属正常）。
     """
-    member = await get_member_by_user(session, project_id, current_user.id)
-    if member is None or not member.is_active:
-        if not current_user.is_admin:
-            raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
-
     profile = await get_profile(session, user_id)
     if profile is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "该成员暂无档案")
