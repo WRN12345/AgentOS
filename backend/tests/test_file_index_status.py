@@ -3,7 +3,8 @@
 - 状态机：pending → indexing → indexed/failed 合法；failed → pending（重试）合法；
   终态（indexed/unindexed）与其他跳转一律 409；
 - 重试接口：failed 文件回到 pending 并重投 memory.index 任务；非 failed 409；
-  跨项目 404（不暴露存在性）。
+  跨项目 404（不暴露存在性）；
+- 恢复扫描：超时 indexing 续租重投；首次投递失败遗留的超时 pending 重新入队。
 """
 
 import json
@@ -168,6 +169,70 @@ async def test_stale_indexing_file_is_requeued(
         assert len(queued) == 1
         assert queued[0]["type"] == "memory.index"
         assert queued[0]["payload"]["stored_file_id"] == file_id
+    finally:
+        await redis_client.delete(QUEUE_KEY)
+        await redis_client.aclose()
+
+
+async def test_stale_pending_file_is_requeued(
+    client: httpx.AsyncClient, project: Project, storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首次投递失败（Redis 短暂不可用）遗留的超时 pending 文件会被恢复扫描重新入队。
+
+    状态保持 pending（worker 尚未消费）；index_started_at 记录上次投递时间，
+    下一轮扫描不会重复入队。
+    """
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    resp = await client.post(
+        "/api/v1/files",
+        headers=headers,
+        files={"file": ("stale.md", b"content", "text/markdown")},
+    )
+    assert resp.status_code == 201, resp.text
+    file_id = resp.json()["id"]
+    now = datetime.now(UTC)
+    async with async_session_factory() as session:
+        stored = await session.get(StoredFile, uuid.UUID(file_id))
+        assert stored is not None
+        assert stored.index_status == INDEX_PENDING
+        assert stored.index_started_at is None
+        # 模拟首次投递失败：上传时间（updated_at）已超过租约，此后无人触碰该行
+        stored.updated_at = now - timedelta(seconds=settings.file_index_lease_seconds + 1)
+        await session.commit()
+
+    redis_client = create_redis_client()
+    await redis_client.delete(QUEUE_KEY)
+    original_enqueue = memory_index_module.enqueue
+
+    async def _enqueue_fails(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("redis unavailable")
+
+    try:
+        # Redis 仍不可用：不入队、不推进投递时间，等下一轮
+        monkeypatch.setattr(memory_index_module, "enqueue", _enqueue_fails)
+        assert await recover_stale_file_indexes(redis_client, now=now) == 0
+        async with async_session_factory() as session:
+            stored = await session.get(StoredFile, uuid.UUID(file_id))
+            assert stored is not None
+            assert stored.index_status == INDEX_PENDING
+            assert stored.index_started_at is None
+
+        # Redis 恢复：重新入队，状态仍 pending（由 worker 消费后推进）
+        monkeypatch.setattr(memory_index_module, "enqueue", original_enqueue)
+        assert await recover_stale_file_indexes(redis_client, now=now) == 1
+        async with async_session_factory() as session:
+            stored = await session.get(StoredFile, uuid.UUID(file_id))
+            assert stored is not None
+            assert stored.index_status == INDEX_PENDING
+            assert stored.index_started_at == now
+        queued = [json.loads(raw) for raw in await redis_client.lrange(QUEUE_KEY, 0, -1)]
+        assert len(queued) == 1
+        assert queued[0]["type"] == "memory.index"
+        assert queued[0]["payload"]["stored_file_id"] == file_id
+
+        # 同一轮 cutoff 内不重复投递
+        assert await recover_stale_file_indexes(redis_client, now=now) == 0
     finally:
         await redis_client.delete(QUEUE_KEY)
         await redis_client.aclose()

@@ -113,8 +113,14 @@ async def recover_stale_file_indexes(
 ) -> int:
     """恢复超过租约的索引任务并重新投递，返回恢复数量。
 
-    新代码写入 index_started_at；迁移前异常遗留的 indexing 记录没有该字段，
-    使用其 updated_at 作为保守回退，避免它们永久卡住。
+    覆盖两类滞留：
+    - indexing 超租约：worker 中断遗留。新代码写入 index_started_at；迁移前
+      异常遗留的 indexing 记录没有该字段，使用其 updated_at 作为保守回退；
+    - pending 超租约：上传提交后首次投递失败（Redis 短暂不可用）遗留，
+      updated_at 即上传时间；重投成功后以 index_started_at 记录上次投递时间，
+      避免每个扫描周期重复入队，worker 消费时会覆写为真正的索引开始时间。
+
+    重复投递是安全的：索引消费对终态幂等跳过，indexing 状态下重建块。
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=settings.file_index_lease_seconds)
@@ -124,7 +130,7 @@ async def recover_stale_file_indexes(
                 await session.execute(
                     select(StoredFile)
                     .where(
-                        StoredFile.index_status == INDEX_INDEXING,
+                        StoredFile.index_status.in_((INDEX_INDEXING, INDEX_PENDING)),
                         or_(
                             StoredFile.index_started_at < cutoff,
                             and_(
