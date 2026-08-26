@@ -12,6 +12,7 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+.agent/
 
 data/
 logs/

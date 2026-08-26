@@ -13,9 +13,12 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import setup_logging
+from app.domains.identity.models import User
 from app.domains.memory.core_memory import list_entries
 from app.domains.memory.member_stats import member_completion_stats
+from app.domains.memory.models import MemberProfile
 from app.domains.memory.search import CALLER_AGENT_ASSIGNMENT, search_memory
+from app.domains.project.service import get_member_by_user
 from app.infrastructure.models.errors import ModelError
 
 logger = setup_logging("backend")
@@ -112,6 +115,23 @@ async def collect_retrieval_block(
     return "\n".join(lines), True
 
 
+async def _profile_owner_label(
+    session: AsyncSession, project_id: uuid.UUID, profile_id: uuid.UUID
+) -> str | None:
+    """解析档案归属成员的稳定标识：本项目显示名优先，跨项目命中回退用户名。
+
+    档案（或所属用户）已不存在时返回 None——索引块残留，调用方跳过该片段。
+    """
+    profile = await session.get(MemberProfile, profile_id)
+    if profile is None:
+        return None
+    member = await get_member_by_user(session, project_id, profile.user_id)
+    if member is not None:
+        return member.display_name
+    user = await session.get(User, profile.user_id)
+    return user.username if user is not None else None
+
+
 async def collect_team_memory_block(
     session: AsyncSession, *, project_id: uuid.UUID | None, query: str
 ) -> tuple[str, bool]:
@@ -153,8 +173,19 @@ async def collect_team_memory_block(
         return "\n".join(lines) if len(lines) > 1 else "", False
 
     if profiles:
-        lines.append("成员档案摘录（负责人维护的成员特质）：")
-        lines.extend(f"- {p.content.strip()}" for p in profiles)
+        profile_lines: list[str] = []
+        for p in profiles:
+            # 档案块必须归属到具体成员，否则分配模型无法判断特质属于谁：
+            # 按 source_id 找回档案 → user_id，再解析当前项目显示名
+            # （与统计块口径一致）；档案随人走，命中非本项目成员时回退用户名。
+            owner = await _profile_owner_label(session, project_id, p.source_id)
+            if owner is None:
+                # 档案已删除而索引块残留：跳过，不输出匿名文本
+                continue
+            profile_lines.append(f"- {owner}：{p.content.strip()}")
+        if profile_lines:
+            lines.append("成员档案摘录（负责人维护的成员特质）：")
+            lines.extend(profile_lines)
 
     if len(lines) == 1:
         return "", True
