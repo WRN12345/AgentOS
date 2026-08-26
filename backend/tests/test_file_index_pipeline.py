@@ -4,9 +4,11 @@
 - 上传不支持格式（.png）→ 直接 unindexed，不投递任务；
 - worker 任务全流程：读文件 → 提取 → 切块入库 → indexed；
 - 扫描件 PDF → unindexed；损坏 PDF → failed（不自动重投）；
-- 任务重试耗尽 → 文件标记 failed。
+- 任务重试耗尽 → 文件标记 failed；
+- 并发重复任务：同一来源只产生一套块（原子认领 + 来源级互斥 + 唯一约束）。
 """
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -18,6 +20,7 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.domains.files.models import StoredFile
 from app.domains.memory import indexer as indexer_module
+from app.domains.memory.indexer import MemoryIndexService
 from app.domains.memory.models import MemoryChunk
 from app.domains.project.models import Project
 from app.infrastructure.cache.redis import create_redis_client
@@ -213,3 +216,98 @@ async def _run_worker_for_exhausted(file_id: str, storage) -> None:
     finally:
         memory_index_module.get_storage_provider = original
         await client.aclose()
+
+
+# ---------- 并发重复任务防重（P2 修复回归） ----------
+
+
+class _SlowEmbeddingProvider(FakeEmbeddingProvider):
+    """嵌入调用加延迟，放大两个并发索引任务的交错窗口。"""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        await asyncio.sleep(0.05)
+        return await super().embed(texts)
+
+
+def _chunk_rows_sync_check(rows: list[MemoryChunk]) -> None:
+    """同一来源只存在一套块：chunk_index 恰为 0..n-1 无重复。"""
+    assert len(rows) > 0
+    assert sorted(r.chunk_index for r in rows) == list(range(len(rows)))
+
+
+async def test_concurrent_duplicate_worker_tasks_no_duplicate_chunks(
+    client: httpx.AsyncClient,
+    project: Project,
+    storage,
+    redis_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """两个 worker 并发执行同一文件的索引任务（租约重投与原任务并存）：
+    原子认领保证只有一个任务写出块，文件终态 indexed，无重复块。"""
+    monkeypatch.setattr(
+        indexer_module, "get_embedding_provider", lambda: _SlowEmbeddingProvider()
+    )
+    _, alice = await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    text = "# 部署指南\n\n" + "第一步，准备环境。\n\n" * 100
+    out = await _upload(client, headers, "deploy.md", text.encode(), "text/markdown")
+
+    original = memory_index_module.get_storage_provider
+    memory_index_module.get_storage_provider = lambda: storage
+    payload = {"stored_file_id": out["id"], "source_type": "document"}
+    try:
+        await asyncio.gather(
+            execute_memory_index(dict(payload), None),  # type: ignore[arg-type]
+            execute_memory_index(dict(payload), None),  # type: ignore[arg-type]
+        )
+    finally:
+        memory_index_module.get_storage_provider = original
+
+    assert await _file_status(out["id"]) == "indexed"
+    async with async_session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(MemoryChunk).where(
+                        MemoryChunk.source_id == uuid.UUID(out["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    _chunk_rows_sync_check(rows)
+
+
+async def test_concurrent_rebuild_chunks_same_source_serialized() -> None:
+    """无文件状态机保护的来源（profile 等纯文本路径）：两个并发 rebuild
+    被来源级 advisory 锁串行，同一来源只保留一套块。"""
+    source_id = uuid.uuid4()
+    text = "并发索引内容，语义不同。\n\n" * 100  # 多块，验证块序号唯一
+
+    async def _rebuild() -> int:
+        async with async_session_factory() as session:
+            return await MemoryIndexService(
+                session, provider=_SlowEmbeddingProvider()
+            ).rebuild_chunks(
+                project_id=None,
+                source_type="profile",
+                source_id=source_id,
+                text=text,
+            )
+
+    written = await asyncio.gather(_rebuild(), _rebuild())
+    assert written[0] == written[1] > 1  # 同一份文本切出多块
+
+    async with async_session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(MemoryChunk).where(MemoryChunk.source_id == source_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == written[0]  # 只有一套块，而非两套
+    _chunk_rows_sync_check(rows)

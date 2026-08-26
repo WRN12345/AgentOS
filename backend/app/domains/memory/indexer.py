@@ -9,7 +9,7 @@
 
 import uuid
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -19,6 +19,12 @@ from app.infrastructure.models.embedding import EmbeddingProvider, get_embedding
 
 #: 记忆索引任务类型（API 进程投递、worker 消费共用，见 app/workers/memory_index.py）
 MEMORY_INDEX_TASK_TYPE = "memory.index"
+
+#: 来源级互斥（并发重复任务防重）：同一来源的删旧+写新必须串行，否则两个
+#: worker（租约重投与原任务并存）会各自提交一整套 current 块，检索出现重复依据。
+#: pg_advisory_xact_lock 随事务结束（commit/rollback）自动释放，不会泄漏到连接池；
+#: 配合 ux_memory_chunks_source_chunk 唯一约束（迁移 0031）在数据库层兜底。
+_SOURCE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))")
 
 
 class MemoryIndexService:
@@ -48,6 +54,10 @@ class MemoryIndexService:
         if source_type != "profile" and project_id is None:
             raise ValueError(f"{source_type} 类型必须带 project_id")
 
+        # 临界区开始：删旧+写新须在来源级互斥内完成（见 _SOURCE_LOCK_SQL 注释）
+        await self._session.execute(
+            _SOURCE_LOCK_SQL, {"lock_key": f"memory_index:{source_type}:{source_id}"}
+        )
         await self._session.execute(
             delete(MemoryChunk).where(
                 MemoryChunk.source_type == source_type,
@@ -67,11 +77,12 @@ class MemoryIndexService:
                     project_id=project_id,
                     source_type=source_type,
                     source_id=source_id,
+                    chunk_index=index,
                     content=content,
                     embedding=vector,
                     model_version=settings.embedding_model,
                 )
-                for content, vector in zip(chunks, vectors, strict=True)
+                for index, (content, vector) in enumerate(zip(chunks, vectors, strict=True))
             ]
         )
         await self._session.commit()

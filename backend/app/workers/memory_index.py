@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import redis.asyncio as redis
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -65,9 +65,24 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
         if stored.index_status in (INDEX_INDEXED, INDEX_UNINDEXED):
             return 0  # 幂等：终态不重复处理（重复投递/新版本已取代）
         if stored.index_status == INDEX_PENDING:
-            transition_index_status(stored, INDEX_INDEXING)
-            stored.index_started_at = datetime.now(UTC)
+            # 原子认领（并发重复任务，如租约重投与原任务并存）：仅状态仍为
+            # pending 才置 indexing；rowcount=0 说明另一 worker 已认领，跳过。
+            # 块写入另有 rebuild_chunks 的来源级互斥与唯一约束兜底。
+            claimed = await session.execute(
+                update(StoredFile)
+                .where(
+                    StoredFile.id == file_id,
+                    StoredFile.index_status == INDEX_PENDING,
+                )
+                .values(index_status=INDEX_INDEXING, index_started_at=datetime.now(UTC))
+            )
+            if int(claimed.rowcount) == 0:  # type: ignore[attr-defined]
+                logger.info("index task already claimed by another worker: %s", file_id)
+                return 0
             await session.commit()
+            # 原子 UPDATE 不刷新 ORM 对象（会话禁用 expire_on_commit），
+            # 显式刷新使后续 transition_index_status 校验基于真实状态
+            await session.refresh(stored)
         # 状态为 indexing 时说明是任务重试，直接继续
 
         provider = get_storage_provider()

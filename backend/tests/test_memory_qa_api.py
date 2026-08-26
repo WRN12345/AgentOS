@@ -3,6 +3,7 @@
 - 命中路径：生成回答 + 依据列表（可定位原文）；
 - 拒答路径：低于阈值不生成回答，返回最接近线索（16.13）；
 - 权限：仅项目成员（非成员/admin 403）；缺项目头 400。
+- 历史落库失败：回答不受影响，日志不含问题/答案/片段等私人内容（16 节）。
 """
 
 import uuid
@@ -112,3 +113,42 @@ async def test_qa_permission(client: httpx.AsyncClient, project_a: Project, admi
     headers = await auth_headers(client, "alice", ALICE_PW)
     resp = await client.post("/api/v1/memory/qa", headers=headers, json={"question": "x"})
     assert resp.status_code == 400
+
+
+async def test_qa_history_save_failure_logs_no_private_content(
+    client: httpx.AsyncClient,
+    project_a: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """历史落库失败不影响问答本身；日志只记异常类型——INSERT 参数含
+    问题/答案/依据片段等私人内容，异常消息与堆栈不得进日志（16 节日志纪律）。"""
+    import logging
+
+    from app.domains.memory import router as memory_router
+
+    _, alice = await add_member(project_a, "alice", ALICE_PW)
+    question = "我们的数据库口令是多少"
+    await _seed_chunk(project_a.id, "机密片段内容XYZ", same_direction=True)
+    monkeypatch.setattr(
+        qa_module, "get_model_provider", lambda: _ScriptedQAProvider("机密答案ABC [1]。")
+    )
+
+    async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+        # 模拟驱动层异常消息带出 SQL 参数（含私人内容）
+        raise RuntimeError("insert failed, params: 我们的数据库口令是多少 / 机密答案ABC")
+
+    monkeypatch.setattr(memory_router, "save_qa_history", _boom)
+
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project_a.id))
+    with caplog.at_level(logging.WARNING):
+        resp = await client.post(
+            "/api/v1/memory/qa", headers=headers, json={"question": question}
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == "机密答案ABC [1]。"  # 历史失败不影响回答
+    assert "qa history save failed" in caplog.text
+    assert question not in caplog.text
+    assert "机密答案ABC" not in caplog.text
+    assert "机密片段内容XYZ" not in caplog.text

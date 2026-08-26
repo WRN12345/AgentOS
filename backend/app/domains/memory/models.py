@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +36,17 @@ CORE_MEMORY_NEAR_FULL_RATIO = 0.9
 
 class MemoryChunk(CoreModel):
     __tablename__ = "memory_chunks"
+    # 来源级防重（迁移 0031）：同一来源同一模型版本的块序号唯一，
+    # 并发重复索引任务在数据库层无法写出两套相同块（另有来源级 advisory 锁串行）
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type",
+            "source_id",
+            "model_version",
+            "chunk_index",
+            name="ux_memory_chunks_source_chunk",
+        ),
+    )
 
     # 项目归属；profile 类型为 None（成员档案全局共享，16.12）
     project_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -44,6 +55,8 @@ class MemoryChunk(CoreModel):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # 来源实体 ID（stored_files / member_profiles / agent_runs 等），不做外键——四类来源异构
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # 块在来源内的序号（防重唯一约束的一部分；测试手工造块默认 0）
+    chunk_index: Mapped[int] = mapped_column(nullable=False, default=0)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(
         Vector(settings.embedding_dimensions), nullable=False
