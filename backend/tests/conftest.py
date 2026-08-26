@@ -12,6 +12,7 @@
 
 import os
 import subprocess
+from collections.abc import AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
 # --- 环境改写必须发生在任何 app 模块导入之前 ---
@@ -84,7 +85,7 @@ def _prepare_test_database() -> None:
 
 
 @pytest.fixture(autouse=True)
-async def _clean_tables() -> None:
+async def _clean_tables() -> AsyncIterator[None]:
     yield
     async with async_session_factory() as session:
         await session.execute(
@@ -95,6 +96,7 @@ async def _clean_tables() -> None:
                 "collaboration_requests, notifications, "
                 "transfer_requests, deadline_change_requests, stored_files, "
                 "agent_suggestions, agent_runs, dev_docs, "
+                "memory_chunks, core_memory_entries, member_profiles, qa_history, "
                 "project_members, projects"
             )
         )
@@ -114,7 +116,7 @@ async def _clean_tables() -> None:
 
 
 @pytest.fixture
-async def client() -> httpx.AsyncClient:
+async def client() -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

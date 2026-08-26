@@ -288,21 +288,19 @@ async def test_download_permission_matrix(
     assert denied.json()["code"] == "FORBIDDEN"
 
 
-async def test_download_unlinked_file_only_uploader_and_leader(
+async def test_download_unlinked_knowledge_doc_all_members(
     client: httpx.AsyncClient, project: Project, storage: LocalStorageProvider
 ) -> None:
-    """未关联工作项的文件：仅上传人与负责人可下。"""
+    """未关联工作项的知识库文档：项目内在职成员均可下载（第 12 节 + M7.5——
+    与文件列表、问答检索可见性一致，问答"查看原文"链路不再 403）。"""
     ctx = await _setup(client, project)
     uploaded = await _upload(client, ctx["alice_headers"])  # type: ignore[arg-type]
     file_id = uploaded.json()["id"]
 
-    for key in ("alice_headers", "leader_headers"):
+    for key in ("alice_headers", "leader_headers", "bob_headers", "dave_headers"):
         resp = await client.get(f"/api/v1/files/{file_id}/download", headers=ctx[key])  # type: ignore[arg-type]
-        assert resp.status_code == 200
-    denied = await client.get(
-        f"/api/v1/files/{file_id}/download", headers=ctx["bob_headers"]  # type: ignore[arg-type]
-    )
-    assert denied.status_code == 403
+        assert resp.status_code == 200, f"{key} 应可下载知识库文档: {resp.text}"
+        assert resp.content == CONTENT
 
 
 async def test_download_missing_or_cleaned_file_unified_error(

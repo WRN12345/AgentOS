@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import idempotency_guard
 from app.domains.files.schemas import StoredFileOut
-from app.domains.files.service import authorize_download, upload_file
+from app.domains.files.service import (
+    authorize_download,
+    list_current_files,
+    list_file_versions,
+    retry_file_index,
+    upload_file,
+)
 from app.domains.project.dependencies import get_current_member
 from app.domains.project.models import ProjectMember
 from app.infrastructure.database.engine import get_session
@@ -41,6 +47,35 @@ async def upload_file_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> StoredFileOut:
     return await upload_file(session, actor, file, work_item_id, provider)
+
+
+@router.get("/files", response_model=list[StoredFileOut])
+async def list_files_endpoint(
+    actor: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[StoredFileOut]:
+    """项目内当前版本文件列表（知识库文档管理，设计文档第 12 节）。"""
+    return await list_current_files(session, actor)
+
+
+@router.get("/files/{file_id}/versions", response_model=list[StoredFileOut])
+async def list_file_versions_endpoint(
+    file_id: uuid.UUID,
+    actor: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[StoredFileOut]:
+    """同名文档版本历史（新→旧，设计文档第 3 节）。"""
+    return await list_file_versions(session, actor, file_id)
+
+
+@router.post("/files/{file_id}/index-retry", response_model=StoredFileOut)
+async def retry_file_index_endpoint(
+    file_id: uuid.UUID,
+    actor: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> StoredFileOut:
+    """索引失败手动重试（设计文档第 6 节）：failed → pending 并重投索引任务。"""
+    return await retry_file_index(session, actor, file_id)
 
 
 @router.get("/files/{file_id}/download")

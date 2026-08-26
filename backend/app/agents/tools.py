@@ -14,6 +14,7 @@
 - 每个工具在 AgentTool.kind 上显式标记类别，注册表与 FORBIDDEN 不相交；
 - 本模块只 import 各 domain 的 models / 只读常量（state_machine），
   不得 import 任何 domain 的 service（写命令都定义在 service 层）；
+  唯一例外：记忆检索经 memory.search 的带权限只读路径（M6.1，非写命令）；
 - read_query 工具实现不得出现 session.add / session.delete 等写调用。
 """
 
@@ -35,6 +36,8 @@ from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.files.models import StoredFile
 from app.domains.identity.models import User
+from app.domains.memory.member_stats import member_completion_stats
+from app.domains.memory.search import CALLER_AGENT_ASSIGNMENT, search_memory
 from app.domains.project.models import MemberCapability, ProjectMember
 from app.domains.transfers.models import TransferRequest
 from app.domains.transfers.state_machine import TransferStatus
@@ -552,6 +555,116 @@ async def list_pending_approvals(
     }
 
 
+# ---------- 记忆检索只读工具（M6.1，记忆模块设计文档第 11 节） ----------
+
+
+async def search_project_documents(
+    session: AsyncSession,
+    query: str,
+    *,
+    project_id: uuid.UUID,
+    limit: int = 5,
+) -> list[dict]:
+    """检索项目文档片段：向量语义检索，供拆解/分配时参考项目资料。
+
+    走 M2.9 带权限校验的检索路径（调用方标识 agent_assignment），
+    项目隔离在检索层强制——只命中当前项目的最新版本文档块。
+    """
+    results = await search_memory(
+        session,
+        member=None,
+        is_admin=False,
+        project_id=project_id,
+        query=query,
+        caller=CALLER_AGENT_ASSIGNMENT,
+        source_types=["document"],
+        limit=limit,
+    )
+    return [
+        {"content": r.content, "source_id": str(r.source_id), "distance": r.distance}
+        for r in results
+    ]
+
+
+async def search_history_records(
+    session: AsyncSession,
+    query: str,
+    *,
+    project_id: uuid.UUID,
+    limit: int = 5,
+) -> list[dict]:
+    """检索历史与经验：历次拆解/分配记录、已完成工作项结论（M5.1/M5.2 入索引）。
+
+    供拆解新需求时参考"以前类似的需求是怎么拆的、分给谁、结果如何"（第 9 节）。
+    """
+    results = await search_memory(
+        session,
+        member=None,
+        is_admin=False,
+        project_id=project_id,
+        query=query,
+        caller=CALLER_AGENT_ASSIGNMENT,
+        source_types=["history"],
+        limit=limit,
+    )
+    return [
+        {"content": r.content, "source_id": str(r.source_id), "distance": r.distance}
+        for r in results
+    ]
+
+
+async def get_member_stats(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> list[dict]:
+    """成员完成统计（M3.1/M3.2）：各成员完成数/按时率/负载/样本量。
+
+    分配环节参考"他在本项目做过什么、做得怎么样"（事实记录，第 7 节①）；
+    is_active=False 为停用成员（16.7 统计保留，不进分配候选）。
+    """
+    stats = await member_completion_stats(session, project_id=project_id)
+    return [
+        {
+            "member_id": str(s.member_id),
+            "display_name": s.display_name,
+            "is_active": s.is_active,
+            "completed_total": s.completed_total,
+            "active_now": s.active_now,
+            "completed_recent": s.completed_recent,
+            "on_time_rate": s.on_time_rate,
+            "sample_sufficient": s.sample_sufficient,
+        }
+        for s in stats
+    ]
+
+
+async def search_member_profiles(
+    session: AsyncSession,
+    query: str,
+    *,
+    project_id: uuid.UUID,
+    limit: int = 5,
+) -> list[dict]:
+    """检索成员文字档案（M3.5/M3.7 入索引）：统计体现不出来的成员特质。
+
+    走 M3.9 放行规则——agent_assignment 场景可命中随人走的跨项目档案
+    （16.12），供分配决策参考"某人对支付模块的历史包袱很熟"这类信息。
+    """
+    results = await search_memory(
+        session,
+        member=None,
+        is_admin=False,
+        project_id=project_id,
+        query=query,
+        caller=CALLER_AGENT_ASSIGNMENT,
+        source_types=["profile"],
+        limit=limit,
+    )
+    return [
+        {"content": r.content, "source_id": str(r.source_id), "distance": r.distance}
+        for r in results
+    ]
+
+
 # ---------- 写入建议工具（write_suggestion，唯一写工具） ----------
 
 
@@ -666,6 +779,30 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
             kind="read_query",
             func=list_pending_approvals,
             description="汇总待审批事项：待审工作项 / 待批转派 / 待批 DDL 变更",
+        ),
+        AgentTool(
+            name="search_project_documents",
+            kind="read_query",
+            func=search_project_documents,
+            description="检索项目文档片段（语义检索，拆解/分配时参考项目资料）",
+        ),
+        AgentTool(
+            name="search_history_records",
+            kind="read_query",
+            func=search_history_records,
+            description="检索历史拆解/分配记录与已完成工作项结论（参考以往经验）",
+        ),
+        AgentTool(
+            name="get_member_stats",
+            kind="read_query",
+            func=get_member_stats,
+            description="查询成员完成统计：完成数/按时率/负载/样本量（分配参考事实记录）",
+        ),
+        AgentTool(
+            name="search_member_profiles",
+            kind="read_query",
+            func=search_member_profiles,
+            description="检索成员文字档案（成员特质与历史背景，分配参考）",
         ),
         AgentTool(
             name="write_suggestion",

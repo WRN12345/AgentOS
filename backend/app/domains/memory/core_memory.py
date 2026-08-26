@@ -1,0 +1,230 @@
+"""核心记忆条目服务（设计文档第 8 节，M4.2）。
+
+- 负责人手写条目（含新项目"种子记忆"，16.11）立即生效：proposed_by = confirmed_by = 负责人；
+- 项目成员可读全部条目（含已作废，供追溯），可见提议者/确认者/生效时间；
+- 容量预算：单项目生效条目合计约 4000 字符，超限拒绝并提示走整合精简（第 8 节）；
+  预算逼大家只留真正重要的，而不是什么都往里堆；
+- scope 本期固定 project，organization 为组织级预留（表结构已就位，接口层不接受）。
+
+写操作（手写/作废）纳入审计域（16.10）。
+"""
+
+import uuid
+
+import redis.asyncio as redis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import ApiException, ErrorCodes
+from app.core.logging import setup_logging
+from app.domains.audit.service import record_event
+from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
+from app.domains.memory.models import (
+    CORE_MEMORY_BUDGET_CHARS,
+    CORE_MEMORY_NEAR_FULL_RATIO,
+    CoreMemoryEntry,
+)
+from app.domains.memory.schemas import CoreMemoryEntryOut
+from app.domains.project.models import Project, ProjectMember
+from app.domains.project.service import require_leader
+from app.domains.work_items.schemas import MemberBrief
+from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.queue.queue import enqueue
+
+logger = setup_logging("backend")
+
+
+async def list_entries(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> list[CoreMemoryEntry]:
+    """项目全部核心记忆条目，生效在前（status 字典序 active < deprecated），按生效时间倒序。"""
+    stmt = (
+        select(CoreMemoryEntry)
+        .where(CoreMemoryEntry.project_id == project_id)
+        .order_by(CoreMemoryEntry.status, CoreMemoryEntry.effective_at.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def budget_usage(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> tuple[int, int]:
+    """核心记忆容量占用：返回（生效条目合计字符数，预算上限）。供 M4.6 容量快满判断复用。"""
+    stmt = select(CoreMemoryEntry.content).where(
+        CoreMemoryEntry.project_id == project_id,
+        CoreMemoryEntry.status == "active",
+    )
+    used = sum(len(content) for content in (await session.execute(stmt)).scalars().all())
+    return used, CORE_MEMORY_BUDGET_CHARS
+
+
+async def ensure_budget(
+    session: AsyncSession, *, project_id: uuid.UUID, additional: int
+) -> None:
+    """容量预算闸门：生效条目合计 + additional 超预算则 400，提示走整合精简（第 8 节）。
+
+    手写创建与 Agent 提议确认（M4.4，update 时 additional 可为负）共用本闸门。
+    锁定项目行而非当前条目集合：空集合也必须受锁保护，才能防止并发插入都
+    基于同一旧使用量通过校验。
+    """
+    locked_project_id = await session.scalar(
+        select(Project.id).where(Project.id == project_id).with_for_update()
+    )
+    if locked_project_id is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
+    used, budget = await budget_usage(session, project_id=project_id)
+    if used + additional > budget:
+        raise ApiException(
+            400,
+            ErrorCodes.CORE_MEMORY_BUDGET_EXCEEDED,
+            "核心记忆容量不足，请先作废过时条目或走整合精简提议",
+            details={"used": used, "budget": budget, "required": additional},
+        )
+
+
+async def budget_nearly_full(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> tuple[bool, int, int]:
+    """容量快满判断（M4.6，供 M6.7 触发整合精简提议）：返回（是否快满, 已用, 预算）。"""
+    used, budget = await budget_usage(session, project_id=project_id)
+    return used >= budget * CORE_MEMORY_NEAR_FULL_RATIO, used, budget
+
+
+async def entries_to_out(
+    session: AsyncSession, entries: list[CoreMemoryEntry]
+) -> list[CoreMemoryEntryOut]:
+    """条目序列化：批量加载成员显示名；proposed_by 为 None 表示 Agent 提议（第 8 节）。"""
+    member_ids = {
+        mid
+        for e in entries
+        for mid in (e.proposed_by_member_id, e.confirmed_by_member_id)
+        if mid is not None
+    }
+    briefs: dict[uuid.UUID, MemberBrief] = {}
+    if member_ids:
+        members = (
+            await session.execute(
+                select(ProjectMember).where(ProjectMember.id.in_(member_ids))
+            )
+        ).scalars().all()
+        briefs = {m.id: MemberBrief(id=m.id, display_name=m.display_name) for m in members}
+
+    def brief_of(member_id: uuid.UUID) -> MemberBrief:
+        return briefs.get(member_id) or MemberBrief(id=member_id, display_name="")
+
+    return [
+        CoreMemoryEntryOut(
+            id=e.id,
+            scope=e.scope,
+            content=e.content,
+            status=e.status,
+            proposed_by=(
+                brief_of(e.proposed_by_member_id) if e.proposed_by_member_id else None
+            ),
+            confirmed_by=brief_of(e.confirmed_by_member_id),
+            effective_at=e.effective_at,
+            created_at=e.created_at,
+        )
+        for e in entries
+    ]
+
+
+async def enqueue_core_memory_index_id(
+    project_id: uuid.UUID, entry_id: uuid.UUID
+) -> None:
+    """投递核心记忆重建/失效任务；worker 执行时读取条目当前状态。"""
+    redis_client: redis.Redis = create_redis_client()
+    try:
+        await enqueue(
+            redis_client,
+            MEMORY_INDEX_TASK_TYPE,
+            {
+                "project_id": str(project_id),
+                "source_type": "core_memory",
+                "source_id": str(entry_id),
+            },
+        )
+    except Exception:  # noqa: BLE001 - 索引失败由 worker/后续重建处理，不阻塞业务写入
+        logger.warning("core memory index task enqueue failed: entry=%s", entry_id, exc_info=True)
+    finally:
+        await redis_client.aclose()
+
+
+async def enqueue_core_memory_index(entry: CoreMemoryEntry) -> None:
+    await enqueue_core_memory_index_id(entry.project_id, entry.id)
+
+
+async def invalidate_core_memory_index(
+    session: AsyncSession, entry_id: uuid.UUID, *, commit: bool = True
+) -> None:
+    """作废核心记忆对应的向量块，保留块供追溯但排除检索。"""
+    await MemoryIndexService(session).mark_source_stale(
+        source_type="core_memory", source_id=entry_id, commit=commit
+    )
+
+
+async def create_entry(
+    session: AsyncSession, actor: ProjectMember, *, content: str
+) -> CoreMemoryEntry:
+    """负责人手写条目（种子记忆，16.11），立即生效。
+
+    scope 固定 project（组织级预留，本期接口层不接受）；超容量预算拒绝并提示走整合。
+    """
+    require_leader(actor)
+    content = content.strip()
+    if not content:
+        raise ApiException(400, ErrorCodes.VALIDATION_ERROR, "核心记忆内容不能为空")
+
+    await ensure_budget(session, project_id=actor.project_id, additional=len(content))
+
+    entry = CoreMemoryEntry(
+        project_id=actor.project_id,
+        scope="project",
+        content=content,
+        status="active",
+        proposed_by_member_id=actor.id,
+        confirmed_by_member_id=actor.id,
+    )
+    session.add(entry)
+    await session.flush()
+    await record_event(
+        session,
+        action="core_memory.created",
+        actor_id=actor.user_id,
+        target_type="core_memory_entry",
+        target_id=entry.id,
+        after={"content": content, "scope": "project", "source": "manual"},
+        project_id=actor.project_id,
+    )
+    await session.commit()
+    await enqueue_core_memory_index(entry)
+    return entry
+
+
+async def deprecate_entry(
+    session: AsyncSession, actor: ProjectMember, *, entry_id: uuid.UUID
+) -> CoreMemoryEntry:
+    """负责人作废条目：保留供追溯，不再注入 Agent 上下文；跨项目访问按 404 处理。"""
+    require_leader(actor)
+    entry = await session.get(CoreMemoryEntry, entry_id)
+    if entry is None or entry.project_id != actor.project_id:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "核心记忆条目不存在")
+    if entry.status != "active":
+        raise ApiException(
+            409, ErrorCodes.CORE_MEMORY_INVALID_TRANSITION, "条目已作废，不能重复作废"
+        )
+
+    entry.status = "deprecated"
+    await record_event(
+        session,
+        action="core_memory.deprecated",
+        actor_id=actor.user_id,
+        target_type="core_memory_entry",
+        target_id=entry.id,
+        before={"status": "active"},
+        after={"status": "deprecated"},
+        project_id=actor.project_id,
+    )
+    await invalidate_core_memory_index(session, entry.id, commit=False)
+    await session.commit()
+    return entry

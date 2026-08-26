@@ -11,6 +11,7 @@ dependencies = [
     "fastapi==0.115.6",
     "uvicorn[standard]==0.32.1",
     "sqlalchemy[asyncio]==2.0.36",
+    "pgvector==0.3.6",
     "alembic==1.14.0",
     "asyncpg==0.30.0",
     "redis==5.2.1",
@@ -23,6 +24,9 @@ dependencies = [
     "langgraph==1.2.9",
     "langgraph-checkpoint-postgres==3.1.0",
     "psycopg[binary,pool]==3.3.4",
+    # 记忆模块文档内容提取（设计文档第 4 节）：PDF 与 Word
+    "pypdf==5.1.0",
+    "python-docx==1.1.2",
 ]
 
 [project.optional-dependencies]

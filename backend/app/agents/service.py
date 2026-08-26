@@ -12,7 +12,8 @@ T5.5 的 scheduler/event 触发复用 request_agent_analysis。
 
 T5.7（12.5 节）：list_suggestions() 建议查询（join agent_runs 补
 work_item_id/model）；submit_suggestion_feedback() 人工采纳/忽略反馈
-（仅负责人、仅 pending，写 agent. 前缀审计事件，不触碰任何业务状态）。
+（仅负责人、仅 pending，写 agent. 前缀审计事件，不触碰任何业务状态；
+唯一例外：memory_proposal 被采纳时同事务落入核心记忆，M4.4）。
 """
 
 import uuid
@@ -28,6 +29,10 @@ from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES, enqueue_run_history_index
+from app.domains.memory.core_memory import enqueue_core_memory_index, enqueue_core_memory_index_id
+from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, MemoryProposalPayload, apply_memory_proposal
+from app.domains.project.models import ProjectMember
 from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
@@ -164,45 +169,83 @@ async def submit_suggestion_feedback(
     suggestion: AgentSuggestion,
     *,
     action: str,
-    actor_id: uuid.UUID,
+    member: ProjectMember,
 ) -> AgentSuggestion:
-    """写入人工采纳结果（仅 pending 可反馈；重复反馈 409，由路由层判定）。
+    """原子写入人工采纳结果，确保一条建议只会被处理一次。
 
-    只更新 agent_suggestions 自身的 review_status/reviewed_by/reviewed_at
-    并留 agent. 前缀审计事件，不触碰任何业务状态（10.3 节原则不变：
-    Agent 建议不产生业务写入，采纳后的业务动作由前端走正式命令接口）。
+    以 ``SELECT ... FOR UPDATE`` 重新读取建议行。状态检查、memory_proposal
+    的核心记忆副作用、审计事件和状态写入都在该锁覆盖的同一事务中，因此并发
+    accepted/ignored 或请求重放只能有一个请求成功；其余请求在获得锁后返回 409。
     """
-    before: dict[str, Any] = {"review_status": suggestion.review_status}
-    suggestion.review_status = action
-    suggestion.reviewed_by = actor_id
-    suggestion.reviewed_at = datetime.now(UTC)
+    # populate_existing 必须存在：路由层已 session.get 把实例装入 identity map，
+    # 否则 FOR UPDATE 锁等待期间对端提交的新行数据会被 ORM 丢弃，状态检查读到
+    # 陈旧快照，409 保护被绕过（同一提议可被采纳两次）。
+    locked_suggestion = (
+        await session.execute(
+            select(AgentSuggestion)
+            .where(AgentSuggestion.id == suggestion.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if locked_suggestion is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 建议不存在")
+    raise_if_suggestion_reviewed(locked_suggestion)
+
+    applied_entry = None
+    proposal_payload = None
+    if action == "accepted" and locked_suggestion.suggestion_type == MEMORY_PROPOSAL_TYPE:
+        applied_entry = await apply_memory_proposal(
+            session, locked_suggestion, confirmer=member
+        )
+        proposal_payload = MemoryProposalPayload.model_validate(locked_suggestion.content)
+
+    before: dict[str, Any] = {"review_status": locked_suggestion.review_status}
+    locked_suggestion.review_status = action
+    locked_suggestion.reviewed_by = member.id
+    locked_suggestion.reviewed_at = datetime.now(UTC)
     await record_event(
         session,
         action="agent.suggestion_feedback",
-        actor_id=actor_id,
+        actor_id=member.id,
         target_type="agent_suggestion",
-        target_id=suggestion.id,
+        target_id=locked_suggestion.id,
         before=before,
         after={"review_status": action},
     )
     await session.commit()
-    await session.refresh(suggestion)
+    await session.refresh(locked_suggestion)
+
+    if applied_entry is not None and proposal_payload is not None:
+        await enqueue_core_memory_index(applied_entry)
+        if proposal_payload.action == "consolidate":
+            run = await session.get(AgentRun, locked_suggestion.run_id)
+            if run is not None:
+                for entry_id in proposal_payload.entry_ids or []:
+                    await enqueue_core_memory_index_id(run.project_id, entry_id)
+
+    # M5.1：拆解/分配运行的建议反馈落定后，重投历史索引任务（整体重建，
+    # 块内容反映最新采纳状态）；best-effort，投递失败只记日志
+    run = await session.get(AgentRun, locked_suggestion.run_id)
+    if run is not None and run.agent_type in HISTORY_RUN_AGENT_TYPES:
+        await enqueue_run_history_index(run)
+
     logger.info(
         "agent suggestion feedback: id=%s action=%s actor=%s",
-        suggestion.id,
+        locked_suggestion.id,
         action,
-        actor_id,
+        member.id,
     )
-    return suggestion
+    return locked_suggestion
 
 
 def raise_if_suggestion_reviewed(suggestion: AgentSuggestion) -> None:
-    """状态迁移校验：已反馈的建议再次反馈 → 409（简单一致方案：不幂等吞掉）。"""
+    """状态迁移校验：已终结（accepted/ignored/expired）的建议再次反馈 → 409。"""
     if suggestion.review_status != "pending":
         raise ApiException(
             409,
             ErrorCodes.AGENT_SUGGESTION_ALREADY_REVIEWED,
-            "该建议已完成人工反馈，不可重复反馈",
+            "该建议已完成人工反馈或已过期，不可重复反馈",
             details={
                 "suggestion_id": str(suggestion.id),
                 "review_status": suggestion.review_status,

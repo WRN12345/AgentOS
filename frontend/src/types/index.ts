@@ -118,6 +118,57 @@ export interface MemberBrief {
   display_name: string;
 }
 
+/* ---------- 记忆模块：核心记忆（设计文档第 8 节，M4.3） ---------- */
+
+/** 核心记忆条目；proposed_by 为 null 表示 Agent 提议（负责人确认后生效）。 */
+export interface CoreMemoryEntry {
+  id: string;
+  scope: string;
+  content: string;
+  status: "active" | "deprecated";
+  proposed_by: MemberBrief | null;
+  confirmed_by: MemberBrief;
+  effective_at: string;
+  created_at: string;
+}
+
+/** GET /memory/core-entries 响应：条目列表 + 容量占用。 */
+export interface CoreMemoryEntryList {
+  entries: CoreMemoryEntry[];
+  used_chars: number;
+  budget_chars: number;
+}
+
+/* ---------- 记忆模块：知识库问答（设计文档第 11 节②，M7.3） ---------- */
+
+/** 依据/线索：来源定位 + 片段内容。 */
+export interface QaSource {
+  source_type: string;
+  source_id: string;
+  title: string;
+  snippet: string;
+  /** history 来源的实际种类：work_item（可跳工作项）/ agent_run（拆解记录，不可跳） */
+  history_kind?: "work_item" | "agent_run" | null;
+}
+
+/** POST /memory/qa 响应：answered 附依据；refused 附最接近的线索（16.13）。 */
+export interface QaResponse {
+  status: "answered" | "refused";
+  answer: string | null;
+  sources: QaSource[];
+  clues: QaSource[];
+}
+
+/** GET /memory/qa/history 条目：本人问答历史（2026-08-24 决策修订）。 */
+export interface QaHistoryItem {
+  id: string;
+  question: string;
+  status: "answered" | "refused";
+  answer: string | null;
+  sources: QaSource[];
+  created_at: string;
+}
+
 /** 协作请求状态（8.2 节）。 */
 export type CollaborationStatus =
   | "REQUESTED"
@@ -318,9 +369,17 @@ export interface StoredFile {
   storage_backend: string;
   uploaded_by: string;
   work_item_id: string | null;
+  /** 版本链（设计文档第 3 节）：同名上传递增；superseded_by 非空表示已被新版本取代。 */
+  version: number;
+  superseded_by: string | null;
+  /** 索引状态（设计文档第 6 节）。 */
+  index_status: IndexStatus;
   created_at: string;
   updated_at: string;
 }
+
+/** 索引状态机（设计文档第 6 节）。 */
+export type IndexStatus = "pending" | "indexing" | "indexed" | "failed" | "unindexed";
 
 export type DeliverableType = "git_link" | "text" | "file";
 
@@ -404,7 +463,12 @@ export interface RealtimeEvent {
 
 /* ---------- 阶段 5：多 Agent 辅助 ---------- */
 
-export type AgentSuggestionReviewStatus = "pending" | "accepted" | "ignored";
+export type AgentSuggestionReviewStatus =
+  | "pending"
+  | "accepted"
+  | "ignored"
+  /** 核心记忆提议挂起超 7 天自动过期（16.6，M4.5）：终态，不可再确认 */
+  | "expired";
 
 /**
  * Agent 建议（GET /agent-suggestions，12.5 节，T5.7）。

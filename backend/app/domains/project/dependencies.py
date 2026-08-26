@@ -1,6 +1,7 @@
 """项目成员依赖项：把当前登录用户解析为项目成员，供权限策略使用。
 
 - get_current_member：从 X-Project-Id 请求头取出项目上下文，校验成员身份；
+- get_member_or_readonly_admin：在职成员，或全局 admin 只读查看（记忆只读接口）；
 - get_current_admin：校验 users.is_admin（全局角色，不绑定项目）；
 - get_current_leader：仅项目负责人；
 - get_current_leader_or_admin：负责人或全局管理员（只读管理视图，如审计查询）。
@@ -53,6 +54,25 @@ async def get_current_member(
     if member is None or not member.is_active:
         raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
     return member
+
+
+async def get_member_or_readonly_admin(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> tuple[ProjectMember | None, bool]:
+    """在职成员或只读管理员：记忆只读接口的统一鉴权（成员可见 + admin 监督查看）。
+
+    返回 (member, is_admin)：在职成员原样返回；非成员/已禁用且非 admin → 403
+    （header 越权，多项目规约）；全局 admin 无成员身份，member 为 None、
+    is_admin 为 True，仅只读查看。
+    """
+    member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
+    if member is not None and member.is_active:
+        return member, bool(current_user.is_admin)
+    if not current_user.is_admin:
+        raise ApiException(403, ErrorCodes.NOT_PROJECT_MEMBER, "当前账号不是该项目成员或已被禁用")
+    return None, True
 
 
 async def get_current_admin(

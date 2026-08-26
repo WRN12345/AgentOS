@@ -12,7 +12,10 @@ export const SUGGESTION_TYPE_META: Record<
   review: { label: "初审清单", className: "bg-amber-100 text-amber-700" },
   summary: { label: "进展摘要", className: "bg-green-100 text-green-700" },
   pipeline: { label: "需求拆解方案", className: "bg-indigo-100 text-indigo-700" },
-  dev_doc_review: { label: "文档初审", className: "bg-teal-100 text-teal-700" },
+  dev_doc_review: { label: "文档初审", className: "bg-teal-100 text-teal-700" },  memory_proposal: {
+    label: "核心记忆提议",
+    className: "bg-orange-100 text-orange-700",
+  },
   echo: { label: "链路自检", className: "bg-gray-100 text-gray-700" },
 };
 
@@ -28,6 +31,16 @@ export const REVIEW_STATUS_META: Record<
   pending: { label: "待反馈", className: "bg-gray-100 text-gray-700" },
   accepted: { label: "已采纳", className: "bg-green-100 text-green-700" },
   ignored: { label: "已忽略", className: "bg-gray-200 text-gray-500" },
+  // 核心记忆提议挂起超 7 天自动过期（16.6）：终态，不可再确认
+  expired: { label: "已过期", className: "bg-gray-200 text-gray-500" },
+};
+
+/** 核心记忆提议动作（M4.4/M4.6，设计文档第 8 节）。 */
+export const MEMORY_PROPOSAL_ACTION_LABELS: Record<string, string> = {
+  create: "新增条目",
+  update: "修改条目",
+  deprecate: "作废条目",
+  consolidate: "整合精简",
 };
 
 /** agent_runs.status 展示。 */
@@ -51,6 +64,7 @@ export const AGENT_TYPE_LABELS: Record<string, string> = {
   summary_agent: "进展摘要",
   requirement_pipeline: "需求拆解流水线",
   dev_doc_review: "文档初审",
+  experience_summary: "经验总结",
   echo: "链路自检",
 };
 

@@ -1,24 +1,50 @@
+# Environment variables and local secrets
 .env
 .env.*
 !.env.example
 
+# Local agent and tool state
 .superpowers/
+.agent/
+.docker-cli-plugins/
+
+# Python virtual environments, caches, and build output
 .venv/
+.venv-test/
+venv/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
+# Frontend dependencies, caches, and build output
 node_modules/
 dist/
 coverage/
+.vite/
+*.tsbuildinfo
 
+# Runtime data
 data/
 logs/
 backups/
-.docker-cli-plugins/
 
+# Generated files
 *.pyc
 *.pyo
 *.log
+*.pid
+*.tmp
 
+# Editor and operating system files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

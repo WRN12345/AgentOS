@@ -2,7 +2,8 @@ name: agentos
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector 官方镜像（基于 postgres:16），提供 vector 扩展供记忆模块语义检索使用
+    image: pgvector/pgvector:pg16
     container_name: agentos-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agentos}
@@ -57,6 +58,11 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
       AGENT_RUN_MAX_RETRIES: ${AGENT_RUN_MAX_RETRIES:-3}
       AGENT_RUN_RETRY_BASE_SECONDS: ${AGENT_RUN_RETRY_BASE_SECONDS:-30}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
@@ -67,8 +73,8 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       STORAGE_ROOT: ${STORAGE_ROOT:-/app/data/uploads}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-20971520}
-      UPLOAD_ALLOWED_EXTENSIONS: ${UPLOAD_ALLOWED_EXTENSIONS:-.txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip}
-      UPLOAD_ALLOWED_MIME_TYPES: ${UPLOAD_ALLOWED_MIME_TYPES:-text/plain,text/markdown,text/csv,application/json,application/pdf,image/png,image/jpeg,application/zip}
+      UPLOAD_ALLOWED_EXTENSIONS: ${UPLOAD_ALLOWED_EXTENSIONS:-.txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip,.docx}
+      UPLOAD_ALLOWED_MIME_TYPES: ${UPLOAD_ALLOWED_MIME_TYPES:-text/plain,text/markdown,text/csv,application/json,application/pdf,image/png,image/jpeg,application/zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document}
     ports:
       - "8000:8000"
     volumes:
@@ -109,6 +115,11 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
       AGENT_RUN_MAX_RETRIES: ${AGENT_RUN_MAX_RETRIES:-3}
       AGENT_RUN_RETRY_BASE_SECONDS: ${AGENT_RUN_RETRY_BASE_SECONDS:-30}
     volumes:
@@ -152,6 +163,11 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     volumes:
       - ./data/logs:/app/data/logs
     extra_hosts:

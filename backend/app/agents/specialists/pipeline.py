@@ -7,6 +7,9 @@
    collaboration_points[]）；
 3. 分配（复用 assignment_advisor 的成员能力/负载只读数据查询），为每个拆解项
    产出 recommended_assignee + candidates + 理由。
+4. 记忆评估（M6.7，记忆模块设计文档第 8 节）：判断本次过程是否有值得沉淀的
+   约定/决策/教训，产出 memory_proposal 走负责人确认通道（不直接生效）；
+   容量快满时优先整合精简提议。
 
 指定人选处理（§3）：需求文本中点名的人选按 display_name/username 匹配
 ProjectMember（排除 role=admin 与 is_active=false），作为 hard constraint
@@ -20,13 +23,28 @@ validate_output 产生 json_parse / schema_validate 诊断（与 build_output
 """
 
 import json
+import logging
 import re
+import uuid
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.models import AgentRun
 from app.agents.prompts import pipeline as pipeline_prompts
 from app.agents.specialists.common import build_output, call_model_json, context_project_id
 from app.agents.tools import TOOL_REGISTRY
+from app.core.errors import ApiException
+from app.domains.memory.context import (
+    collect_retrieval_block,
+    collect_team_memory_block,
+    safe_core_memory_block,
+)
+from app.domains.memory.core_memory import budget_nearly_full, list_entries
+from app.domains.memory.proposals import create_memory_proposal
 from app.infrastructure.database.engine import async_session_factory
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
     from app.agents.graphs.base import AgentGraphState
@@ -113,6 +131,43 @@ def _stage_parse_error(raw: str) -> str:
     return "输出不是 JSON 对象" if not isinstance(payload, dict) else ""
 
 
+async def _emit_memory_proposal(
+    session: AsyncSession, state: "AgentGraphState", memory_stage: dict[str, Any]
+) -> None:
+    """记忆评估段的产出落为 memory_proposal（M4.4 通道，确认前核心记忆不变）。
+
+    模型输出不可信：动作非 create/consolidate、entry_ids 非法或负载校验失败
+    只记日志跳过，绝不影响主建议（M6.3 护栏：提议不产生业务状态写入）。
+    """
+    action = memory_stage.get("action")
+    if action not in ("create", "consolidate"):
+        return  # none 或其他：无提议
+    entry_ids: list[uuid.UUID] | None = None
+    if action == "consolidate":
+        try:
+            entry_ids = [uuid.UUID(str(i)) for i in (memory_stage.get("entry_ids") or [])]
+        except (ValueError, TypeError):
+            logger.info("memory proposal dropped: invalid entry_ids", exc_info=True)
+            return
+    try:
+        run = await session.get(AgentRun, uuid.UUID(str(state["run_id"])))
+    except (ValueError, TypeError):
+        return
+    if run is None:
+        return
+    try:
+        await create_memory_proposal(
+            session,
+            run=run,
+            action=action,
+            content=memory_stage.get("content") or None,
+            entry_ids=entry_ids,
+            reason=memory_stage.get("reason") or None,
+        )
+    except ApiException:
+        logger.info("memory proposal dropped: invalid payload", exc_info=True)
+
+
 async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     """顺序执行 需求分析 → 拆解 → 分配 三段，合并为一条 pipeline 建议。"""
     project_id = context_project_id(state)
@@ -132,10 +187,24 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         assignable = await TOOL_REGISTRY["list_assignable_members"].func(
             session, project_id=project_id
         )
+        # M6.4：核心记忆全量常驻注入（第 11 节）；读取失败降级为空（16.5，M6.6 标注）
+        core_memory, core_ok = await safe_core_memory_block(
+            session, project_id=project_id
+        )
+        # M6.5：按需检索（文档+历史 ≤8 段/3000 字符）；失败降级为空（16.5）
+        requirement = state.get("prompt", "")
+        reference, retrieval_ok = await collect_retrieval_block(
+            session, project_id=project_id, query=requirement
+        )
+        # M6.5：分配环节的团队事实记录（完成统计 + 成员档案摘录）
+        team_memory, team_ok = await collect_team_memory_block(
+            session, project_id=project_id, query=requirement
+        )
+        # 任一记忆读取失败即降级标注（M6.6 消费此标记）
+        memory_ok = core_ok and retrieval_ok and team_ok
 
     context = state.get("context", {})
     project_name = (context.get("project") or {}).get("name") or ""
-    requirement = state.get("prompt", "")
     specified, unresolved = resolve_specified_assignees(requirement, assignable)
 
     # 1. 需求分析：目标/约束/交付物/验收标准 + involved_aspects（限词表取值）
@@ -145,6 +214,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             project_name=project_name,
             requirement=requirement,
             capability_tags=capability_tags,
+            core_memory=core_memory,
         ),
     )
     analysis = _load_stage(raw_analysis)
@@ -160,6 +230,8 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             analysis=analysis,
             open_work_items=open_work_items,
             workload=workload,
+            core_memory=core_memory,
+            reference=reference,
         ),
     )
     breakdown_stage = _load_stage(raw_breakdown)
@@ -176,12 +248,39 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             capabilities=capabilities,
             workload=workload,
             specified=specified,
+            core_memory=core_memory,
+            team_memory=team_memory,
         ),
     )
     assign_stage = _load_stage(raw_assign)
     if assign_stage is None:
         return raw_assign
     assignments = assign_stage.get("assignments") or []
+
+    # 4. 记忆评估（M6.7，第 8 节）：值得记住 → memory_proposal（确认后才生效，
+    # 核心记忆不变）；容量快满（M4.6 判断）时提示模型优先整合精简
+    if project_id is not None:
+        async with async_session_factory() as session:
+            entries = await list_entries(session, project_id=project_id)
+            active_entries = [e for e in entries if e.status == "active"]
+            nearly_full, used_chars, budget_chars = await budget_nearly_full(
+                session, project_id=project_id
+            )
+            raw_memory = await _call_stage_json(
+                system=pipeline_prompts.MEMORY_SYSTEM_PROMPT,
+                user_prompt=pipeline_prompts.render_memory_prompt(
+                    project_name=project_name,
+                    requirement=requirement,
+                    breakdown_summary=str(breakdown_stage.get("summary") or ""),
+                    core_entries=[{"id": str(e.id), "content": e.content} for e in active_entries],
+                    used_chars=used_chars,
+                    budget_chars=budget_chars,
+                    nearly_full=nearly_full,
+                ),
+            )
+            memory_stage = _load_stage(raw_memory)
+            if memory_stage is not None:
+                await _emit_memory_proposal(session, state, memory_stage)
 
     # 合并：assignments 与拆解项按下标一一对应；user_specified 由系统侧按
     # 点名解析结果权威标记，不信任模型自报值（Agent 不得更改用户指定）。
@@ -213,6 +312,11 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         )
         if isinstance(risk, str)
     ]
+    # 16.5 降级标注（M6.6）：任一记忆读取失败（embedding/检索/核心记忆）即退化为
+    # 无记忆模式，结果显式标注"本次未参考记忆"，拆解/分配主流程不受影响
+    memory_status = "ok" if memory_ok else "degraded"
+    if not memory_ok:
+        stage_risks.append("本次未参考记忆（记忆/检索服务不可用，已降级为无记忆模式）")
     content = {
         "summary": breakdown_stage.get("summary") or "需求拆解流水线分析完成",
         "rationale": breakdown_stage.get("rationale") or "按需求分析 → 拆解 → 分配顺序编排产出",
@@ -226,6 +330,8 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         # 未匹配点名由系统侧解析注入，不信任模型自报值
         "unresolved_mentions": unresolved,
         "risks": stage_risks,
+        # 记忆参考状态（16.5）：ok=已参考记忆；degraded=本次未参考记忆
+        "memory_status": memory_status,
     }
     member_ids = sorted(
         {row["member_id"] for row in capabilities}

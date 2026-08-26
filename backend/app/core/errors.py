@@ -63,6 +63,10 @@ class ErrorCodes:
     # 文件上传（第 14 章）：超过配置大小上限 / 扩展名或 MIME 不在白名单
     FILE_TOO_LARGE = "FILE_TOO_LARGE"
     FILE_TYPE_NOT_ALLOWED = "FILE_TYPE_NOT_ALLOWED"
+    # 同名上传版本链并发冲突（ux_stored_files_current_name 唯一约束兜底，设计文档第 3 节）
+    FILE_VERSION_CONFLICT = "FILE_VERSION_CONFLICT"
+    # 索引状态机非法迁移（设计文档第 6 节）
+    FILE_INDEX_INVALID_TRANSITION = "FILE_INDEX_INVALID_TRANSITION"
 
     # 提交审核前须已存在交付物（7.5 节，T4.4）
     DELIVERABLE_REQUIRED = "DELIVERABLE_REQUIRED"
@@ -78,6 +82,10 @@ class ErrorCodes:
     DEV_DOC_REQUIRED = "DEV_DOC_REQUIRED"
     DEV_DOC_VERSION_CONFLICT = "DEV_DOC_VERSION_CONFLICT"
     DEV_DOC_INVALID_TRANSITION = "DEV_DOC_INVALID_TRANSITION"
+
+    # 核心记忆（记忆模块设计文档第 8 节）：容量预算超限 / 非法状态迁移
+    CORE_MEMORY_BUDGET_EXCEEDED = "CORE_MEMORY_BUDGET_EXCEEDED"
+    CORE_MEMORY_INVALID_TRANSITION = "CORE_MEMORY_INVALID_TRANSITION"
 
 
 class ApiException(Exception):

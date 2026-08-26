@@ -8,9 +8,11 @@ Worker 与 API 共用 domains/ 与 infrastructure/ 的同一套领域模型和�
 """
 
 import asyncio
+import time
 
 import redis.asyncio as redis
 
+from app.core.config import settings
 from app.core.logging import setup_logging
 
 # 导入全部领域模型，确保 SQLAlchemy 跨领域外键（如 notifications.recipient_id
@@ -20,6 +22,7 @@ from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401
 from app.domains.deadlines import models as _deadline_models  # noqa: F401
 from app.domains.identity import models as _identity_models  # noqa: F401
+from app.domains.memory import models as _memory_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401
 from app.domains.project import models as _project_models  # noqa: F401
 from app.domains.transfers import models as _transfer_models  # noqa: F401
@@ -29,6 +32,9 @@ from app.infrastructure.queue.queue import dequeue, promote_due_delayed
 from app.workers.agent_run import execute_agent_run
 from app.workers.due_scan import scan_due_reminders
 from app.workers.heartbeat import heartbeat
+from app.workers.memory_index import execute_memory_index, recover_stale_file_indexes
+from app.workers.memory_summary import execute_memory_summary
+from app.workers.proposal_expire import expire_memory_proposals
 from app.workers.risk_scan import run_risk_scan
 
 logger = setup_logging("worker")
@@ -51,6 +57,15 @@ async def handle_task(task: dict, redis_client: redis.Redis) -> None:
     elif task_type == "agent.risk_scan":
         # Workflow Risk Agent 周期风险扫描（T5.5）：去重后投递 agent.run，不触碰业务状态
         await run_risk_scan(redis_client)
+    elif task_type == "memory.index":
+        # 记忆索引任务（M1.8）：切块→embedding→memory_chunks，失败按退避重入队
+        await execute_memory_index(task.get("payload", {}), redis_client)
+    elif task_type == "memory.proposal_expire":
+        # 核心记忆提议过期扫描（M4.5，16.6）：挂起超 7 天标记 expired
+        await expire_memory_proposals()
+    elif task_type == "memory.summary":
+        # 经验总结任务（M5.3，16.9）：模型不可用静默跳过，失败只记日志不重试
+        await execute_memory_summary(task.get("payload", {}))
     else:
         logger.warning("unknown task type, skipped: id=%s type=%s", task.get("id"), task_type)
 
@@ -75,9 +90,17 @@ async def safe_handle_task(task: dict, redis_client: redis.Redis) -> None:
 async def run() -> None:
     logger.info("worker started, waiting for tasks")
     redis_client = create_redis_client()
+    last_file_index_recovery = 0.0
     try:
         while True:
             await heartbeat(redis_client, "worker")
+            now = time.monotonic()
+            if now - last_file_index_recovery >= settings.file_index_recovery_interval_seconds:
+                try:
+                    await recover_stale_file_indexes(redis_client)
+                except Exception:  # noqa: BLE001 - 恢复扫描失败不能停止任务消费
+                    logger.exception("stale file index recovery failed")
+                last_file_index_recovery = now
             # 先把到点的延迟任务（T5.6 退避重试）搬回即时队列
             await promote_due_delayed(redis_client)
             task = await dequeue(redis_client, timeout=5)

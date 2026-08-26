@@ -19,6 +19,7 @@ from app.domains.deadlines.router import router as deadlines_router
 from app.domains.deliverables.router import router as deliverables_router
 from app.domains.dev_docs.router import router as dev_docs_router
 from app.domains.files.router import router as files_router
+from app.domains.memory.router import router as memory_router
 from app.domains.identity.dependencies import get_current_user
 from app.domains.identity.models import User
 from app.domains.identity.router import router as auth_router
@@ -46,6 +47,7 @@ router.include_router(collaboration_router)
 router.include_router(transfers_router)
 router.include_router(deadlines_router)
 router.include_router(files_router)
+router.include_router(memory_router)
 router.include_router(deliverables_router)
 router.include_router(dev_docs_router)
 router.include_router(reviews_router)
