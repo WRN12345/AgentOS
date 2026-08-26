@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+# hide_parameters：SQL 语句参数可能包含问答内容、档案等私人数据，
+# 避免异常/日志输出时随语句文本泄露
+engine = create_async_engine(
+    settings.database_url, pool_pre_ping=True, hide_parameters=True
+)
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 

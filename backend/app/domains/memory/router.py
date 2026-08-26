@@ -222,11 +222,15 @@ async def ask_knowledge_base(
         ) from exc
 
     # 问答历史按人落库（2026-08-24 修订，仅本人可见）；best-effort：
-    # 历史写入失败不影响问答本身
+    # 历史写入失败不影响问答本身。INSERT 参数含问题/答案/依据片段，
+    # 异常文本会带出这些私人内容，因此只记异常类型，不记堆栈与参数
     try:
         await save_qa_history(session, member=member, query=body.question, result=result)
-    except Exception:  # noqa: BLE001
-        logger.warning("qa history save failed, answer unaffected", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        logger.warning(
+            "qa history save failed, answer unaffected: %s", type(exc).__name__
+        )
 
     return MemoryQaResponse(
         status=result.status,
