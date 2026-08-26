@@ -8,8 +8,11 @@
 5) 同一事务写入 stored_files 与审计事件。
 落库失败时补偿删除已落盘文件（17.2 节）。
 
-下载权限（16 节）：项目负责人可下载全部文件；其他成员须为上传人本人，
-或与文件关联工作项有关（主执行人、协作者、协作请求任一方）；其余 403。
+下载权限（16 节 + 第 12 节）：项目负责人可下载全部文件；未关联工作项的
+知识库文档项目内在职成员均可下载——与文件列表可见性（第 12 节全员可见）
+和问答检索可见性（M7：成员可检索全部项目文档）一致，保证问答"查看原文"
+链路可用；关联工作项的交付文件保持收紧，仅上传人或与工作项有关的成员
+可下（16 节：无关成员不能查看交付文件正文）。
 业务层只依赖 StorageProvider 接口，不感知文件系统路径（14 章）。
 """
 
@@ -369,14 +372,15 @@ async def is_work_item_related(
 async def can_download_file(
     session: AsyncSession, actor: ProjectMember, stored: StoredFile
 ) -> bool:
-    """下载权限（16 节）：负责人、管理员（只读）全部可下；上传人本人可下；
-    关联工作项的文件须与工作项有关；未关联文件仅负责人/管理员与上传人。"""
+    """下载权限（16 节 + 第 12 节）：负责人、管理员（只读）全部可下；上传人本人可下；
+    未关联工作项的知识库文档项目内全员可下（与检索/问答可见性一致，M7.5 原文链路）；
+    关联工作项的交付文件仅上传人或与工作项有关的成员可下。"""
     if actor.role in (ROLE_LEADER):
         return True
     if stored.uploaded_by == actor.id:
         return True
     if stored.work_item_id is None:
-        return False
+        return True
     return await is_work_item_related(session, stored.work_item_id, actor.id)
 
 
