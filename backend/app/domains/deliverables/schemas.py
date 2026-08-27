@@ -32,6 +32,9 @@ _INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 def _normalize_git_delivery_url(value: str) -> str:
     """校验受支持的 Git 交付 URL，并返回规范地址。"""
     candidate = value.strip()
+    # 拒绝任何 ASCII 控制字符（含 NUL、制表符、换行）：
+    if any(ord(ch) <= 0x1F or ord(ch) == 0x7F for ch in candidate):
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
     try:
         parsed = urlsplit(candidate)
         port = parsed.port
@@ -41,11 +44,14 @@ def _normalize_git_delivery_url(value: str) -> str:
     if (
         parsed.scheme.lower() != "https"
         or parsed.hostname is None
+        # 原始 netloc 必须精确等于主机名：拒绝空端口（github.com:）、用户信息、显式端口
+        or parsed.netloc.lower() != parsed.hostname.lower()
         or port is not None
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
+        # 拒绝任何 ? 或 #（含空查询/锚点 .../pull/42?、.../pull/42#），与前端同一公开规则
+        or "?" in candidate
+        or "#" in candidate
     ):
         raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
 

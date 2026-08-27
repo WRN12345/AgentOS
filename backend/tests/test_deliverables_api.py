@@ -389,6 +389,14 @@ async def test_git_link_rejects_unsupported_urls_without_creating_versions(
         "https://gitlab.com/group/repo/-/merge_requests/42/diffs",
         "https://gitlab.com/group//repo/-/merge_requests/42",
         "https://gitlab.com/repo/-/commit/abcdef1",
+        # NUL/控制字符：必须 422，不能让 PG text 列写入触发 500（spec「非法链接统一返回 422」）
+        "https://github.com/org/re\u0000po/pull/42",
+        "https://git\thub.com/org/repo/pull/42",
+        # 原始 authority 必须精确等于受支持主机：空端口、含控制字符的主机均拒绝，与前端同一规则
+        "https://github.com:/org/repo/pull/42",
+        # 空 ? / # 分隔符：前端正则拒绝，后端须同规则，避免规则漂移
+        "https://github.com/org/repo/pull/42?",
+        "https://github.com/org/repo/pull/42#",
         "javascript:alert(1)",
         "not-a-url",
     )
