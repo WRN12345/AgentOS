@@ -6,6 +6,7 @@
 # Local agent and tool state
 .superpowers/
 .agent/
+.agents/
 .docker-cli-plugins/
 
 # Python virtual environments, caches, and build output
@@ -17,6 +18,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+build/
 .coverage
 .coverage.*
 coverage.xml
