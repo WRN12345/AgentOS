@@ -54,6 +54,29 @@ async def idempotent_replay_handler(request: Request, exc: IdempotentReplay) -> 
     )
 
 
+def _ensure_utf8_encodable(value: object) -> object:
+    """递归净化回显内容中的孤立 Unicode surrogate。
+
+    Pydantic 会把含 lone surrogate（U+D800–U+DFFF）的原始输入放进错误详情的 input 字段，
+    而 JSONResponse 以 ensure_ascii=False 编码响应体时无法编码该字符抛 UnicodeEncodeError，
+    导致连接中断而非统一 422。不可编码字符以 U+FFFD 替换。
+    """
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return "".join(
+                "\ufffd" if 0xD800 <= ord(character) <= 0xDFFF else character
+                for character in value
+            )
+        return value
+    if isinstance(value, list):
+        return [_ensure_utf8_encodable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _ensure_utf8_encodable(item) for key, item in value.items()}
+    return value
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
@@ -63,7 +86,7 @@ async def validation_exception_handler(
         content=_error_body(
             ErrorCodes.VALIDATION_ERROR,
             "请求参数校验失败",
-            {"errors": jsonable_encoder(exc.errors())},
+            {"errors": _ensure_utf8_encodable(jsonable_encoder(exc.errors()))},
         ),
     )
 

@@ -35,6 +35,12 @@ def _normalize_git_delivery_url(value: str) -> str:
     # 拒绝任何 ASCII 控制字符（含 NUL、制表符、换行）：
     if any(ord(ch) <= 0x1F or ord(ch) == 0x7F for ch in candidate):
         raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
+    # Python str 可包含无法用 UTF-8 表示的孤立 surrogate。必须在进入持久化层前拒绝，
+    # 否则 asyncpg 写 PostgreSQL 时会抛 DataError，并把非法请求升级成 500。
+    try:
+        candidate.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("请输入受支持的 PR、MR 或 Commit 链接") from exc
     try:
         parsed = urlsplit(candidate)
         port = parsed.port

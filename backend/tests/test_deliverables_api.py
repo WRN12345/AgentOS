@@ -12,12 +12,13 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from app.domains.deliverables.schemas import _normalize_git_delivery_url
 from app.domains.files.models import StoredFile
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import get_storage_provider
-from app.main import app
+from app.main import _ensure_utf8_encodable, app
 from tests.conftest import add_member, auth_headers
 
 LEADER_PW = "Leader123!"
@@ -26,6 +27,22 @@ BOB_PW = "Bob123!"
 DAVE_PW = "Dave123!"
 
 CONTENT = b"deliverable file content\n"
+
+
+@pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"])
+def test_git_link_normalizer_rejects_lone_surrogates(surrogate: str) -> None:
+    """持久化前的最后一道 URL 校验不依赖 Pydantic 是否拒绝 lone surrogate。"""
+    with pytest.raises(ValueError, match="请输入受支持的 PR、MR 或 Commit 链接"):
+        _normalize_git_delivery_url(
+            f"https://github.com/org/repo{surrogate}/pull/42"
+        )
+
+
+def test_validation_error_sanitizer_replaces_lone_surrogates() -> None:
+    """校验错误回显不能因原始非法输入再次触发 UTF-8 编码异常。"""
+    assert _ensure_utf8_encodable({"input": "before\ud800after\udfff"}) == {
+        "input": "before\ufffdafter\ufffd"
+    }
 
 
 @pytest.fixture
@@ -408,6 +425,30 @@ async def test_git_link_rejects_unsupported_urls_without_creating_versions(
             {"type": "git_link", "content": content},
         )
         assert response.status_code == 422, content
+
+    # 孤立 Unicode surrogate（U+D800–U+DFFF）：JSON \uXXXX 转义经 json.loads 还原为 lone surrogate。
+    # 放在 owner/repository 段时旧路径正则会匹配，随后 asyncpg 写 PG 因无法编码 UTF-8 抛
+    # DataError（非 IntegrityError）并返回 500；放在 PR 编号段时虽会被正则拒绝，但 422 的错误
+    # 详情会回显原始输入，响应序列化也必须能处理。httpx 的 json= 无法发送这种值，故使用原始 JSON。
+    for escaped_url in (
+        "https://github.com/org/repo\\ud800/pull/42",
+        "https://github.com/\\udfff/repo/pull/42",
+        "https://github.com/org/repo/pull/\\ud80042",
+        "https://github.com/org/repo/pull/42\\udfff",
+    ):
+        response = await client.post(
+            f"/api/v1/work-items/{item_id}/deliverables",
+            content=(
+                '{"type": "git_link", "content": '
+                f'"{escaped_url}"'
+                "}"
+            ).encode("ascii"),
+            headers={
+                **ctx["alice_headers"],  # type: ignore[arg-type]
+                "content-type": "application/json",
+            },
+        )
+        assert response.status_code == 422, escaped_url
 
     history = await client.get(
         f"/api/v1/work-items/{item_id}/deliverables",
