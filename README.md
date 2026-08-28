@@ -153,19 +153,22 @@ npm run build
 backend/    FastAPI 模块化单体、领域服务、Agent、Worker、Scheduler 与 Alembic 迁移
 frontend/   React 应用，src/features 按业务功能组织，src/components/ui 为 shadcn/ui 组件
 deploy/     备份与恢复脚本
-docs/       总体设计、阶段指南、发布说明、安全与多项目测试文档
+docs/       总体设计、架构指南、专项设计、发布说明与质量基线
 data/       PostgreSQL、Redis、上传文件、日志和备份等运行时数据（勿提交）
 ```
 
 ## 文档索引
 
 - [总体设计](docs/2026-07-26-agentos-workflow-platform-design.md)
+- [架构指南](docs/architecture-guide.md)
 - [发布、部署与迁移指南](docs/release-guide.md)
-- [多项目测试接缝](docs/2026-08-11-multiproject-testing-seams.md)
+- [多项目测试接缝与设计决策](docs/2026-08-11-multiproject-testing-seams.md)
 - [AI 需求拆解流水线](docs/2026-07-30-agent-requirement-pipeline-design.md)
 - [开发文档前置](docs/2026-07-30-dev-doc-gate-design.md)
-- [阶段开发者指南](docs/phase-1-developer-guide.md)（同目录包含 phase 2～6）
-- [任务拆分索引](docs/tasks/README.md)
+- [记忆模块设计](docs/2026-08-16-memory-module-design.md)
+- [MVP 质量基线（核对/性能/恢复/安全）](docs/quality-baseline-2026-07-29.md)
+- [Agent 工作约定](docs/agents/domain.md)
+- [Issue tracker 约定](docs/agents/issue-tracker.md)
 - [备份与恢复脚本说明](deploy/scripts/README.md)
 
 ## 当前限制
