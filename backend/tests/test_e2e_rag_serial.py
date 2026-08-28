@@ -260,7 +260,11 @@ async def test_rag_serial_end_to_end(
 
     # ---- 步骤 9：RAG 工程师提交交付（Git 链接 + 评估结果文本 + 说明文件）----
     git_deliverable = await create_deliverable(
-        client, rh, item_id, type="git_link", content="https://git.example.com/team/rag.git"
+        client,
+        rh,
+        item_id,
+        type="git_link",
+        content="https://github.com/team/rag/pull/42",
     )
     eval_deliverable = await create_deliverable(
         client, rh, item_id, type="text", content="评估结果：测试集准确率 87%"

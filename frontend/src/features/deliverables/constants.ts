@@ -25,6 +25,93 @@ export const REVIEW_DECISION_META: Record<
   reject: { label: "拒绝", className: "bg-red-100 text-red-700" },
 };
 
+/**
+ * Git 链接交付接受 GitHub/Gitee 的 PR 或 Commit，以及 GitLab 的 MR 或 Commit。
+ * 这里只做格式前置校验，不联网检查远端对象是否存在。
+ */
+export function normalizeGitDeliveryUrl(value: string): string | null {
+  try {
+    const candidate = value.trim();
+    const authorityMatch = candidate.match(
+      /^https:\/\/(github\.com|gitee\.com|gitlab\.com)(\/[^?#]*)$/i,
+    );
+    if (!authorityMatch) return null;
+    const url = new URL(candidate);
+    if (
+      url.protocol !== "https:" ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      return null;
+    }
+
+    const rawSegments = authorityMatch[2].slice(1).split("/");
+    if (rawSegments[rawSegments.length - 1] === "") rawSegments.pop();
+    if (
+      rawSegments.length === 0 ||
+      rawSegments.some((segment) => segment === "") ||
+      /%(?![0-9a-f]{2})/i.test(authorityMatch[2])
+    ) {
+      return null;
+    }
+    const decodedSegments = rawSegments.map((segment) =>
+      decodeURIComponent(segment),
+    );
+    if (
+      decodedSegments.some(
+        (segment) =>
+          segment === "." ||
+          segment === ".." ||
+          segment.includes("/") ||
+          segment.includes("\\"),
+      )
+    ) {
+      return null;
+    }
+
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "github.com" || hostname === "gitee.com") {
+      const reviewSegment = hostname === "github.com" ? "pull" : "pulls";
+      const reviewMatch = url.pathname.match(
+        new RegExp(`^/([^/]+)/([^/]+)/${reviewSegment}/([1-9]\\d*)/?$`),
+      );
+      if (reviewMatch) {
+        const [, owner, repository, reviewNumber] = reviewMatch;
+        return `https://${hostname}/${owner}/${repository}/${reviewSegment}/${reviewNumber}`;
+      }
+      const commitMatch = url.pathname.match(
+        /^\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]{7,40})\/?$/i,
+      );
+      if (commitMatch) {
+        const [, owner, repository, commitSha] = commitMatch;
+        return `https://${hostname}/${owner}/${repository}/commit/${commitSha.toLowerCase()}`;
+      }
+      return null;
+    }
+
+    if (hostname === "gitlab.com") {
+      const reviewMatch = url.pathname.match(
+        /^\/(.+)\/-\/merge_requests\/([1-9]\d*)\/?$/,
+      );
+      if (reviewMatch && reviewMatch[1].split("/").length >= 2) {
+        return `https://gitlab.com/${reviewMatch[1]}/-/merge_requests/${reviewMatch[2]}`;
+      }
+      const commitMatch = url.pathname.match(
+        /^\/(.+)\/-\/commit\/([0-9a-f]{7,40})\/?$/i,
+      );
+      if (commitMatch && commitMatch[1].split("/").length >= 2) {
+        return `https://gitlab.com/${commitMatch[1]}/-/commit/${commitMatch[2].toLowerCase()}`;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------- 文件上传前置校验（与后端白名单一致，14 章） ---------- */
 
 /** 上传大小上限：20MB（与后端配置一致）。 */

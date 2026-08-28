@@ -12,12 +12,13 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from app.domains.deliverables.schemas import _normalize_git_delivery_url
 from app.domains.files.models import StoredFile
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import get_storage_provider
-from app.main import app
+from app.main import _ensure_utf8_encodable, app
 from tests.conftest import add_member, auth_headers
 
 LEADER_PW = "Leader123!"
@@ -26,6 +27,22 @@ BOB_PW = "Bob123!"
 DAVE_PW = "Dave123!"
 
 CONTENT = b"deliverable file content\n"
+
+
+@pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"])
+def test_git_link_normalizer_rejects_lone_surrogates(surrogate: str) -> None:
+    """持久化前的最后一道 URL 校验不依赖 Pydantic 是否拒绝 lone surrogate。"""
+    with pytest.raises(ValueError, match="请输入受支持的 PR、MR 或 Commit 链接"):
+        _normalize_git_delivery_url(
+            f"https://github.com/org/repo{surrogate}/pull/42"
+        )
+
+
+def test_validation_error_sanitizer_replaces_lone_surrogates() -> None:
+    """校验错误回显不能因原始非法输入再次触发 UTF-8 编码异常。"""
+    assert _ensure_utf8_encodable(
+        {"input\ud800": {"nested\udfff": "before\ud800after\udfff"}}
+    ) == {"input\ufffd": {"nested\ufffd": "before\ufffdafter\ufffd"}}
 
 
 @pytest.fixture
@@ -124,7 +141,7 @@ async def test_three_submissions_create_versions_1_2_3_and_history(
 
     for payload in (
         {"type": "text", "content": "第一版说明"},
-        {"type": "git_link", "content": "https://git.example.com/repo/commit/abc"},
+        {"type": "git_link", "content": "https://github.com/org/repo/pull/42"},
         {"type": "text", "content": "第三版说明"},
     ):
         resp = await _deliver(client, ctx["alice_headers"], item_id, payload)  # type: ignore[arg-type]
@@ -146,7 +163,7 @@ async def test_three_submissions_create_versions_1_2_3_and_history(
         f"/api/v1/work-items/{item_id}/deliverables/2", headers=ctx["alice_headers"]  # type: ignore[arg-type]
     )
     assert second.json()["type"] == "git_link"
-    assert second.json()["content"] == "https://git.example.com/repo/commit/abc"
+    assert second.json()["content"] == "https://github.com/org/repo/pull/42"
     assert second.json()["submitted_by"]["id"] == str(alice.id)  # type: ignore[union-attr]
 
 
@@ -248,6 +265,197 @@ async def test_type_payload_validation(client: httpx.AsyncClient, project: Proje
     ):
         resp = await _deliver(client, ctx["alice_headers"], item_id, payload)  # type: ignore[arg-type]
         assert resp.status_code == 422, payload
+
+
+async def test_git_link_is_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """标准 GitHub PR 链接会去除首尾空白和尾部斜杠后保存。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "  https://github.com/org/repo/pull/42/  ",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "https://github.com/org/repo/pull/42"
+
+
+async def test_gitee_pull_request_is_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """Gitee Pull Request 使用同一交付接口并保存规范地址。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "  https://gitee.com/org/repo/pulls/42/  ",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "https://gitee.com/org/repo/pulls/42"
+
+
+async def test_gitlab_merge_request_with_nested_group_is_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """GitLab Merge Request 支持嵌套 group，并移除尾部斜杠。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    response = await _deliver(
+        client,
+        ctx["alice_headers"],  # type: ignore[arg-type]
+        item_id,
+        {
+            "type": "git_link",
+            "content": "https://gitlab.com/group/subgroup/repo/-/merge_requests/42/",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == (
+        "https://gitlab.com/group/subgroup/repo/-/merge_requests/42"
+    )
+
+
+async def test_supported_commit_urls_are_normalized_when_submitted(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """三平台 Commit 接受 7–40 位 SHA，并统一保存为小写。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    cases = (
+        (
+            "https://github.com/org/repo/commit/ABCDEF1/",
+            "https://github.com/org/repo/commit/abcdef1",
+        ),
+        (
+            "https://gitee.com/org/repo/commit/0123456789ABCDEF0123456789ABCDEF01234567",
+            "https://gitee.com/org/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        ),
+        (
+            "https://gitlab.com/group/subgroup/repo/-/commit/ABC12345",
+            "https://gitlab.com/group/subgroup/repo/-/commit/abc12345",
+        ),
+    )
+    for content, expected in cases:
+        response = await _deliver(
+            client,
+            ctx["alice_headers"],  # type: ignore[arg-type]
+            item_id,
+            {"type": "git_link", "content": content},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["content"] == expected
+
+
+async def test_git_link_rejects_unsupported_urls_without_creating_versions(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """Git 链接只接受三平台支持的评审或 Commit URL，失败请求不产生版本。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    item_id = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[arg-type,union-attr]
+    await _start_item(client, ctx, item_id)
+
+    invalid_urls = (
+        "http://github.com/org/repo/pull/42",
+        "https://github.com.evil.example/org/repo/pull/42",
+        "https://gitlab.com/org/repo/pull/42",
+        "https://github.com/org/repo",
+        "https://github.com/org/repo/issues/42",
+        "https://github.com/org/repo/pull/42/files",
+        "https://github.com/org/repo/pull/42?diff=split",
+        "https://github.com/org/repo/pull/42#discussion",
+        "https://github.com/org/../pull/42",
+        "https://github.com/org/%2e%2e/pull/42",
+        "https://github.com/org/foo/../repo/pull/42",
+        "https://github.com/org/%ZZ/pull/42",
+        "https://user@github.com/org/repo/pull/42",
+        "https://github.com:443/org/repo/pull/42",
+        "https://github.com/org/repo/pull/0",
+        "https://github.com/org/repo/pull/not-a-number",
+        "https://github.com/org/repo/commit/abcdef",
+        "https://github.com/org/repo/commit/abcdefg",
+        "https://github.com/org/repo/commit/12345678901234567890123456789012345678901",
+        "https://github.com/org/repo/commit/abcdef1/files",
+        "https://gitee.com/org/repo/pulls/42?note=1",
+        "https://gitlab.com/group/repo/-/merge_requests/42/diffs",
+        "https://gitlab.com/group//repo/-/merge_requests/42",
+        "https://gitlab.com/repo/-/commit/abcdef1",
+        # NUL/控制字符：必须 422，不能让 PG text 列写入触发 500（spec「非法链接统一返回 422」）
+        "https://github.com/org/re\u0000po/pull/42",
+        "https://git\thub.com/org/repo/pull/42",
+        # 原始 authority 必须精确等于受支持主机：空端口、含控制字符的主机均拒绝，与前端同一规则
+        "https://github.com:/org/repo/pull/42",
+        # 空 ? / # 分隔符：前端正则拒绝，后端须同规则，避免规则漂移
+        "https://github.com/org/repo/pull/42?",
+        "https://github.com/org/repo/pull/42#",
+        "javascript:alert(1)",
+        "not-a-url",
+    )
+    for content in invalid_urls:
+        response = await _deliver(
+            client,
+            ctx["alice_headers"],  # type: ignore[arg-type]
+            item_id,
+            {"type": "git_link", "content": content},
+        )
+        assert response.status_code == 422, content
+
+    # 孤立 Unicode surrogate（U+D800–U+DFFF）：JSON \uXXXX 转义经 json.loads 还原为 lone surrogate。
+    # 放在 owner/repository 段时旧路径正则会匹配，随后 asyncpg 写 PG 因无法编码 UTF-8 抛
+    # DataError（非 IntegrityError）并返回 500；放在 PR 编号段时虽会被正则拒绝，但 422 的错误
+    # 详情会回显原始输入，响应序列化也必须能处理。httpx 的 json= 无法发送这种值，故使用原始 JSON。
+    for escaped_url in (
+        "https://github.com/org/repo\\ud800/pull/42",
+        "https://github.com/\\udfff/repo/pull/42",
+        "https://github.com/org/repo/pull/\\ud80042",
+        "https://github.com/org/repo/pull/42\\udfff",
+    ):
+        response = await client.post(
+            f"/api/v1/work-items/{item_id}/deliverables",
+            content=(
+                '{"type": "git_link", "content": '
+                f'"{escaped_url}"'
+                "}"
+            ).encode("ascii"),
+            headers={
+                **ctx["alice_headers"],  # type: ignore[arg-type]
+                "content-type": "application/json",
+            },
+        )
+        assert response.status_code == 422, escaped_url
+
+    history = await client.get(
+        f"/api/v1/work-items/{item_id}/deliverables",
+        headers=ctx["alice_headers"],  # type: ignore[arg-type]
+    )
+    assert history.status_code == 200
+    assert history.json() == []
 
 
 # ---------- file 类型：sha256 追溯与归属 ----------
