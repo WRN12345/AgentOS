@@ -40,9 +40,9 @@ def test_git_link_normalizer_rejects_lone_surrogates(surrogate: str) -> None:
 
 def test_validation_error_sanitizer_replaces_lone_surrogates() -> None:
     """校验错误回显不能因原始非法输入再次触发 UTF-8 编码异常。"""
-    assert _ensure_utf8_encodable({"input": "before\ud800after\udfff"}) == {
-        "input": "before\ufffdafter\ufffd"
-    }
+    assert _ensure_utf8_encodable(
+        {"input\ud800": {"nested\udfff": "before\ud800after\udfff"}}
+    ) == {"input\ufffd": {"nested\ufffd": "before\ufffdafter\ufffd"}}
 
 
 @pytest.fixture

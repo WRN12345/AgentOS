@@ -73,7 +73,10 @@ def _ensure_utf8_encodable(value: object) -> object:
     if isinstance(value, list):
         return [_ensure_utf8_encodable(item) for item in value]
     if isinstance(value, dict):
-        return {key: _ensure_utf8_encodable(item) for key, item in value.items()}
+        return {
+            _ensure_utf8_encodable(key): _ensure_utf8_encodable(item)
+            for key, item in value.items()
+        }
     return value
 
 

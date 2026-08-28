@@ -34,6 +34,22 @@ async def test_422_format(client: httpx.AsyncClient) -> None:
     _assert_error_shape(resp, "VALIDATION_ERROR")
 
 
+async def test_422_format_sanitizes_lone_surrogate_dict_keys(
+    client: httpx.AsyncClient,
+) -> None:
+    resp = await client.post(
+        "/api/v1/auth/login",
+        content='{"\\ud800":"x"}'.encode("ascii"),
+        headers={"content-type": "application/json"},
+    )
+
+    assert resp.status_code == 422
+    _assert_error_shape(resp, "VALIDATION_ERROR")
+    errors = resp.json()["details"]["errors"]
+    assert errors
+    assert all(error["input"] == {"\ufffd": "x"} for error in errors)
+
+
 async def test_unauthorized_format(client: httpx.AsyncClient) -> None:
     resp = await client.get("/api/v1/auth/me")
     assert resp.status_code == 401
