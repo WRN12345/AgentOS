@@ -1,9 +1,9 @@
-"""Dev Doc Review Agent 提示词模板（dev_doc_review.v1，设计文档 2026-07-30 §4.4）。
+"""Dev Doc Review Agent 提示词模板（dev_doc_review.v1）。
 
-最小上下文（16 节）：工作项标题/说明/验收标准 + 开发文档正文（Markdown）。
-输出初审建议：checklist（完整性：目标/方案/接口/排期/风险）、alignment
-（与验收标准对齐度）、verdict（sufficient / needs_work）；只生成建议，
-负责人确认/打回才是决策（原则 2）。
+仅向模型提供初审所需的工作项标题、说明、验收标准和开发文档正文，不提供
+无关资料或敏感信息。输出 checklist（目标/方案/接口/排期/风险完整性）、
+alignment（与验收标准对齐度）和 verdict（sufficient / needs_work）；
+这些内容仅供负责人参考，确认或打回由负责人决定。
 """
 
 SYSTEM_PROMPT = (
@@ -30,7 +30,7 @@ def render_user_prompt(
     work_item: dict | None,
     dev_doc: dict | None,
 ) -> str:
-    """组装 user 提示词（最小上下文：工作项信息 + 文档正文）。"""
+    """使用工作项信息和文档正文组装最小 user 提示词。"""
     item = work_item or {}
     doc = dev_doc or {}
     return "\n".join(

@@ -1,21 +1,11 @@
-"""测试基础设施：独立测试库，不污染 agentos 主库。
-
-- 在任何 app 模块导入前，把 DATABASE_URL 的库名改为 <原名>_test（如 agentos_test）、
-  REDIS_URL 切到 db 15（避开运行中的 scheduler/worker 使用的 db 0）；
-- 会话级前置：自动建测试库（不存在则 CREATE DATABASE）并执行 alembic upgrade head；
-- 每个用例结束后清空业务表，保证用例间隔离。
-- 多项目支持：project_a/project_b 双项目 fixture、admin 全局角色 helper。
-
-运行方式（容器内，postgres/redis 在 Compose 网络内可达）：
-    docker compose exec backend pytest
-"""
+"""使用独立数据库和 Redis DB 的测试基础设施，保证用例间隔离。"""
 
 import os
 import subprocess
 from collections.abc import AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
-# --- 环境改写必须发生在任何 app 模块导入之前 ---
+# 必须在导入任何 app 模块前改写环境，避免连接到开发服务。
 _db_url = os.environ.get(
     "DATABASE_URL", "postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos"
 )
@@ -25,7 +15,7 @@ if not _parts.path.endswith("_test"):
 
 _redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 _rparts = urlsplit(_redis_url)
-# 默认切到 db 15；显式指定了非 0 库（如并行跑多套测试时的 db 13/14）则尊重环境变量
+# 默认使用 DB 15；显式指定非 0 DB 时保留配置，以支持多套测试并行运行。
 if _rparts.path in ("", "/0"):
     os.environ["REDIS_URL"] = urlunsplit(_rparts._replace(path="/15"))
 
@@ -45,8 +35,8 @@ from app.domains.project.models import Project, ProjectMember  # noqa: E402
 from app.infrastructure.database.engine import async_session_factory, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
-# 本地 Windows：psycopg 异步连接不能用 ProactorEventLoop，需切 SelectorEventLoop。
-# 仅 win32 生效；Docker/Linux 下事件循环策略本来就合适，此处为 no-op。
+# Windows 上 psycopg 异步连接不支持 ProactorEventLoop，必须切换到 SelectorEventLoop；
+# Docker 和 Linux 保持原有事件循环策略。
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -100,8 +90,7 @@ async def _clean_tables() -> AsyncIterator[None]:
                 "project_members, projects"
             )
         )
-        # LangGraph 检查点表由 worker 首次运行时才创建（不归 Alembic 管理），
-        # 存在才清空，保证用例间隔离
+        # LangGraph 检查点表由 worker 首次运行时创建，不受 Alembic 管理，因此仅在存在时清空。
         await session.execute(
             text(
                 "DO $$ BEGIN "
@@ -111,7 +100,7 @@ async def _clean_tables() -> AsyncIterator[None]:
             )
         )
         await session.commit()
-    # pytest-asyncio 每个用例一个新事件循环；释放连接池，避免连接跨循环复用
+    # pytest-asyncio 为每个用例创建事件循环，连接池必须释放以免连接跨循环复用。
     await engine.dispose()
 
 
@@ -120,9 +109,6 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-
-
-# ---------- 项目/成员测试辅助 ----------
 
 
 @pytest.fixture
@@ -145,10 +131,10 @@ async def project_b() -> Project:
         return p
 
 
-# 向后兼容：project 别名指向 project_a
+# project 是默认项目 project_a 的兼容别名。
 @pytest.fixture
 async def project(project_a: Project) -> Project:
-    """向后兼容别名：默认项目 = 项目 A。"""
+    """返回默认项目 A。"""
     return project_a
 
 
@@ -160,7 +146,7 @@ async def add_member(
     role: str = "member",
     display_name: str | None = None,
 ) -> tuple[User, ProjectMember]:
-    """直接建库创建成员账号 + 项目成员身份（绕过 API，供测试准备数据）。"""
+    """直接在数据库中创建账号及其项目成员身份。"""
     async with async_session_factory() as session:
         user = await create_user(session, username, password)
         member = ProjectMember(
@@ -183,7 +169,7 @@ async def add_member_for_existing_user(
     role: str = "member",
     display_name: str | None = None,
 ) -> ProjectMember:
-    """为已有用户在另一项目中创建成员身份（跨项目测试用，不重复建 User）。"""
+    """为已有用户创建另一个项目的成员身份，不重复创建 User。"""
     async with session_factory() as session:
         member = ProjectMember(
             project_id=project.id,
@@ -231,19 +217,13 @@ async def auth_headers(
     *,
     project_id: str | None = None,
 ) -> dict[str, str]:
-    """登录并返回 Authorization + 可选的 X-Project-Id 头。
-
-    project_id: 若提供，同时携带 X-Project-Id（用于多项目测试）。
-    """
+    """登录并返回 Authorization；提供 project_id 时同时返回 X-Project-Id。"""
     resp = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert resp.status_code == 200, resp.text
     headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
     if project_id:
         headers["X-Project-Id"] = project_id
     return headers
-
-
-# ---------- 便捷 fixture：常用角色 header ----------
 
 
 @pytest.fixture

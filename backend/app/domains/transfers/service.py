@@ -1,17 +1,16 @@
-"""转派申请应用服务与权限策略（6.1、7.3、8.3、12.4、17.2 节）。
+"""转派申请应用服务与权限策略。
 
-权限规则（16 节，每个用例显式校验）：
+权限规则由各用例显式校验：
 - 发起：仅工作项当前主执行人；接收人必须是项目活跃成员且不是自己；
 - approve / reject：仅项目负责人（路由层 get_current_leader）；
 - cancel：仅发起人（from_member）；
-- 查询：任何项目成员（原则 6 透明）。
+- 查询：任何项目成员。
 
 核心约束：
-- 同一工作项同时只能存在一个 PENDING 转派申请（8.3、17.2 节）：应用层先查重
-  返回 409，数据库唯一部分索引（迁移 0006）在并发窗口下兜底；
-- 审批通过才在同一个事务中：更新 work_items.assignee_id（version+1）+
-  更新申请状态 + 写审计事件（from/to 留痕，支撑"历史负责人完整追溯"）+
-  通知新旧负责人；审批前主任务负责人不变化（7.3 节）。
+- 同一工作项最多存在一个 PENDING 转派申请；应用层先查重，数据库唯一部分索引
+  负责处理并发竞争；
+- 仅审批通过后才在同一事务中更新 work_items.assignee_id 和 version、申请状态、
+  审计事件及新旧负责人通知；审批前主执行人保持不变。
 """
 
 import uuid
@@ -51,15 +50,14 @@ async def get_request(
     for_update: bool = False,
     project_id: uuid.UUID | None = None,
 ) -> TransferRequest:
-    # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
-    # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
+    # 写路径通过行锁串行化并发审批，使版本和状态校验基于最新已提交数据
     request = await session.get(TransferRequest, request_id, with_for_update=for_update)
     if request is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "转派申请不存在")
     if project_id is not None and (
         await get_work_item_project_id(session, request.work_item_id) != project_id
     ):
-        # 越权 404：项目墙外的申请与不存在等价（spec D3），不泄露存在性信息
+        # 跨项目对象按不存在处理，避免泄露其存在性
         raise ApiException(404, ErrorCodes.NOT_FOUND, "转派申请不存在")
     return request
 
@@ -148,7 +146,7 @@ async def request_to_out(session: AsyncSession, request: TransferRequest) -> Tra
 async def get_detail(
     session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> TransferRequestOut:
-    """单条详情（含 reason/impact_note 正文，项目成员可查，原则 6 透明）。"""
+    """返回项目成员可查看的详情，包括 reason 和 impact_note。"""
     request = await get_request(session, request_id, project_id=project_id)
     return await request_to_out(session, request)
 
@@ -156,8 +154,8 @@ async def get_detail(
 async def list_for_work_item(
     session: AsyncSession, item_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> list[TransferRequestSummaryOut]:
-    """某工作项的转派申请历史（项目成员可查，原则 6 透明）。"""
-    await get_work_item(session, item_id, project_id=project_id)  # 越权 → 404
+    """返回项目成员可查看的工作项转派历史。"""
+    await get_work_item(session, item_id, project_id=project_id)  # 越权按不存在处理
     requests = list(
         (
             await session.execute(
@@ -174,7 +172,7 @@ async def list_for_work_item(
 
 
 async def list_mine(session: AsyncSession, actor: ProjectMember) -> list[TransferRequestSummaryOut]:
-    """我发起的转派申请（13.2 节），限定当前项目（spec D2 经工作项推导）。"""
+    """返回当前成员在当前项目发起的转派申请。"""
     requests = list(
         (
             await session.execute(
@@ -197,7 +195,7 @@ async def list_mine(session: AsyncSession, actor: ProjectMember) -> list[Transfe
 async def list_pending(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[TransferRequest]:
-    """负责人待审批聚合用：当前项目全部 PENDING 转派申请（12.6 节）。"""
+    """返回指定项目中全部 PENDING 转派申请，供负责人待审批列表使用。"""
     stmt = (
         select(TransferRequest)
         .join(WorkItem, WorkItem.id == TransferRequest.work_item_id)
@@ -213,7 +211,7 @@ async def list_pending(
 
 
 def _check_version(request: TransferRequest, version: int) -> None:
-    """乐观锁（17.2 节）：客户端携带的 version 与当前不一致即 409。"""
+    """校验乐观锁版本，不一致时返回 409。"""
     if request.version != version:
         raise ApiException(
             409,
@@ -232,7 +230,7 @@ async def _get_active_member(
             422, ErrorCodes.VALIDATION_ERROR, "指定成员不存在或已被禁用", {"member_id": str(member_id)}
         )
     if member.project_id != project_id:
-        # spec D3：跨项目成员引用 → 400（成员属于其他项目，不能作为本项目接收人）
+        # 拒绝跨项目接收人，避免建立跨项目引用
         raise ApiException(
             400,
             ErrorCodes.CROSS_PROJECT_REFERENCE,
@@ -288,13 +286,13 @@ async def create_transfer_request(
     item_id: uuid.UUID,
     payload: TransferRequestCreateIn,
 ) -> TransferRequestOut:
-    """发起转派申请（7.3 节）：仅工作项当前主执行人。
+    """由工作项当前主执行人发起转派申请。
 
-    同事务完成：查重（同工作项已有 PENDING → 409）→ 创建申请 →
-    审计 transfer.requested → 通知负责人待审批；commit 后向负责人发布实时事件。
+    创建申请、审计和负责人通知在同一事务完成；已有 PENDING 申请时返回 409，
+    commit 后发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权按不存在处理
     if item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可发起转派申请")
     if payload.to_member_id == actor.id:
@@ -303,7 +301,7 @@ async def create_transfer_request(
         session, payload.to_member_id, project_id=actor.project_id
     )
 
-    # 同一工作项同时只能存在一个 PENDING（8.3、17.2 节）；唯一部分索引兜底
+    # 先快速查重，数据库唯一部分索引负责处理并发竞争
     pending = (
         await session.execute(
             select(TransferRequest.id).where(
@@ -332,7 +330,7 @@ async def create_transfer_request(
     try:
         await session.flush()
     except IntegrityError:
-        # 并发窗口下另一请求抢先创建 PENDING（唯一部分索引兜底）
+        # 并发请求抢先创建 PENDING 时统一返回冲突
         await session.rollback()
         raise ApiException(
             409,
@@ -365,7 +363,7 @@ async def create_transfer_request(
     )
     await session.commit()
     await publish_after_commit(events)
-    await session.refresh(request)  # created_at/updated_at 由数据库生成，刷新取回
+    await session.refresh(request)  # 取回数据库生成的时间戳
     logger.info(
         "transfer requested: id=%s, work_item_id=%s, to_member_id=%s",
         request.id,
@@ -383,19 +381,18 @@ async def approve_transfer(
     *,
     decision_note: str | None = None,
 ) -> TransferRequestOut:
-    """负责人审批通过（7.3 节）：同一事务中更新负责人、申请状态、审计与通知。
+    """由项目负责人审批通过转派。
 
-    审批前 work_items.assignee_id 不变化；通过后 assignee 变更与审计事件
-    同生共死，from/to 完整留痕（第 22 章标准 2"历史负责人完整追溯"）。
-    幂等键 + 乐观锁 + 状态机共同保证重复审批只生效一次（17.2 节）。
-    commit 后向新旧负责人发布实时事件。
+    审批前 work_items.assignee_id 保持不变；通过后负责人变更、申请状态、审计和通知
+    在同一事务完成，并完整记录 from/to。行锁、乐观锁和状态机保证并发或重复审批
+    只生效一次，commit 后向新旧负责人发布实时事件。
     """
     events: list[OutgoingEvent] = []
     request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
     new_status = transition(request.status, "approve")
 
-    # 审批时点再校验目标成员仍为活跃成员，避免转给已禁用账号
+    # 审批时重新校验，避免转派给申请后被禁用的成员
     to_member = await _get_active_member(session, request.to_member_id, project_id=actor.project_id)
     item = await get_work_item(session, request.work_item_id, project_id=actor.project_id)
 
@@ -409,7 +406,6 @@ async def approve_transfer(
     request.version += 1
     await session.flush()
 
-    # 申请侧审计（含审批意见）
     after: dict[str, object] = {
         "status": request.status,
         "approved_by": str(actor.id),
@@ -417,7 +413,7 @@ async def approve_transfer(
         "to_member_id": str(request.to_member_id),
     }
     if decision_note:
-        after["decision_note"] = decision_note  # 意见只进审计留痕，不进通知正文（16 节）
+        after["decision_note"] = decision_note  # 审批意见不进入通知正文
     await record_event(
         session,
         actor_id=actor.user_id,
@@ -427,7 +423,7 @@ async def approve_transfer(
         before={"status": TransferStatus.PENDING.value},
         after=after,
     )
-    # 工作项侧审计：负责人变更留痕，支撑历史负责人完整追溯
+    # 单独记录工作项负责人变更，确保历史负责人可追溯
     await record_event(
         session,
         actor_id=actor.user_id,
@@ -473,7 +469,7 @@ async def reject_transfer(
     *,
     decision_note: str | None = None,
 ) -> TransferRequestOut:
-    """负责人驳回：主任务负责人不变化（7.3 节），同事务审计 + 通知发起人；commit 后发布事件。"""
+    """驳回转派但不改变主执行人，同事务记录审计并通知发起人。"""
     events: list[OutgoingEvent] = []
     request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
@@ -487,7 +483,7 @@ async def reject_transfer(
 
     after: dict[str, object] = {"status": request.status, "approved_by": str(actor.id)}
     if decision_note:
-        after["decision_note"] = decision_note  # 意见只进审计留痕，不进通知正文（16 节）
+        after["decision_note"] = decision_note  # 审批意见不进入通知正文
     await record_event(
         session,
         actor_id=actor.user_id,

@@ -1,17 +1,7 @@
-"""Requirement Pipeline 验收（设计文档 2026-07-30 §4/§7，mock 模型）。
+"""验证需求 Pipeline 的分段编排、输出契约和业务写入护栏。
 
-覆盖：
-- 输出契约：三段脚本化模型输出 → 建议入库，content 符合 §4.2 结构
-  （goals/involved_aspects/work_item_breakdown/recommended_assignee/
-  unresolved_mentions 等），prompt_version=requirement_pipeline.v1，
-  fact_refs 引用真实成员 ID；
-- Schema 单元契约：pipeline 载荷缺字段/空拆解/多余字段抛
-  SuggestionValidationError（stage=schema_validate）；
-- 指定人选解析：display_name/username 匹配；管理员与停用成员被排除
-  （点名后落入 unresolved_mentions，永远不会成为 recommended_assignee）；
-  匹配不到的名字进 unresolved_mentions；
-- 护栏：pipeline 运行只写 agent_suggestions，不产生业务审计事件、不触碰
-  工作项；模型输出非法 JSON → run=failed + 诊断落库，不产生建议。
+Pipeline 应解析需求、拆解工作项并基于真实成员数据推荐人选。停用或无法匹配的
+成员不得被推荐；非法模型输出必须保存诊断，且整个流程只能写入建议。
 """
 
 import json
@@ -40,7 +30,7 @@ from tests.conftest import add_member
 
 
 class _ScriptedProvider:
-    """模型替身：按调用顺序依次返回脚本化 JSON 文本，记录每次调用。"""
+    """按调用顺序返回脚本化 JSON 并记录参数的模型替身。"""
 
     name = "scripted"
     model = "scripted-model"
@@ -65,11 +55,7 @@ def _patch_provider(monkeypatch: pytest.MonkeyPatch, provider: _ScriptedProvider
 
 
 async def _run_once(redis_client, run_id: uuid.UUID, prompt: str = "") -> None:
-    """直接调用 worker 处理函数执行一次 agent.run（不真起进程）。
-
-    worker 从任务 payload 取 prompt 作为图输入（app.workers.agent_run），
-    因此需要把需求原文原样透传。
-    """
+    """直接执行一次任务，并将原始需求作为图输入透传。"""
     await handle_task(
         {
             "id": str(uuid.uuid4()),
@@ -87,8 +73,8 @@ async def _trigger(redis_client, prompt: str, *, project_id: uuid.UUID) -> Agent
             redis_client,
             agent_type=pipeline.AGENT_TYPE,
             trigger_source="manual",
-            work_item_id=None,  # 项目级触发（仅 leader，端点层权限沿用现有实现）
-            project_id=project_id,  # 项目级 run 必须带归属（ticket 05：工具按项目过滤）
+            work_item_id=None,  # 项目级分析不绑定单个工作项。
+            project_id=project_id,  # 项目归属用于约束工具查询范围。
             prompt=prompt,
         )
 
@@ -178,15 +164,12 @@ def _assign_stage(zhangsan: ProjectMember, lisi: ProjectMember) -> str:
 
 
 def _memory_none_stage() -> str:
-    """记忆评估段脚本（M6.7）：本次过程无值得沉淀的经验。"""
+    """生成无需沉淀经验的记忆评估结果。"""
     return json.dumps({"action": "none", "content": "", "entry_ids": []}, ensure_ascii=False)
 
 
-# ---------- 指定人选解析（纯函数单元测试） ----------
-
-
 def test_resolve_specified_assignees_matches_display_name_and_username() -> None:
-    """display_name 与 username（大小写不敏感）出现在文本中即视为指定。"""
+    """文本中的显示名和用户名应解析为指定人选，用户名不区分大小写。"""
     assignable = [
         {"member_id": "m1", "display_name": "张三", "username": "zhangsan"},
         {"member_id": "m2", "display_name": "李四", "username": "lisi"},
@@ -199,7 +182,7 @@ def test_resolve_specified_assignees_matches_display_name_and_username() -> None
 
 
 def test_resolve_specified_assignees_collects_unresolved_mentions() -> None:
-    """点名提示语后匹配不到成员的名字进 unresolved_mentions；重复名字去重。"""
+    """无法匹配的点名应去重后进入 unresolved_mentions。"""
     assignable = [{"member_id": "m1", "display_name": "张三", "username": "zhangsan"}]
     specified, unresolved = resolve_specified_assignees(
         "接口给张三，部署给赵六，运维由赵六负责", assignable
@@ -209,14 +192,11 @@ def test_resolve_specified_assignees_collects_unresolved_mentions() -> None:
 
 
 def test_resolve_specified_assignees_never_matches_absent_members() -> None:
-    """不在可分配清单中的成员（管理员/停用成员已被工具查询层排除）不会被指定。"""
+    """不在可分配清单中的成员不得被解析为指定人选。"""
     assignable = [{"member_id": "m1", "display_name": "张三", "username": "zhangsan"}]
     specified, unresolved = resolve_specified_assignees("审查给王管理", assignable)
     assert specified == []
     assert unresolved == ["王管理"]
-
-
-# ---------- Schema 单元契约（§4.2 载荷校验） ----------
 
 
 def _valid_pipeline_output() -> dict:
@@ -285,18 +265,13 @@ def test_schema_rejects_pipeline_empty_breakdown_and_extra_keys() -> None:
         parse_suggestion_output(payload, run_id="run-4")
 
 
-# ---------- 端到端：三段编排 + 指定人选 + 护栏 ----------
-
-
 async def test_pipeline_produces_contract_suggestion_with_user_specified_assignees(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """合法三段输出 → 建议入库且符合 §4.2；指定人选 user_specified=true；
-    停用成员/未匹配名字落入 unresolved_mentions，不会被推荐。
-    （多项目后管理员升级为全局角色，不再以成员身份存在，无需单独排除。）"""
+    """分段输出应合并为建议，并尊重指定人选和不可分配成员约束。"""
     _, zhangsan = await add_member(project, "zhangsan", "Zhang123!", display_name="张三")
     _, lisi = await add_member(project, "lisi", "Li123!", display_name="李四")
-    # 管理员不再以成员身份存在（全局 is_admin），此成员仅用于测试未匹配名字
+    # 此普通成员用于验证文本点名可以匹配当前可分配清单。
     await add_member(project, "wangguanli", "Wang123!", display_name="王管理")
     _, laoqian = await add_member(project, "laoqian", "Qian123!", display_name="老钱")
     async with async_session_factory() as session:
@@ -308,8 +283,8 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         )
         member = await session.get(ProjectMember, laoqian.id)
         assert member is not None
-        member.is_active = False  # 停用成员不可分配
-        # 张三名下 1 个进行中工作项 → 负载/进行中清单数据
+        member.is_active = False  # 停用成员不得进入分配候选。
+        # 构造真实负载，供分配阶段评估。
         item = WorkItem(title="检索模块", description="描述", project_id=zhangsan.project_id,
                         assignee_id=zhangsan.id, status="IN_PROGRESS")
         item.collaborators = []
@@ -345,17 +320,16 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert suggestion.suggestion_type == pipeline.SUGGESTION_TYPE == "pipeline"
         assert suggestion.prompt_version == pipeline.PROMPT_VERSION == "requirement_pipeline.v1"
         content = suggestion.content
-        # 需求分析段：involved_aspects 来自成员技能标签词表
+        # 涉及领域必须来自当前项目的成员技能标签。
         assert content["goals"] == ["搭建 RAG 问答平台"]
         assert content["involved_aspects"] == ["RAG", "FastAPI"]
-        # 拆解段
         assert [b["title"] for b in content["work_item_breakdown"]] == [
             "问答接口开发",
             "问答链路测试",
         ]
         assert content["work_item_breakdown"][0]["suggested_due_at"] == "2026-08-10"
         assert content["collaboration_points"] == ["接口输出格式需与测试评估集对齐"]
-        # 分配段：指定人选被尊重并权威标记 user_specified，合理性提示落 notes
+        # 指定人选由系统标记，技能不匹配只作为提示而不覆盖用户选择。
         first, second = content["work_item_breakdown"]
         assert first["recommended_assignee"]["member_id"] == str(zhangsan.id)
         assert first["user_specified"] is True
@@ -363,15 +337,12 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert second["recommended_assignee"]["member_id"] == str(lisi.id)
         assert second["user_specified"] is True
         assert "技能" in second["notes"]
-        # 未匹配点名：赵六不存在、老钱已停用 → 进 unresolved
-        # 王管理是普通成员，可被正确匹配，不进入 unresolved
+        # 不存在或停用的点名应进入 unresolved，当前普通成员可以正常匹配。
         assert sorted(content["unresolved_mentions"]) == sorted(["赵六", "老钱"])
-        # fact_refs 引用真实成员 ID
         assert str(zhangsan.id) in suggestion.fact_refs["member_ids"]
         assert str(lisi.id) in suggestion.fact_refs["member_ids"]
 
-        # 模型上下文：分析段带技能标签词表；分配段带成员能力数据与指定人选硬约束
-        # （共 4 段调用：分析/拆解/分配 + M6.7 记忆评估段）
+        # 模型上下文应包含技能词表、成员能力和指定人选硬约束。
         assert len(provider.calls) == 4
         assert all(call["json_output"] is True for call in provider.calls)
         assert '"RAG"' in provider.calls[0]["prompt"]
@@ -380,7 +351,7 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
         assert '"proficiency": 4' in provider.calls[2]["prompt"]
         assert "硬约束" in provider.calls[2]["prompt"]
 
-        # 护栏：pipeline 运行不产生业务审计事件、不触碰工作项
+        # Pipeline 只能写建议，不得修改工作项或产生业务审计事件。
         async with async_session_factory() as session:
             current_audit = set((await session.execute(select(AuditEvent.id))).scalars().all())
             assert current_audit - baseline_audit == set()
@@ -395,10 +366,10 @@ async def test_pipeline_produces_contract_suggestion_with_user_specified_assigne
 async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """拆解段返回非法 JSON（重试后仍非法）→ run=failed + json_parse 诊断，不产生正式建议。"""
+    """拆解阶段重试后仍返回非法 JSON 时应失败且不保存建议。"""
     provider = _ScriptedProvider([_analysis_stage(), "{not json", "{still not json"])
     _patch_provider(monkeypatch, provider)
-    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 一次定终态（17.3 节）
+    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 隔离运行级自动重试。
 
     redis_client = create_redis_client()
     try:
@@ -423,13 +394,13 @@ async def test_pipeline_invalid_stage_output_fails_run_with_diagnostics(
 async def test_pipeline_stage_retry_recovers_from_invalid_json(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """拆解段首次输出非法 JSON → 带解析错误反馈重试一次 → 恢复成功（17.3 节）。"""
+    """拆解阶段首次解析失败时应反馈错误并重试一次后恢复。"""
     _, zhangsan = await add_member(project, "zhangsan", "Zhang123!", display_name="张三")
     _, lisi = await add_member(project, "lisi", "Li123!", display_name="李四")
     provider = _ScriptedProvider(
         [
             _analysis_stage(),
-            '{"work_item_breakdown": [{"title": "缺括号"',  # 非法 JSON：对象未闭合
+            '{"work_item_breakdown": [{"title": "缺括号"',  # 对象未闭合，用于触发解析重试。
             _breakdown_stage(),
             _assign_stage(zhangsan, lisi),
             _memory_none_stage(),
@@ -446,7 +417,7 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
             final = await session.get(AgentRun, run.id)
             assert final is not None and final.status == "succeeded", final.error
 
-        # 共 5 次模型调用：拆解段多了一次重试（M6.7 记忆评估段为第 4 段）
+        # 拆解阶段恢复会比正常流程多调用模型一次。
         assert len(provider.calls) == 5
         assert "无法解析为合法 JSON" in provider.calls[2]["prompt"]
     finally:
@@ -456,7 +427,7 @@ async def test_pipeline_stage_retry_recovers_from_invalid_json(
 async def test_pipeline_schema_invalid_merge_fails_run(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """三段均为合法 JSON 但合并结果违反 §4.2 契约（拆解为空）→ schema_validate 失败。"""
+    """分段 JSON 均合法但合并结果缺少拆解项时应校验失败。"""
     empty_breakdown = json.dumps(
         {
             "summary": "无法拆解",
@@ -477,7 +448,7 @@ async def test_pipeline_schema_invalid_merge_fails_run(
         ]
     )
     _patch_provider(monkeypatch, provider)
-    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 一次定终态（17.3 节）
+    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 隔离运行级自动重试。
 
     redis_client = create_redis_client()
     try:

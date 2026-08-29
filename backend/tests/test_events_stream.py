@@ -1,11 +1,11 @@
-"""实时事件通道与 SSE 端点集成测试（T3.6 验收，4.3、12.6、16 节）。
+"""实时事件通道与 SSE 端点集成测试。
 
 覆盖：
 - 业务动作 commit 后，对应成员频道能收到 Redis Pub/Sub 事件（载荷结构完整）；
 - 工作项状态变化 → 对端成员收到 work_item.* 事件；
 - 协作/转派/DDL 通知 → 同内容事件；
 - GET /events/stream 认证（无 token/假 token → 401）与端到端流式下发；
-- 他人频道收不到本成员事件（16 节最小暴露）。
+- 事件仅发送到业务相关成员的频道，避免向无关成员暴露。
 """
 
 import asyncio
@@ -72,9 +72,6 @@ async def _next_payload(pubsub: redis.client.PubSub, timeout: float = 5.0) -> di
                 return json.loads(message["data"])
 
 
-# ---------- Redis 频道事件（业务动作 commit 后发布） ----------
-
-
 async def test_work_item_status_change_publishes_to_counterpart(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -94,7 +91,6 @@ async def test_work_item_status_change_publishes_to_counterpart(
         )
         assert published.status_code == 200, published.text
 
-        # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
         waived = await client.post(
             f"/api/v1/work-items/{item['id']}/dev-doc/waive",
             json={},
@@ -129,7 +125,7 @@ async def test_work_item_status_change_publishes_to_counterpart(
 async def test_collaboration_requested_publishes_only_to_recipient(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """发起协作请求 → 仅接收人频道收 collaboration.requested（他人频道无消息，16 节最小暴露）。"""
+    """协作请求事件仅发送到接收人频道，不向无关成员暴露。"""
     ctx = await _setup(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
@@ -169,9 +165,6 @@ async def test_collaboration_requested_publishes_only_to_recipient(
         await bob_client.aclose()
         await alice_pubsub.aclose()
         await alice_client.aclose()
-
-
-# ---------- SSE 端点 ----------
 
 
 async def test_sse_requires_valid_token(client: httpx.AsyncClient, project: Project) -> None:

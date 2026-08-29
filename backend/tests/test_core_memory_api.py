@@ -1,4 +1,4 @@
-"""核心记忆条目 API 契约测试（M4.3 验收，设计文档第 8、12 节）。
+"""核心记忆条目 API 契约测试。
 
 - 列表/创建/作废三接口按项目隔离，跨项目访问 404/403；
 - 项目成员可读（含来源信息：谁提的、谁确认的、何时生效），全局 admin 只读；
@@ -71,7 +71,6 @@ async def test_list_project_isolation(
     assert resp.status_code == 200, resp.text
     assert resp.json()["entries"] == []
 
-    # A 项目负责人带 B 项目上下文 → 403（不是 B 项目成员）
     resp = await client.get(
         "/api/v1/memory/core-entries",
         headers={"Authorization": leader_headers_a["Authorization"], "X-Project-Id": str(project_b.id)},
@@ -92,7 +91,6 @@ async def test_admin_readonly(
     resp = await client.get("/api/v1/memory/core-entries", headers=admin_headers)
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["entries"]) == 1
-    # admin 只读：无项目成员身份，写操作 403
     resp = await _create(client, admin_headers, "admin 越权写")
     assert resp.status_code == 403
 
@@ -152,7 +150,6 @@ async def test_deprecate_flow_and_isolation(
     headers_a = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
     entry_id = (await _create(client, headers_a, "将被作废的约定")).json()["id"]
 
-    # 非负责人作废 → 403
     member_headers = await auth_headers(
         client, "frank", "Frank123!", project_id=str(project_a.id)
     )
@@ -161,14 +158,12 @@ async def test_deprecate_flow_and_isolation(
     )
     assert resp.status_code == 403
 
-    # 他项目负责人作废 → 404（跨项目按不存在处理）
     headers_b = await auth_headers(client, "leaderb", "LeaderB123!", project_id=str(project_b.id))
     resp = await client.post(
         f"/api/v1/memory/core-entries/{entry_id}/deprecate", headers=headers_b
     )
     assert resp.status_code == 404
 
-    # 正常作废 → deprecated；重复作废 → 409
     resp = await client.post(
         f"/api/v1/memory/core-entries/{entry_id}/deprecate", headers=headers_a
     )

@@ -1,4 +1,4 @@
-"""工作项命令 API 集成测试（T2.6 验收，6.1、7.1、12.3、17.2 节）。"""
+"""工作项命令 API 集成测试。"""
 
 import httpx
 from sqlalchemy import select
@@ -14,7 +14,7 @@ BOB_PW = "Bob123!"
 
 
 async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader（负责人）+ alice / bob 两名普通成员，返回成员与请求头。"""
+    """返回负责人和两名普通成员及其请求头。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
@@ -75,20 +75,17 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
     assert item["collaborators"] == [{"id": str(bob.id), "display_name": "鲍勃"}]  # type: ignore[union-attr]
     item_id = item["id"]
 
-    # 主执行人不能在 DRAFT 直接 start（8.1：须先由负责人发布）
     early = await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": 1}, headers=alice_headers
     )
     assert early.status_code == 409
     assert early.json()["code"] == "WORK_ITEM_INVALID_TRANSITION"
 
-    # 非负责人不能发布
     publish_forbidden = await client.post(
         f"/api/v1/work-items/{item_id}/publish", json={"version": 1}, headers=alice_headers
     )
     assert publish_forbidden.status_code == 403
 
-    # 负责人发布 → READY
     published = await client.post(
         f"/api/v1/work-items/{item_id}/publish", json={"version": 1}, headers=leader_headers
     )
@@ -96,19 +93,16 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
     assert published.json()["status"] == "READY"
     assert published.json()["version"] == 2
 
-    # 非主执行人不能 start
     start_forbidden = await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": 2}, headers=bob_headers
     )
     assert start_forbidden.status_code == 403
 
-    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
     waived = await client.post(
         f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers
     )
     assert waived.status_code == 200, waived.text
 
-    # 主执行人 start → IN_PROGRESS
     started = await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": 2}, headers=alice_headers
     )
@@ -116,7 +110,6 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
     assert started.json()["status"] == "IN_PROGRESS"
     assert started.json()["version"] == 3
 
-    # block / unblock / submit（T4.4 起：submit 前须已存在交付物）
     blocked = await client.post(
         f"/api/v1/work-items/{item_id}/block", json={"version": 3}, headers=alice_headers
     )
@@ -135,9 +128,8 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
         f"/api/v1/work-items/{item_id}/submit", json={"version": 5}, headers=alice_headers
     )
     assert submitted.status_code == 200
-    assert submitted.json()["status"] == "IN_REVIEW"  # submit 只推进到 IN_REVIEW（阶段 4 接审核）
+    assert submitted.json()["status"] == "IN_REVIEW"
 
-    # 每次状态迁移均有审计事件（8.1 + 原则 5）
     async with async_session_factory() as session:
         events = (await session.execute(select(AuditEvent))).scalars().all()
     actions = [e.action for e in events if str(e.target_id) == item_id]
@@ -156,7 +148,7 @@ async def test_full_command_flow_and_audit(client: httpx.AsyncClient, project: P
 
 
 async def test_leader_cancels_work_item(client: httpx.AsyncClient, project: Project) -> None:
-    """取消仅负责人；BLOCKED 状态不可取消（8.1）。"""
+    """仅负责人可以取消工作项，BLOCKED 状态不可取消。"""
     ctx = await _setup(client, project)
     alice = ctx["alice"]
     created = await _create_item(client, ctx["leader_headers"], str(alice.id))  # type: ignore[union-attr]
@@ -168,7 +160,6 @@ async def test_leader_cancels_work_item(client: httpx.AsyncClient, project: Proj
     )
     assert forbidden.status_code == 403
 
-    # 负责人从 DRAFT 取消 → CANCELLED
     cancelled = await client.post(
         f"/api/v1/work-items/{item['id']}/cancel", json={"version": 1}, headers=ctx["leader_headers"]
     )
@@ -222,7 +213,6 @@ async def test_stale_version_returns_409(client: httpx.AsyncClient, project: Pro
     await client.post(
         f"/api/v1/work-items/{item['id']}/publish", json={"version": 1}, headers=lh
     )
-    # 用旧 version 再发布/修改 → 409
     stale_cmd = await client.post(
         f"/api/v1/work-items/{item['id']}/publish", json={"version": 1}, headers=lh
     )
@@ -246,7 +236,6 @@ async def test_idempotent_start_replays_once(client: httpx.AsyncClient, project:
     ah = ctx["alice_headers"]
     item = (await _create_item(client, lh, str(alice.id))).json()  # type: ignore[union-attr]
     await client.post(f"/api/v1/work-items/{item['id']}/publish", json={"version": 1}, headers=lh)
-    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
     waived = await client.post(
         f"/api/v1/work-items/{item['id']}/dev-doc/waive", json={}, headers=lh
     )
@@ -287,7 +276,6 @@ async def test_patch_updates_fields_and_reassigns_with_audit(
         await _create_item(client, lh, str(alice.id))  # type: ignore[union-attr]
     ).json()
 
-    # 普通成员不能 PATCH
     forbidden = await client.patch(
         f"/api/v1/work-items/{item['id']}",
         json={"version": 1, "title": "越权"},

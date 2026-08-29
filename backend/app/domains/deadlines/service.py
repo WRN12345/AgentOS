@@ -1,21 +1,16 @@
-"""DDL 变更申请应用服务与权限策略（6.1、7.4、8.4、12.4、17.2 节）。
+"""DDL 变更申请应用服务与权限策略。
 
-权限规则（16 节，每个用例显式校验）：
-- 发起主任务级（target_type=work_item）：仅工作项当前主执行人或项目负责人，一律负责人审批；
-- 发起协作级（target_type=collaboration_request）：仅协作双方（发起人或接收人）；
-- approve / reject：仅项目负责人（路由层 get_current_leader）；
-- cancel：仅发起人；
-- 查询：任何项目成员（原则 6 透明）。
+每个用例显式校验权限：主任务级申请仅当前主执行人或项目负责人可发起；
+协作级申请仅协作双方可发起；`approve` 和 `reject` 仅项目负责人可执行；
+`cancel` 仅申请人可执行。
 
-业务规则（7.4 节）：
-- 协作级新 DDL 不影响主任务 DDL（新协作 DDL ≤ 主工作项 DDL 或主工作项无 DDL）时，
-  由双方直接确认生效：同事务更新 collaboration_requests.due_at 并直接落 APPROVED
-  （auto-approved，审计留痕，无需负责人）；
+协作级新 DDL 不晚于主任务 DDL，或主任务没有 DDL 时，可由双方直接确认生效：
+同一事务更新 `collaboration_requests.due_at` 并记录为 `APPROVED`。
 - 影响主任务 DDL 的协作级变更与一切主任务级变更走负责人审批流；
-- 同一工作项只能有一个待审批主 DDL 变更（17.2 节）：应用层先查重返回 409，
-  数据库唯一部分索引（迁移 0006）在并发窗口下兜底；
+- 同一工作项只能有一个待审批主 DDL 变更：应用层先查重，数据库唯一部分索引
+  负责封闭并发窗口；
 - 规则化影响分析在创建时同步生成并推进到 PENDING_APPROVAL；分析异常时
-  impact_analysis_status=unavailable 照常推进，不阻塞人工审批（8.4 节）。
+  `impact_analysis_status=unavailable` 后照常推进，不阻塞人工审批。
 """
 
 import uuid
@@ -52,7 +47,7 @@ from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
 
-# 协作请求终态：这些状态下不允许再变更协作 DDL
+# 协作请求进入终态后不再允许变更 DDL。
 _COLLAB_TERMINAL = (
     CollaborationStatus.DECLINED.value,
     CollaborationStatus.CANCELLED.value,
@@ -60,7 +55,6 @@ _COLLAB_TERMINAL = (
 )
 
 
-# ---------- 规则化影响分析 ----------
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -76,11 +70,10 @@ async def generate_impact_analysis(
     new_due_at: datetime,
     work_item: WorkItem,
 ) -> dict[str, Any]:
-    """规则化影响分析（7.4、8.4 节）：同步快操作，创建申请时同事务生成。
+    """创建申请时在同一事务内同步生成规则化影响分析。
 
     内容：目标新旧 DDL 对比、是否晚于主任务 DDL、该工作项下未完成协作请求
-    及其 DDL（受影响对象清单）。阶段 5 在此接入 AI 分析；分析失败由调用方
-    捕获并标记 unavailable，不阻塞人工审批。
+    及其 DDL。分析失败由调用方捕获并标记为 `unavailable`，不阻塞人工审批。
     """
     open_collabs = list(
         (
@@ -124,7 +117,6 @@ async def generate_impact_analysis(
     }
 
 
-# ---------- 查询与序列化 ----------
 
 
 async def get_request(
@@ -134,15 +126,14 @@ async def get_request(
     for_update: bool = False,
     project_id: uuid.UUID | None = None,
 ) -> DeadlineChangeRequest:
-    # 写路径 for_update=True（17.2 节）：行锁把并发审批串行化，后到请求在锁后
-    # 重读最新已提交版本，应用层版本/状态检查才能挡下重复审批
+    # 写路径通过 `for_update=True` 持有行锁，使并发审批串行读取最新状态。
     request = await session.get(DeadlineChangeRequest, request_id, with_for_update=for_update)
     if request is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "DDL 变更申请不存在")
     if project_id is not None and (
         await get_work_item_project_id(session, request.work_item_id) != project_id
     ):
-        # 越权 404：项目墙外的申请与不存在等价（spec D3），不泄露存在性信息
+        # 将跨项目访问视为资源不存在，避免泄露资源存在性。
         raise ApiException(404, ErrorCodes.NOT_FOUND, "DDL 变更申请不存在")
     return request
 
@@ -150,7 +141,7 @@ async def get_request(
 async def _target_titles(
     session: AsyncSession, requests: list[DeadlineChangeRequest]
 ) -> dict[uuid.UUID, str]:
-    """目标对象标题：work_item → 工作项标题；collaboration_request → 协作请求标题。"""
+    """按目标类型批量加载工作项或协作请求标题。"""
     titles: dict[uuid.UUID, str] = {}
     item_ids = {r.target_id for r in requests if r.target_type == DeadlineTargetType.WORK_ITEM}
     collab_ids = {
@@ -263,7 +254,7 @@ async def request_to_out(
 async def get_detail(
     session: AsyncSession, request_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> DeadlineChangeRequestOut:
-    """单条详情（含 reason 与 impact_analysis 正文，项目成员可查，原则 6 透明）。"""
+    """返回项目成员可见的详情，包括 `reason` 和 `impact_analysis`。"""
     request = await get_request(session, request_id, project_id=project_id)
     return await request_to_out(session, request)
 
@@ -271,7 +262,7 @@ async def get_detail(
 async def list_for_work_item(
     session: AsyncSession, item_id: uuid.UUID, *, project_id: uuid.UUID | None = None
 ) -> list[DeadlineChangeSummaryOut]:
-    """某工作项的 DDL 变更申请历史（项目成员可查，原则 6 透明）。"""
+    """返回项目成员可见的工作项 DDL 变更历史。"""
     await get_work_item(session, item_id, project_id=project_id)  # 越权 → 404
     requests = list(
         (
@@ -291,7 +282,7 @@ async def list_for_work_item(
 async def list_mine(
     session: AsyncSession, actor: ProjectMember
 ) -> list[DeadlineChangeSummaryOut]:
-    """我发起的 DDL 变更申请（13.2 节），限定当前项目（spec D2 经工作项推导）。"""
+    """返回当前项目中本人发起的 DDL 变更申请。"""
     requests = list(
         (
             await session.execute(
@@ -314,7 +305,7 @@ async def list_mine(
 async def list_pending_approval(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[DeadlineChangeRequest]:
-    """负责人待审批聚合用：当前项目全部 PENDING_APPROVAL 的 DDL 变更申请（12.6 节）。"""
+    """返回当前项目中状态为 `PENDING_APPROVAL` 的申请。"""
     stmt = (
         select(DeadlineChangeRequest)
         .join(WorkItem, WorkItem.id == DeadlineChangeRequest.work_item_id)
@@ -326,11 +317,10 @@ async def list_pending_approval(
     return list((await session.execute(stmt)).scalars().all())
 
 
-# ---------- 内部工具 ----------
 
 
 def _check_version(request: DeadlineChangeRequest, version: int) -> None:
-    """乐观锁（17.2 节）：客户端携带的 version 与当前不一致即 409。"""
+    """校验乐观锁版本，不一致时返回 `409`。"""
     if request.version != version:
         raise ApiException(
             409,
@@ -378,7 +368,7 @@ async def _notify_leaders(
 
 
 async def _apply_to_target(session: AsyncSession, request: DeadlineChangeRequest) -> None:
-    """审批生效：同事务更新目标 DDL 并 version+1（17.2 节）。"""
+    """在当前事务中更新目标 DDL 并递增 `version`。"""
     if request.target_type == DeadlineTargetType.WORK_ITEM:
         target = await get_work_item(session, request.target_id)
     else:
@@ -390,7 +380,6 @@ async def _apply_to_target(session: AsyncSession, request: DeadlineChangeRequest
     await session.flush()
 
 
-# ---------- 用例 ----------
 
 
 async def create_deadline_change_request(
@@ -399,13 +388,13 @@ async def create_deadline_change_request(
     item_id: uuid.UUID,
     payload: DeadlineChangeCreateIn,
 ) -> DeadlineChangeRequestOut:
-    """发起 DDL 变更申请（7.4 节）。
+    """发起 DDL 变更申请。
 
     同事务完成：校验目标与发起人权限 → 查重（主任务级）→ 创建申请
     （PENDING_IMPACT_ANALYSIS）→ 同步生成规则化影响分析并推进到
     PENDING_APPROVAL（分析异常标记 unavailable 照常推进）→ 审计 → 通知。
     协作级新 DDL 不影响主任务 DDL 时，同事务直接生效并落 APPROVED。
-    commit 成功后发布实时事件。
+    `commit` 成功后发布实时事件。
     """
     events: list[OutgoingEvent] = []
     item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
@@ -421,7 +410,7 @@ async def create_deadline_change_request(
                 403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人或负责人可发起主任务 DDL 变更"
             )
         old_due_at = item.due_at
-        # 同一工作项只能有一个待审批主 DDL 变更（17.2 节）；唯一部分索引兜底
+        # 先行查重提供明确错误，唯一部分索引负责封闭并发窗口。
         pending = (
             await session.execute(
                 select(DeadlineChangeRequest.id).where(
@@ -467,7 +456,7 @@ async def create_deadline_change_request(
     try:
         await session.flush()
     except IntegrityError:
-        # 并发窗口下另一请求抢先创建待审批主 DDL 变更（唯一部分索引兜底）
+        # 唯一部分索引阻止并发请求创建第二条待审批主 DDL 变更。
         await session.rollback()
         raise ApiException(
             409,
@@ -475,7 +464,7 @@ async def create_deadline_change_request(
             "该工作项已存在待审批的主 DDL 变更",
         ) from None
 
-    # 规则化影响分析：同步快操作，同事务生成；失败不阻塞人工审批（8.4 节）
+    # 影响分析与申请同事务生成；失败时降级，不阻塞人工审批。
     try:
         request.impact_analysis = await generate_impact_analysis(
             session,
@@ -511,7 +500,7 @@ async def create_deadline_change_request(
         },
     )
 
-    # 协作级：新 DDL 不影响主任务 DDL 时双方直接确认生效（7.4 节）
+    # 协作级新 DDL 不晚于主任务 DDL 时由双方直接确认生效。
     auto_approve = (
         request.target_type == DeadlineTargetType.COLLABORATION_REQUEST
         and (item.due_at is None or request.new_due_at <= item.due_at)
@@ -531,7 +520,6 @@ async def create_deadline_change_request(
             before={"status": DeadlineChangeStatus.PENDING_APPROVAL.value},
             after={"status": request.status, "auto_approved": True},
         )
-        # 通知协作对端：DDL 已变更生效
         assert collab is not None
         other_id = collab.assignee_id if actor.id == collab.requester_id else collab.requester_id
         await notify(
@@ -576,7 +564,7 @@ async def approve_deadline_change(
     *,
     decision_note: str | None = None,
 ) -> DeadlineChangeRequestOut:
-    """负责人审批通过：同事务更新目标 DDL（version+1）+ 申请状态 + 审计 + 通知；commit 后发布事件。"""
+    """同事务更新目标 DDL、申请状态、审计和通知，提交后发布事件。"""
     events: list[OutgoingEvent] = []
     request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
@@ -591,7 +579,7 @@ async def approve_deadline_change(
 
     after: dict[str, object] = {"status": request.status, "approved_by": str(actor.id)}
     if decision_note:
-        after["decision_note"] = decision_note  # 意见只进审计留痕，不进通知正文（16 节）
+        after["decision_note"] = decision_note  # 审批意见不进入通知正文。
     await record_event(
         session,
         actor_id=actor.user_id,
@@ -629,7 +617,7 @@ async def reject_deadline_change(
     *,
     decision_note: str | None = None,
 ) -> DeadlineChangeRequestOut:
-    """负责人驳回：目标 DDL 不变化，同事务审计 + 通知发起人；commit 后发布事件。"""
+    """驳回时不修改目标 DDL；审计和通知同事务提交，随后发布事件。"""
     events: list[OutgoingEvent] = []
     request = await get_request(session, request_id, for_update=True, project_id=actor.project_id)
     _check_version(request, version)
@@ -643,7 +631,7 @@ async def reject_deadline_change(
 
     after: dict[str, object] = {"status": request.status, "approved_by": str(actor.id)}
     if decision_note:
-        after["decision_note"] = decision_note  # 意见只进审计留痕，不进通知正文（16 节）
+        after["decision_note"] = decision_note  # 审批意见不进入通知正文。
     await record_event(
         session,
         actor_id=actor.user_id,

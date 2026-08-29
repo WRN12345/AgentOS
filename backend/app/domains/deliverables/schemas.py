@@ -1,7 +1,7 @@
-"""交付物接口请求/响应模型（7.5、12.5 节）。
+"""交付物接口的请求与响应模型。
 
-- git_link / text 类型必须携带 content；file 类型必须携带 file_id（引用已上传文件）；
-- file 类型响应内嵌文件摘要（含 sha256），可追溯 stored_files 哈希记录（2.1 节）。
+- `git_link` 和 `text` 必须携带 `content`；`file` 必须携带引用已上传文件的 `file_id`；
+- `file` 响应包含 `sha256`，可追溯 `stored_files` 中的完整性记录。
 """
 
 import re
@@ -32,11 +32,11 @@ _INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 def _normalize_git_delivery_url(value: str) -> str:
     """校验受支持的 Git 交付 URL，并返回规范地址。"""
     candidate = value.strip()
-    # 拒绝任何 ASCII 控制字符（含 NUL、制表符、换行）：
+    # 拒绝包括 `NUL`、制表符和换行在内的所有 ASCII 控制字符。
     if any(ord(ch) <= 0x1F or ord(ch) == 0x7F for ch in candidate):
         raise ValueError("请输入受支持的 PR、MR 或 Commit 链接")
-    # Python str 可包含无法用 UTF-8 表示的孤立 surrogate。必须在进入持久化层前拒绝，
-    # 否则 asyncpg 写 PostgreSQL 时会抛 DataError，并把非法请求升级成 500。
+    # `str` 可能含有无法编码为 UTF-8 的孤立代理项，必须在持久化前拒绝，
+    # 否则 `asyncpg` 写入 PostgreSQL 时会抛出 `DataError`，将非法请求升级为 `500`。
     try:
         candidate.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -50,12 +50,12 @@ def _normalize_git_delivery_url(value: str) -> str:
     if (
         parsed.scheme.lower() != "https"
         or parsed.hostname is None
-        # 原始 netloc 必须精确等于主机名：拒绝空端口（github.com:）、用户信息、显式端口
+        # 原始 `netloc` 必须等于主机名，以拒绝空端口、用户信息和显式端口。
         or parsed.netloc.lower() != parsed.hostname.lower()
         or port is not None
         or parsed.username is not None
         or parsed.password is not None
-        # 拒绝任何 ? 或 #（含空查询/锚点 .../pull/42?、.../pull/42#），与前端同一公开规则
+        # 查询串和锚点即使为空也不允许，确保前后端校验规则一致。
         or "?" in candidate
         or "#" in candidate
     ):
@@ -114,7 +114,7 @@ def _normalize_git_delivery_url(value: str) -> str:
 
 
 class DeliverableCreateIn(BaseModel):
-    """提交新版本交付物：版本号由服务端按工作项递增（7.5 节），客户端不传。"""
+    """提交新版本交付物；版本号由服务端按工作项递增。"""
 
     type: Literal["git_link", "text", "file"]
     content: str | None = Field(default=None, min_length=1)
@@ -129,7 +129,7 @@ class DeliverableCreateIn(BaseModel):
                 raise ValueError("git_link/text 类型不应携带 file_id")
             if self.type == "git_link":
                 self.content = _normalize_git_delivery_url(self.content)
-        else:  # file
+        else:  # 文件类型
             if self.file_id is None:
                 raise ValueError("file 类型必须携带 file_id")
             if self.content:
@@ -138,7 +138,7 @@ class DeliverableCreateIn(BaseModel):
 
 
 class FileBrief(BaseModel):
-    """file 类型交付物引用的文件摘要：sha256 供完整性追溯。"""
+    """`file` 类型交付物的文件摘要，`sha256` 用于完整性追溯。"""
 
     id: uuid.UUID
     original_filename: str
@@ -160,7 +160,7 @@ class DeliverableOut(BaseModel):
 
 
 class DeliverableReviewBrief(BaseModel):
-    """交付物的审核结论摘要（反馈正文仅负责人与主执行人可见，16 节）。"""
+    """交付物审核摘要；反馈正文仅负责人和主执行人可见。"""
 
     decision: str
     feedback: str | None
@@ -169,9 +169,9 @@ class DeliverableReviewBrief(BaseModel):
 
 
 class DeliverableListItemOut(BaseModel):
-    """交付物列表项：交付物聚合页与"我的申请"（role=mine）共用。
+    """交付物聚合页与“我的申请”共用的列表项。
 
-    review 为 null 表示尚未审核；feedback 按 16 节仅对负责人与提交人返回。
+    `review` 为 `None` 表示尚未审核；`feedback` 仅对负责人和提交人返回。
     """
 
     id: uuid.UUID

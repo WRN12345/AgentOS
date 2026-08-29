@@ -1,9 +1,9 @@
-"""知识文档版本化测试（M2.2 验收，设计文档第 3 节）。
+"""知识文档版本化测试。
 
 - 同项目同名上传 = 新版本：v 递增，旧版本 superseded_by 指向新版本；
 - 不同名/不同项目互不影响，各自从 v1 开始；
 - 上传响应与审计事件携带版本信息；
-- .docx 扩展名与 MIME 已加入白名单（设计文档第 4 节）。
+- .docx 扩展名与 MIME 位于允许列表。
 """
 
 import uuid
@@ -70,7 +70,6 @@ async def test_same_name_upload_creates_new_version(
         assert old is not None and new is not None
         assert old.superseded_by == new.id  # 旧版本已标记被取代（保留不删除）
         assert new.superseded_by is None
-        # 审计：新版本事件带版本链信息（16.10）
         event = (
             await session.execute(
                 select(AuditEvent).where(
@@ -133,7 +132,7 @@ async def test_docx_in_upload_whitelist(
 
 
 def test_no_file_delete_endpoint_anywhere() -> None:
-    """M2.3 验收：全路由（含 admin）不存在任何文件删除端点（16.3 严格不可删）。"""
+    """所有路由（含 admin）都不提供文件删除端点。"""
     delete_routes = [
         route.path
         for route in app.routes

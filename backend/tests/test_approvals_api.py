@@ -1,4 +1,4 @@
-"""GET /approvals 聚合接口集成测试（T3.5 验收，12.6 节）。
+"""GET /approvals 聚合接口集成测试。
 
 负责人看到 PENDING 转派 + PENDING_APPROVAL DDL 变更的统一列表（按时间倒序）；
 普通成员返回空列表（不 403）。
@@ -86,7 +86,6 @@ async def test_leader_sees_unified_pending_list(
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 2
-    # 按创建时间倒序：DDL 变更在后
     assert items[0]["kind"] == "deadline_change"
     assert items[1]["kind"] == "transfer"
     assert items[0]["created_at"] >= items[1]["created_at"]
@@ -145,12 +144,8 @@ async def test_member_gets_empty_list(client: httpx.AsyncClient, project: Projec
         assert resp.status_code == 200
         assert resp.json() == []
 
-    # 匿名 → 401
     resp = await client.get("/api/v1/approvals")
     assert resp.status_code == 401
-
-
-# ---------- GET /approvals/processed（已处理审批记录） ----------
 
 
 async def test_processed_list_after_approve_and_reject(
@@ -207,7 +202,6 @@ async def test_processed_list_after_approve_and_reject(
     assert resp.status_code == 200
     assert resp.json() == []
 
-    # 出现在 processed 列表：DDL 变更后处理，updated_at 倒序在前
     resp = await client.get("/api/v1/approvals/processed", headers=leader_headers)  # type: ignore[arg-type]
     assert resp.status_code == 200
     items = resp.json()
@@ -277,7 +271,6 @@ async def test_processed_list_includes_delivery_review(
     leader_headers = ctx["leader_headers"]
     alice_headers = ctx["alice_headers"]
 
-    # 推进到 IN_REVIEW：豁免开发文档 → start → 提交交付物 → submit
     resp = await client.post(
         f"/api/v1/work-items/{item['id']}/dev-doc/waive",  # type: ignore[index]
         json={},
@@ -324,5 +317,5 @@ async def test_processed_list_includes_delivery_review(
     assert entry["requested_by"] == {"id": str(alice.id), "display_name": "爱丽丝"}
     assert entry["approved_by"] == {"id": str(leader.id), "display_name": "负责人"}
     assert entry["approved_at"] is not None
-    # 反馈正文属隐私信息（16 节），不进审批聚合
+    # 审批聚合不返回反馈正文，避免扩大敏感内容的暴露范围。
     assert "feedback" not in entry

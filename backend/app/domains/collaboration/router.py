@@ -1,20 +1,7 @@
-"""协作请求接口（12.4 节）。
+"""协作请求接口。
 
-- POST /work-items/{id}/collaboration-requests   仅工作项当前主执行人：发起（无需负责人审批，2.1 节）
-- GET  /work-items/{id}/collaboration-requests   任何成员：该工作项的协作请求列表
-- GET  /collaboration-requests?role=sent|received 本人：我发出/收到的协作请求摘要（13.2 节）
-- GET  /collaboration-requests/{id}            任何成员：单条详情（含 goal/template/result_text）
-- POST /collaboration-requests/{id}/accept           仅接收人：REQUESTED → ACCEPTED
-- POST /collaboration-requests/{id}/decline          仅接收人：REQUESTED → DECLINED
-- POST /collaboration-requests/{id}/start            仅接收人：ACCEPTED/REVISION_REQUESTED → IN_PROGRESS
-                                                   （12.4 节未单列此端点，8.2 状态机需要"开始处理/继续处理"，
-                                                    故补充并与"继续处理"共用）
-- POST /collaboration-requests/{id}/submit           仅接收人：IN_PROGRESS → SUBMITTED（携带 result_text）
-- POST /collaboration-requests/{id}/request-revision 仅发起人：SUBMITTED → REVISION_REQUESTED（可带反馈）
-- POST /collaboration-requests/{id}/complete         仅发起人：SUBMITTED → COMPLETED
-- POST /collaboration-requests/{id}/cancel           发起人或接收人：REQUESTED/ACCEPTED → CANCELLED
-
-所有写接口支持 Idempotency-Key，且要求携带 version 做乐观锁（17.2 节）。
+状态命令按发起人和接收人分权；`start` 同时用于开始处理和打回后继续处理。
+所有写接口支持 `Idempotency-Key`，状态命令通过 `version` 实施乐观锁。
 """
 
 import uuid

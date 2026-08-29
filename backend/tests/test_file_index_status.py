@@ -1,4 +1,4 @@
-"""索引状态机与重试接口测试（M2.4 验收，设计文档第 6 节）。
+"""索引状态机与重试接口测试。
 
 - 状态机：pending → indexing → indexed/failed 合法；failed → pending（重试）合法；
   终态（indexed/unindexed）与其他跳转一律 409；

@@ -1,11 +1,11 @@
-"""工作项应用服务与权限策略（4.1、6.1、7.1、12.3 节）。
+"""工作项应用服务与权限策略。
 
-权限规则（16 节，每个用例显式校验）：
+权限规则由各用例显式校验：
 - 创建、修改、发布、取消：仅项目负责人；
-- start / block / unblock / submit：仅当前主执行人（原则 4 主责任唯一）；
-- 查询：任何项目成员（原则 6 透明）。
-状态迁移由 domains/work_items/state_machine.py 裁决（8.1 节）；
-每次状态迁移/字段变更与同事务写审计事件（原则 5），assignee 变化必留痕。
+- start / block / unblock / submit：仅当前主执行人；
+- 查询：任何项目成员。
+状态迁移由 domains/work_items/state_machine.py 裁决；状态或字段变更与审计事件
+在同一事务写入，assignee 变化必须留痕。
 """
 
 import uuid
@@ -39,7 +39,6 @@ from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
 
-# 命令 → 审计动作名
 _COMMAND_AUDIT_ACTION = {
     "publish": "work_item.published",
     "start": "work_item.started",
@@ -49,7 +48,6 @@ _COMMAND_AUDIT_ACTION = {
     "cancel": "work_item.cancelled",
 }
 
-# 命令 → 触发者要求："leader" 仅负责人，"assignee" 仅当前主执行人
 _COMMAND_ACTOR = {
     "publish": "leader",
     "start": "assignee",
@@ -59,7 +57,6 @@ _COMMAND_ACTOR = {
     "cancel": "leader",
 }
 
-# 命令 → 实时事件标题（4.3 节"任务状态变化"；type 复用审计动作名）
 _COMMAND_EVENT_TITLE = {
     "publish": "工作项已发布",
     "start": "工作项已开始",
@@ -80,10 +77,10 @@ async def get_work_item(
     for_update: bool = False,
     project_id: uuid.UUID | None = None,
 ) -> WorkItem:
-    """按 id 取工作项（可选项目边界）。
+    """按 id 获取工作项，可选校验项目边界。
 
-    project_id 传入时做越权 404（spec D3：墙外对象等同不存在）；
-    不传则只按 id 取（供派生域经 work_item_id 推导，如转派/交付物）。
+    传入 project_id 时，跨项目对象按不存在处理；不传则供派生域通过
+    work_item_id 查询父对象。
     """
     stmt = (
         select(WorkItem)
@@ -91,12 +88,11 @@ async def get_work_item(
         .options(selectinload(WorkItem.collaborators))  # 预加载，避免异步懒加载
     )
     if for_update:
-        # 写路径持行锁（17.2 节）：并发请求在锁后重读，版本检查才能挡下
-        # "读取 v1 → 检查通过 → 另一请求已提交" 的交错窗口
+        # 行锁让并发写请求基于最新已提交数据执行版本检查
         stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None or (project_id is not None and item.project_id != project_id):
-        # 越权 404：项目墙外的工作项与不存在等价，不泄露存在性信息
+        # 跨项目对象按不存在处理，避免泄露其存在性
         raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
     return item
 
@@ -104,10 +100,9 @@ async def get_work_item(
 async def get_work_item_project_id(
     session: AsyncSession, work_item_id: uuid.UUID
 ) -> uuid.UUID | None:
-    """按工作项取项目归属（派生域经父对象推导项目，spec D2）。
+    """获取工作项的项目归属，供派生域从父对象确定项目边界。
 
-    审批 4 源表/reviews 不冗余 project_id，查询时经 work_item_id 推导；
-    工作项不存在返回 None（与"项目墙外"等价，调用方统一按 404 处理）。
+    派生表不冗余 project_id；工作项不存在时返回 None，由调用方按 404 处理。
     """
     return (
         await session.execute(
@@ -125,7 +120,7 @@ async def list_work_items(
     due_from: datetime | None = None,
     due_to: datetime | None = None,
 ) -> list[WorkItemSummaryOut]:
-    """当前项目全量列表（原则 6 透明），支持按负责人、状态、DDL 区间过滤（13.1 节）。"""
+    """返回当前项目工作项，支持按负责人、状态和 DDL 区间过滤。"""
     stmt = select(WorkItem).where(WorkItem.project_id == project_id)
     stmt = stmt.order_by(WorkItem.created_at.desc())
     if assignee_id is not None:
@@ -199,7 +194,7 @@ async def work_item_to_out(session: AsyncSession, item: WorkItem) -> WorkItemOut
 
 
 def _check_version(item: WorkItem, version: int) -> None:
-    """乐观锁（17.2 节）：客户端携带的 version 与当前不一致即 409。"""
+    """校验乐观锁版本，不一致时返回 409。"""
     if item.version != version:
         raise ApiException(
             409,
@@ -212,9 +207,9 @@ def _check_version(item: WorkItem, version: int) -> None:
 async def _get_active_member(
     session: AsyncSession, member_id: uuid.UUID, *, project_id: uuid.UUID
 ) -> ProjectMember:
-    """取活跃成员并校验与工作项同项目（spec D3 跨实体引用同项目校验）。
+    """获取活跃成员并校验项目边界。
 
-    成员不存在/已禁用 → 422；成员属于其他项目 → 400（跨项目指派被拒绝）。
+    成员不存在或已禁用时返回 422，跨项目指派时返回 400。
     """
     member = await session.get(ProjectMember, member_id)
     if member is None or not member.is_active:
@@ -237,7 +232,7 @@ async def _replace_collaborators(
     unique_ids = list(dict.fromkeys(member_ids))
     for mid in unique_ids:
         await _get_active_member(session, mid, project_id=project_id)
-    # 先清空并 flush：唯一约束 (work_item_id, member_id) 下，同批 flush 会先插后删导致冲突
+    # 先删除再 flush，避免 ORM 在唯一约束下先插入新关联而产生冲突
     item.collaborators = []
     await session.flush()
     item.collaborators = [
@@ -258,15 +253,14 @@ async def _build_status_events(
     command: str,
     before_status: str,
 ) -> list[OutgoingEvent]:
-    """工作项状态变化实时事件（4.3 节，T3.6）。
+    """构建工作项状态变化的实时事件。
 
-    接收人按"对端"原则：负责人触发（publish/cancel）→ 主执行人；
-    主执行人触发（start/block/unblock/submit）→ 全体活跃负责人；
-    触发者本人不重复接收（其 REST 响应已确认结果）。
-    只发 SSE 事件、不写站内通知——状态变化在列表/看板可见，不属于待办。
+    负责人触发时发送给主执行人，主执行人触发时发送给全体活跃负责人。
+    触发者已通过 REST 响应确认结果，不重复接收。状态变化仅发布 SSE，
+    不创建站内待办通知。
     """
     if _COMMAND_ACTOR[command] == "assignee":
-        # 通知该项目（工作项所属项目）的全体活跃负责人（spec 4.3 节）
+        # 仅发送给工作项所属项目的活跃负责人
         leaders = (
             (
                 await session.execute(
@@ -310,11 +304,11 @@ async def create_work_item(
 ) -> WorkItemOut:
     """负责人创建工作项（初始 DRAFT），指定主执行人与可选协作者。"""
     _require_leader(actor)
-    # spec D3：assignee 与协作者必须与工作项同项目（跨项目指派 → 400）
+    # 拒绝跨项目指派，避免建立跨项目成员引用
     await _get_active_member(session, payload.assignee_id, project_id=actor.project_id)
 
     item = WorkItem(
-        # 项目归属从请求上下文填充（spec D3：API 不接受传入，service 层派生）
+        # 项目归属取自认证上下文，防止客户端指定其他项目
         project_id=actor.project_id,
         title=payload.title,
         description=payload.description,
@@ -323,7 +317,7 @@ async def create_work_item(
         assignee_id=payload.assignee_id,
         due_at=payload.due_at,
     )
-    item.collaborators = []  # 显式初始化集合，避免异步懒加载
+    item.collaborators = []  # 避免首次写入触发异步懒加载
     session.add(item)
     await session.flush()
     await _replace_collaborators(
@@ -404,7 +398,7 @@ async def update_work_item(
         after=after,
     )
     await session.commit()
-    await session.refresh(item)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
+    await session.refresh(item)  # 取回数据库生成的 updated_at，避免后续异步懒加载
     logger.info("work item updated: id=%s, fields=%s", item.id, sorted(after))
     return await work_item_to_out(session, item)
 
@@ -422,7 +416,7 @@ async def run_command(
     _check_version(item, version)
 
     if command == "submit":
-        # 提交审核前必须已存在交付物（7.5 节，T4.4）：无交付物拒绝并提示先提交
+        # 没有交付物时禁止进入审核，避免产生无审核对象的 IN_REVIEW 工作项
         deliverable_exists = (
             await session.execute(
                 select(Deliverable.id).where(Deliverable.work_item_id == item.id).limit(1)
@@ -438,9 +432,8 @@ async def run_command(
     new_status = transition(item.status, command)
 
     if command == "start":
-        # 开发文档前置（设计文档 2026-07-30 §4.3）：存在 CONFIRMED 文档或已豁免
-        # 才允许开工；unblock（BLOCKED → IN_PROGRESS）不重复校验；
-        # 校验放在状态机裁决之后，非法迁移（如 DRAFT 直接 start）优先报迁移错误
+        # 开工需要开发文档已确认或已豁免；unblock 不重复校验。
+        # 先裁决状态机，确保非法迁移优先返回迁移错误
         doc = (
             await session.execute(
                 select(DevDoc).where(DevDoc.work_item_id == item.id).limit(1)
@@ -470,19 +463,18 @@ async def run_command(
         after={"status": item.status},
     )
     await session.commit()
-    # commit 成功后发布实时事件（4.3 节）：订阅者收到的必为已落库事实
+    # commit 后再发布，确保订阅者收到的状态已经落库
     await publish_after_commit(await _build_status_events(session, actor, item, command, before_status))
     if command == "submit":
-        # 提交审核后触发交付物初审 Agent（T5.5，event 触发）：业务事务已 commit
-        # 再投递；尽力而为，投递失败不影响已完成的 submit（17.3 节）
+        # 初审 Agent 在事务提交后以 best-effort 方式投递，失败不回滚 submit
         await _dispatch_deliverable_review(session, item)
-    await session.refresh(item)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
+    await session.refresh(item)  # 取回数据库生成的 updated_at，避免后续异步懒加载
     logger.info("work item %s: id=%s, %s -> %s", command, item.id, before_status, item.status)
     return await work_item_to_out(session, item)
 
 
 async def _dispatch_deliverable_review(session: AsyncSession, item: WorkItem) -> None:
-    """投递 deliverable_review 的 agent.run（trigger_source="event"），失败只记日志。"""
+    """通过 event 投递 deliverable_review agent.run，失败仅记录日志。"""
     redis_client = create_redis_client()
     try:
         run = await request_agent_analysis(
@@ -496,7 +488,7 @@ async def _dispatch_deliverable_review(session: AsyncSession, item: WorkItem) ->
         logger.info(
             "deliverable review dispatched: run_id=%s work_item_id=%s", run.id, item.id
         )
-    except Exception:  # noqa: BLE001 - Agent 投递失败不拖垮已提交的 submit（17.3 节）
+    except Exception:  # noqa: BLE001 - Agent 投递失败不能影响已完成的提交
         logger.warning(
             "deliverable review dispatch failed, submit unaffected: work_item_id=%s", item.id
         )

@@ -1,4 +1,4 @@
-"""ORM 基类与 Mixin（第 11 章）。
+"""ORM 基类与 Mixin。
 
 - 主键使用 PostgreSQL UUID（pgcrypto 的 gen_random_uuid()）。
 - 所有核心表包含 created_at / updated_at。

@@ -1,9 +1,9 @@
-"""知识库问答 API 契约测试（M7.3 验收，设计文档第 11 节②）。
+"""知识库问答 API 的回答、拒答、权限与日志安全契约测试。
 
 - 命中路径：生成回答 + 依据列表（可定位原文）；
-- 拒答路径：低于阈值不生成回答，返回最接近线索（16.13）；
+- 拒答路径：低于阈值不生成回答，返回最接近线索；
 - 权限：仅项目成员（非成员/admin 403）；缺项目头 400。
-- 历史落库失败：回答不受影响，日志不含问题/答案/片段等私人内容（16 节）。
+- 历史落库失败：回答不受影响，日志不含问题、答案或片段等私人内容。
 """
 
 import uuid
@@ -88,7 +88,6 @@ async def test_qa_refused_path(client: httpx.AsyncClient, project_a: Project) ->
 
 async def test_qa_permission(client: httpx.AsyncClient, project_a: Project, admin_user) -> None:
     _, alice = await add_member(project_a, "alice", ALICE_PW)
-    # 非项目成员 → 403
     from tests.conftest import create_admin_user
 
     outsider = await create_admin_user("outsider", "Out12345!")
@@ -103,13 +102,12 @@ async def test_qa_permission(client: httpx.AsyncClient, project_a: Project, admi
     resp = await client.post("/api/v1/memory/qa", headers=headers, json={"question": "x"})
     assert resp.status_code == 403
 
-    # 全局 admin：问答是生成服务而非内容查看 → 403（只读走检索/列表接口）
+    # 管理员只读权限不包含生成式问答，避免借此读取项目内容。
     admin_headers = await auth_headers(client, "admin", "Admin123!")
     admin_headers["X-Project-Id"] = str(project_a.id)
     resp = await client.post("/api/v1/memory/qa", headers=admin_headers, json={"question": "x"})
     assert resp.status_code == 403
 
-    # 缺项目头 → 400
     headers = await auth_headers(client, "alice", ALICE_PW)
     resp = await client.post("/api/v1/memory/qa", headers=headers, json={"question": "x"})
     assert resp.status_code == 400
@@ -121,8 +119,7 @@ async def test_qa_history_save_failure_logs_no_private_content(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """历史落库失败不影响问答本身；日志只记异常类型——INSERT 参数含
-    问题/答案/依据片段等私人内容，异常消息与堆栈不得进日志（16 节日志纪律）。"""
+    """历史落库失败不应影响回答，也不得在日志中泄露私人内容。"""
     import logging
 
     from app.domains.memory import router as memory_router
@@ -135,7 +132,7 @@ async def test_qa_history_save_failure_logs_no_private_content(
     )
 
     async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
-        # 模拟驱动层异常消息带出 SQL 参数（含私人内容）
+        # 驱动异常可能携带 SQL 参数，用此回归条件验证日志不会记录异常正文。
         raise RuntimeError("insert failed, params: 我们的数据库口令是多少 / 机密答案ABC")
 
     monkeypatch.setattr(memory_router, "save_qa_history", _boom)
@@ -147,7 +144,7 @@ async def test_qa_history_save_failure_logs_no_private_content(
         )
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["answer"] == "机密答案ABC [1]。"  # 历史失败不影响回答
+    assert resp.json()["answer"] == "机密答案ABC [1]。"
     assert "qa history save failed" in caplog.text
     assert question not in caplog.text
     assert "机密答案ABC" not in caplog.text

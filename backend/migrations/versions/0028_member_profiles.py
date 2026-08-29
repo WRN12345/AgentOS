@@ -1,13 +1,13 @@
-"""0028：member_profiles 表——成员文字档案（设计文档第 7 节②，M3.4）。
+"""0028：创建 member_profiles，存储成员文字档案。
 
 Revision ID: 0028_member_profiles
 Revises: 0027_suggestion_review_expired
 Create Date: 2026-08-24
 
-- 随人走、不挂项目（跨项目可见的唯一例外，16.12）：键为 users.id——
+- 档案随人跨项目、不挂项目：键为 users.id；
   project_members 是每项目一条的成员身份，跨项目的"人"只有 users；
-- 一人一份档案（user_id 唯一）；记录创建/最近编辑者（负责人，15.6）；
-- 不设停用列：成员停用以 users.is_active 为准（16.7 档案保留、不进分配候选，
+- 一人一份档案（user_id 唯一）；记录创建者和最近编辑者；
+- 不设停用列：成员停用以 users.is_active 为准，档案保留但不进入分配候选，
   由查询侧 join 判定，避免冗余标记与账号状态不一致）。
 """
 

@@ -1,9 +1,9 @@
-"""整合精简提议测试（M4.6 验收，设计文档第 8 节）。
+"""核心记忆整合提议的预算、校验、回滚与审计测试。
 
 - consolidate 负载：确认后旧条目作废、新条目生效，预算按"旧腾出+新占用"净额校验；
 - 目标条目缺失/跨项目 404、含已作废条目 409，均整体回滚且建议保持 pending；
 - 负载校验：少于两条目标 / 缺精简内容 → 400；
-- budget_nearly_full 容量快满判断返回（布尔, 占用, 预算），供 M6.7 触发。
+- budget_nearly_full 容量快满判断返回布尔值、占用量和预算。
 """
 
 import pytest
@@ -59,7 +59,6 @@ async def test_consolidate_confirm_flow(project_a: Project, leader: ProjectMembe
         assert active[0].proposed_by_member_id is None  # Agent 提议
         assert active[0].confirmed_by_member_id == leader.id
 
-        # 审计：两条 deprecate + 一条 created（created 带 consolidates 溯源）
         events = (
             await session.execute(
                 select(AuditEvent).where(
@@ -82,13 +81,12 @@ async def test_consolidate_confirm_flow(project_a: Project, leader: ProjectMembe
         assert created[0].after is not None
         assert set(created[0].after["consolidates"]) == {str(e1.id), str(e2.id)}
 
-        # 预算净额：旧两条腾出，新一条占用
         used, _ = await budget_usage(session, project_id=project_a.id)
         assert used == len("约定：禁止递归查询与嵌套事务")
 
 
 async def test_consolidate_net_budget_check(project_a: Project, leader: ProjectMember) -> None:
-    """净额校验：新项目占用满预算时，整合释放空间后仍可确认。"""
+    """预算接近用满时，整合释放的空间应计入可用净额。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         filler = await create_entry(
@@ -114,10 +112,9 @@ async def test_consolidate_net_budget_check(project_a: Project, leader: ProjectM
 
 
 async def test_consolidate_over_budget_rejected(project_a: Project, leader: ProjectMember) -> None:
-    """新内容超过净额预算 → 400，整体回滚，建议保持 pending。"""
+    """新内容超过净额预算时应拒绝、整体回滚并保留待处理状态。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
-        # 先用填充条目把预算占满（剩 10 字余量）
         await create_entry(session, leader, content="f" * (CORE_MEMORY_BUDGET_CHARS - 10))
         e1 = await create_entry(session, leader, content="短一")  # 2 字
         e2 = await create_entry(session, leader, content="短二")  # 2 字
@@ -132,7 +129,6 @@ async def test_consolidate_over_budget_rejected(project_a: Project, leader: Proj
         with pytest.raises(ApiException) as exc_info:
             await submit_suggestion_feedback(session, proposal, action="accepted", member=leader)
         assert exc_info.value.code == ErrorCodes.CORE_MEMORY_BUDGET_EXCEEDED
-        # 回滚：旧条目仍生效
         entries = await list_entries(session, project_id=project_a.id)
         assert all(e.status == "active" for e in entries)
 
@@ -147,7 +143,7 @@ async def test_consolidate_stale_or_cross_project_rollback(
     _, leader_b = await add_member(project_b, "leaderb", "LeaderB123!", role="leader")
     run = await _make_run(project_a.id)
 
-    # 含他项目条目 → 404，且本项目条目不被动
+    # 跨项目目标不得暴露其存在性，也不得改变本项目条目。
     async with async_session_factory() as session:
         e_a = await create_entry(session, leader, content="A 的约定")
         e_b = await create_entry(session, leader_b, content="B 的约定")
@@ -160,7 +156,6 @@ async def test_consolidate_stale_or_cross_project_rollback(
         a_entries = await list_entries(session, project_id=project_a.id)
         assert a_entries[0].status == "active"
 
-    # 含已作废条目 → 409
     async with async_session_factory() as session:
         e1 = await create_entry(session, leader, content="一")
         e2 = await create_entry(session, leader, content="二")
@@ -182,18 +177,15 @@ async def test_consolidate_payload_validation(
     async with async_session_factory() as session:
         e1 = await create_entry(session, leader, content="一")
         e2 = await create_entry(session, leader, content="二")
-        # 少于两条目标
         with pytest.raises(ApiException) as exc_info:
             await create_memory_proposal(
                 session, run=run, action="consolidate", entry_ids=[e1.id], content="x"
             )
         assert exc_info.value.status_code == 400
-        # 重复目标视作一条
         with pytest.raises(ApiException):
             await create_memory_proposal(
                 session, run=run, action="consolidate", entry_ids=[e1.id, e1.id], content="x"
             )
-        # 缺精简内容
         with pytest.raises(ApiException):
             await create_memory_proposal(
                 session, run=run, action="consolidate", entry_ids=[e1.id, e2.id]

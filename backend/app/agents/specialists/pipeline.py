@@ -1,25 +1,12 @@
-"""Requirement Pipeline：需求 → 拆解 → 分配一体化流水线（设计文档 2026-07-30 §4.1）。
+"""Requirement Pipeline：在同一 run 中依次完成需求分析、拆解、分配和记忆评估。
 
-不是第四套独立逻辑，而是在同一个 run 内顺序编排三段模型调用：
-1. 需求分析（复用 requirement_analyst 的输出结构 + involved_aspects，
-   取值限于 member_capabilities.tag 去重词表）；
-2. 拆解（复用 planning_advisor 的输出结构：work_item_breakdown[] +
-   collaboration_points[]）；
-3. 分配（复用 assignment_advisor 的成员能力/负载只读数据查询），为每个拆解项
-   产出 recommended_assignee + candidates + 理由。
-4. 记忆评估（M6.7，记忆模块设计文档第 8 节）：判断本次过程是否有值得沉淀的
-   约定/决策/教训，产出 memory_proposal 走负责人确认通道（不直接生效）；
-   容量快满时优先整合精简提议。
+involved_aspects 仅取 member_capabilities.tag 词表值。需求中按 display_name 或
+username 点名的可分配成员属于 hard constraint，由系统设置 user_specified；Agent
+只能在 reason 或 notes 提示合理性，不能更换人选。未匹配名字进入 unresolved_mentions。
 
-指定人选处理（§3）：需求文本中点名的人选按 display_name/username 匹配
-ProjectMember（排除 role=admin 与 is_active=false），作为 hard constraint
-传入分配段；系统侧权威标记 user_specified=true（Agent 不得更改指定），合理性
-提示只落在该成员的 reason/notes；匹配不到的名字列入 unresolved_mentions[]。
-
-任一段模型输出不是合法 JSON 对象时，先带解析错误反馈重试一次（模型偶发
-输出非法 JSON，如同类对象缺括号）；重试后仍非法才原样透传，由
-validate_output 产生 json_parse / schema_validate 诊断（与 build_output
-同一语义，17.3 节）。
+记忆评估只生成待负责人确认的 memory_proposal，不直接修改核心记忆；容量将满时优先
+建议整合。每段非法 JSON 会携带解析错误重试一次，仍失败则保留原文供 validate_output
+生成 json_parse 或 schema_validate 诊断。
 """
 
 import json
@@ -46,15 +33,14 @@ from app.infrastructure.database.engine import async_session_factory
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "requirement_pipeline"
 SUGGESTION_TYPE = "pipeline"
 PROMPT_VERSION = "requirement_pipeline.v1"
 
-#: 需求文本中点名人选的提示语（如"接口部分给张三""测试由李四负责"）；
-#: 词表匹配之外的点名进入 unresolved_mentions。
+# 匹配“给张三”“由李四负责”等点名表达，词表外名字进入 unresolved_mentions。
 _MENTION_RE = re.compile(
     r"(?:给|交给|指派|派给|由)\s*([A-Za-z0-9_一-鿿]{1,16}?)(?=\s*负责|[，。,；;：:\s]|$)"
 )
@@ -63,12 +49,10 @@ _MENTION_RE = re.compile(
 def resolve_specified_assignees(
     requirement: str, assignable: list[dict]
 ) -> tuple[list[dict], list[str]]:
-    """解析需求文本中点名的人选 →（指定成员列表，未匹配名字列表）。
+    """解析需求中点名的人选，返回指定成员和未匹配名字。
 
-    - 成员的 display_name 或 username 出现在文本中即视为指定（仅覆盖可分配
-      成员：管理员/停用成员已在工具查询层排除，永远不会被指定）；
-    - 点名提示语（给/由…负责等）后跟随、但匹配不到任何成员的名字进入
-      unresolved_mentions，供表单醒目标出。
+    display_name 或 username 出现在文本中即视为指定。管理员和停用成员已由查询层
+    排除；点名表达后的未知名字进入 unresolved_mentions，供表单提示。
     """
     text = requirement or ""
     lowered = text.lower()
@@ -97,16 +81,14 @@ def _load_stage(raw: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-#: 每段模型调用的最大尝试次数：模型偶发输出非法 JSON（如同类对象缺括号），
-#: 带解析错误反馈重试一次通常可恢复；仍失败则透传原文走 json_parse 诊断。
+# 模型偶发产生非法 JSON，附带解析错误重试一次；仍失败则保留原文供诊断。
 _STAGE_MAX_ATTEMPTS = 2
 
 
 async def _call_stage_json(*, system: str, user_prompt: str) -> str:
-    """调用一段模型并要求合法 JSON 对象；失败时带错误反馈重试，最终返回原文。
+    """调用单段模型；非法 JSON 会携带解析错误重试，耗尽后返回最后一次原文。
 
-    返回值语义与 call_model_json 一致：合法 JSON 对象文本，或（重试后仍
-    非法时）最后一次的原始输出，由调用方透传给 validate_output 诊断。
+    返回合法 JSON 对象文本，或供 validate_output 诊断的最后一次原始输出。
     """
     prompt = user_prompt
     raw = ""
@@ -134,14 +116,14 @@ def _stage_parse_error(raw: str) -> str:
 async def _emit_memory_proposal(
     session: AsyncSession, state: "AgentGraphState", memory_stage: dict[str, Any]
 ) -> None:
-    """记忆评估段的产出落为 memory_proposal（M4.4 通道，确认前核心记忆不变）。
+    """将记忆评估结果写为 memory_proposal，确认前不修改核心记忆。
 
-    模型输出不可信：动作非 create/consolidate、entry_ids 非法或负载校验失败
-    只记日志跳过，绝不影响主建议（M6.3 护栏：提议不产生业务状态写入）。
+    模型输出不可信：动作不是 create/consolidate、entry_ids 非法或载荷校验失败时，
+    仅记录日志并跳过，不能影响主建议或写入业务状态。
     """
     action = memory_stage.get("action")
     if action not in ("create", "consolidate"):
-        return  # none 或其他：无提议
+        return  # none 或未知动作均不生成提议
     entry_ids: list[uuid.UUID] | None = None
     if action == "consolidate":
         try:
@@ -187,27 +169,27 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         assignable = await TOOL_REGISTRY["list_assignable_members"].func(
             session, project_id=project_id
         )
-        # M6.4：核心记忆全量常驻注入（第 11 节）；读取失败降级为空（16.5，M6.6 标注）
+        # 核心记忆读取失败时降级为空，并在最终结果中标记。
         core_memory, core_ok = await safe_core_memory_block(
             session, project_id=project_id
         )
-        # M6.5：按需检索（文档+历史 ≤8 段/3000 字符）；失败降级为空（16.5）
+        # 文档与历史按需检索，失败时降级为空。
         requirement = state.get("prompt", "")
         reference, retrieval_ok = await collect_retrieval_block(
             session, project_id=project_id, query=requirement
         )
-        # M6.5：分配环节的团队事实记录（完成统计 + 成员档案摘录）
+        # 分配环节参考团队完成统计和成员档案摘录。
         team_memory, team_ok = await collect_team_memory_block(
             session, project_id=project_id, query=requirement
         )
-        # 任一记忆读取失败即降级标注（M6.6 消费此标记）
+        # 任一记忆来源读取失败都标记为降级，主流程继续执行。
         memory_ok = core_ok and retrieval_ok and team_ok
 
     context = state.get("context", {})
     project_name = (context.get("project") or {}).get("name") or ""
     specified, unresolved = resolve_specified_assignees(requirement, assignable)
 
-    # 1. 需求分析：目标/约束/交付物/验收标准 + involved_aspects（限词表取值）
+    # involved_aspects 由提示词约束为技能词表中的值。
     raw_analysis = await _call_stage_json(
         system=pipeline_prompts.ANALYZE_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_analyze_prompt(
@@ -219,9 +201,8 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
     )
     analysis = _load_stage(raw_analysis)
     if analysis is None:
-        return raw_analysis  # 透传：validate_output 抛 json_parse 诊断
+        return raw_analysis  # 保留原始输出，交给 validate_output 诊断
 
-    # 2. 拆解：work_item_breakdown[] + collaboration_points[]
     raw_breakdown = await _call_stage_json(
         system=pipeline_prompts.BREAKDOWN_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_breakdown_prompt(
@@ -239,7 +220,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         return raw_breakdown
     breakdown = breakdown_stage.get("work_item_breakdown") or []
 
-    # 3. 分配：复用 assignment 的成员能力/负载数据，指定人选为硬约束
+    # 指定人选是分配阶段不可更改的硬约束。
     raw_assign = await _call_stage_json(
         system=pipeline_prompts.ASSIGN_SYSTEM_PROMPT,
         user_prompt=pipeline_prompts.render_assign_prompt(
@@ -257,8 +238,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         return raw_assign
     assignments = assign_stage.get("assignments") or []
 
-    # 4. 记忆评估（M6.7，第 8 节）：值得记住 → memory_proposal（确认后才生效，
-    # 核心记忆不变）；容量快满（M4.6 判断）时提示模型优先整合精简
+    # 值得保留的信息只生成 memory_proposal，确认后才生效；容量将满时优先整合。
     if project_id is not None:
         async with async_session_factory() as session:
             entries = await list_entries(session, project_id=project_id)
@@ -282,8 +262,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
             if memory_stage is not None:
                 await _emit_memory_proposal(session, state, memory_stage)
 
-    # 合并：assignments 与拆解项按下标一一对应；user_specified 由系统侧按
-    # 点名解析结果权威标记，不信任模型自报值（Agent 不得更改用户指定）。
+    # assignments 与拆解项按下标对应；user_specified 以系统解析结果为准。
     specified_ids = {member["member_id"] for member in specified}
     work_items: list[dict[str, Any]] = []
     for index, item in enumerate(breakdown):
@@ -312,8 +291,7 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         )
         if isinstance(risk, str)
     ]
-    # 16.5 降级标注（M6.6）：任一记忆读取失败（embedding/检索/核心记忆）即退化为
-    # 无记忆模式，结果显式标注"本次未参考记忆"，拆解/分配主流程不受影响
+    # 任一记忆来源失败即进入无记忆模式并显式标注，但不影响拆解和分配。
     memory_status = "ok" if memory_ok else "degraded"
     if not memory_ok:
         stage_risks.append("本次未参考记忆（记忆/检索服务不可用，已降级为无记忆模式）")
@@ -327,10 +305,10 @@ async def requirement_pipeline_capability(state: "AgentGraphState") -> Any:
         "involved_aspects": analysis.get("involved_aspects") or [],
         "work_item_breakdown": work_items,
         "collaboration_points": breakdown_stage.get("collaboration_points") or [],
-        # 未匹配点名由系统侧解析注入，不信任模型自报值
+        # 未匹配点名以系统解析结果为准。
         "unresolved_mentions": unresolved,
         "risks": stage_risks,
-        # 记忆参考状态（16.5）：ok=已参考记忆；degraded=本次未参考记忆
+        # ok 表示已参考记忆，degraded 表示本次未参考记忆。
         "memory_status": memory_status,
     }
     member_ids = sorted(

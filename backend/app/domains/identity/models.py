@@ -1,7 +1,7 @@
-"""身份领域数据模型（第 11 章）：users 与 refresh_tokens。
+"""身份领域的 `users` 与 `refresh_tokens` 数据模型。
 
-- 密码只存 Argon2 哈希；Refresh Token 只存 SHA-256 哈希（第 16 章）。
-- users.token_version：令牌版本，提升后旧 Access Token 立即失效。
+- 密码只存 `Argon2` 哈希，`Refresh Token` 只存 `SHA-256` 哈希。
+- 提升 `users.token_version` 会立即使旧 `Access Token` 失效。
 """
 
 import uuid

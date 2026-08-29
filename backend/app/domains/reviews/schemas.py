@@ -1,9 +1,9 @@
-"""审核接口请求/响应模型（7.5、12.5 节）。
+"""审核接口请求与响应模型。
 
-decision 三种结论（7.5 节）：
+decision 支持三种结论：
 - approve：通过并完成工作项（IN_REVIEW → COMPLETED）；
 - request_changes：要求修改（IN_REVIEW → IN_PROGRESS），必须填反馈；
-- reject：拒绝当前交付但保持工作项继续执行（状态保持 IN_REVIEW）。
+- reject：拒绝当前交付，工作项保持 IN_REVIEW。
 """
 
 import uuid
@@ -37,6 +37,6 @@ class ReviewOut(BaseModel):
     decision: str
     feedback: str | None
     reviewed_by: MemberBrief
-    work_item_status: str  # 审核生效后的工作项状态
+    work_item_status: str
     created_at: datetime
     updated_at: datetime

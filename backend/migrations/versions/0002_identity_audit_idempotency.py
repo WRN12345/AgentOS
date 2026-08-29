@@ -44,7 +44,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_refresh_tokens_user_id", "refresh_tokens", ["user_id"])
 
-    # 追加式审计事件表（第 11、16 章）：无 updated_at，不允许修改和删除
+    # 审计事件只追加，不设 updated_at，也不允许修改或删除
     op.create_table(
         "audit_events",
         sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.func.gen_random_uuid(), primary_key=True),
@@ -70,7 +70,7 @@ def upgrade() -> None:
         sa.Column("response_body", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
-    # user + key + endpoint 唯一；user_id 为 NULL 时按零值 UUID 参与唯一性，避免跨用户串用
+    # 用户、幂等键与端点的组合唯一；user_id 为 NULL 时以零值 UUID 参与唯一性，避免跨用户复用
     op.execute(
         """
         CREATE UNIQUE INDEX ux_idempotency_records_user_key_endpoint

@@ -1,11 +1,10 @@
-"""审计事件模型（第 11、16 章）：audit_events 追加式事件表。
+"""追加式审计事件表 `audit_events`。
 
 只允许新增：本模块及全项目不提供任何更新/删除该表记录的代码路径。
-表结构刻意不含 updated_at —— 记录落库后不可变。
+表结构刻意不含 `updated_at`，记录落库后不可变。
 
-项目归属（spec D1 / ticket 07）：project_id 落库时从请求上下文快照捕获，
-不靠查询时推导。全局动作（登录/登出/管理控制台）无项目上下文，记为 NULL，
-与幂等记录的零值桶语义一致（ticket 06）。
+`project_id` 在写入时从请求上下文快照捕获，不在查询时推导。登录、登出等
+全局动作没有项目上下文，记录为 `NULL`。
 """
 
 import uuid
@@ -22,7 +21,7 @@ from app.infrastructure.models.base import Base, UUIDPrimaryKeyMixin
 class AuditEvent(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "audit_events"
 
-    # 项目归属快照（ticket 07）：可空，全局动作无项目上下文
+    # 保存写入时的项目归属快照；全局动作没有项目上下文。
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=True
     )

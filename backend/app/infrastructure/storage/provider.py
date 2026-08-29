@@ -1,11 +1,8 @@
-"""存储抽象（第 14 章）：业务层只依赖 StorageProvider 接口。
+"""存储抽象，业务层只依赖 `StorageProvider` 接口。
 
-- 数据库仅保存相对 storage_key，不保存宿主机绝对路径；
-- 上传走 stage → 流式写入 → commit（原子落位）/ discard（补偿清理）流程；
-- 下载经 iter_chunks 流式读取，上传目录不直接暴露给静态服务/反向代理。
-
-演进空间（2.2/21.2 节）：后续 S3StorageProvider（MinIO/S3/OSS）实现同一接口，
-stage 可落本地临时文件后在 commit 时上传对象存储，业务 API 不变化。
+数据库仅保存相对 `storage_key`，不保存宿主机绝对路径。上传通过 `stage` 流式写入，
+再由 `commit` 原子落位或由 `discard` 补偿清理；下载通过 `iter_chunks` 流式读取。
+上传目录不得直接暴露给静态服务或反向代理。
 """
 
 from abc import ABC, abstractmethod
@@ -65,7 +62,7 @@ class StorageProvider(ABC):
 
     @abstractmethod
     async def discard(self, staged: StagedUpload) -> None:
-        """丢弃暂存内容（校验失败或落库失败的补偿清理，17.2 节）。"""
+        """在校验或落库失败时丢弃暂存内容。"""
 
 
 _provider: StorageProvider | None = None

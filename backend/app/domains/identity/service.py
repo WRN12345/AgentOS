@@ -1,7 +1,7 @@
-"""身份应用服务：登录、刷新、登出与建号（12.1 节）。
+"""身份应用服务：登录、令牌刷新、登出与账号创建。
 
-会话事务约定：authenticate/create_user 只 flush 不 commit；
-login/rotate_refresh_token/revoke_refresh_token 是完整用例，内部自行 commit。
+`authenticate` 和 `create_user` 只执行 `flush`，事务由调用方提交；
+`login`、`rotate_refresh_token` 和 `revoke_refresh_token` 是完整用例，会自行提交。
 日志纪律：只记录用户名与用户 ID，绝不记录密码、令牌原文。
 """
 
@@ -30,7 +30,7 @@ logger = setup_logging("backend")
 async def create_user(
     session: AsyncSession, username: str, password: str, is_active: bool = True
 ) -> User:
-    """创建账号（只 flush，由调用方统一 commit）。首版不开放公开注册（16 节）。"""
+    """创建账号并执行 `flush`，由调用方提交事务。此服务不提供公开注册。"""
     user = User(
         username=username,
         password_hash=hash_password(password),
@@ -52,7 +52,7 @@ async def authenticate(session: AsyncSession, username: str, password: str) -> U
 
 
 async def _issue_token_pair(session: AsyncSession, user: User) -> TokenPairResponse:
-    """签发 Access/Refresh Token 对（只 flush，由调用方统一 commit）。"""
+    """签发 `Access Token` 和 `Refresh Token`，仅执行 `flush`。"""
     plain_refresh = generate_refresh_token()
     session.add(
         RefreshToken(
@@ -90,7 +90,7 @@ async def _get_valid_refresh_token(session: AsyncSession, refresh_token: str) ->
 
 
 async def rotate_refresh_token(session: AsyncSession, refresh_token: str) -> TokenPairResponse:
-    """刷新并轮换：旧 Refresh Token 立即撤销，签发新令牌对。"""
+    """撤销旧 `Refresh Token` 并签发新令牌对。"""
     record = await _get_valid_refresh_token(session, refresh_token)
     user = await session.get(User, record.user_id)
     if user is None or not user.is_active:
@@ -103,7 +103,7 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str) -> Tok
 
 
 async def revoke_refresh_token(session: AsyncSession, refresh_token: str) -> None:
-    """登出：幂等撤销 Refresh Token；未知/已撤销令牌同样成功，避免令牌探测。"""
+    """幂等撤销 `Refresh Token`；未知或已撤销令牌同样成功，避免令牌探测。"""
     record = (
         await session.execute(
             select(RefreshToken).where(

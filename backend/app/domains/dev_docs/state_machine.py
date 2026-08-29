@@ -1,4 +1,4 @@
-"""开发文档状态机（设计文档 2026-07-30 §3/§4.1）：纯函数，可独立单测。
+"""可独立测试的开发文档状态机。
 
 合法迁移：
     DRAFT     → SUBMITTED  主执行人提交审核（submit）
@@ -7,9 +7,9 @@
     SUBMITTED → RETURNED   负责人打回（return）
 
 角色权限不在本模块：状态机只管"状态能否迁移"，"谁可以触发"
-由应用服务层（domains/dev_docs/service.py）显式校验（16 节）。
-非法迁移一律抛 ApiException（DEV_DOC_INVALID_TRANSITION，409）。
-豁免（waive）不是状态迁移：独立标记，不改变文档状态。
+由 `domains/dev_docs/service.py` 中的应用服务显式校验。
+非法迁移抛出 `ApiException`，错误码为 `DEV_DOC_INVALID_TRANSITION`，HTTP 状态为
+`409`。`waive` 不是状态迁移，不改变文档状态。
 """
 
 from enum import StrEnum
@@ -24,7 +24,6 @@ class DevDocStatus(StrEnum):
     RETURNED = "RETURNED"
 
 
-# 命令 → （允许的源状态集合，目标状态）
 _TRANSITIONS: dict[str, tuple[frozenset[DevDocStatus], DevDocStatus]] = {
     "submit": (
         frozenset({DevDocStatus.DRAFT, DevDocStatus.RETURNED}),
@@ -38,7 +37,7 @@ COMMANDS = tuple(_TRANSITIONS.keys())
 
 
 def transition(current: str | DevDocStatus, command: str) -> DevDocStatus:
-    """按命令推进状态；非法迁移抛 409 DEV_DOC_INVALID_TRANSITION。"""
+    """按命令推进状态；非法迁移抛出 `ApiException`，由接口映射为 `409`。"""
     try:
         current_status = DevDocStatus(current)
     except ValueError:

@@ -1,8 +1,7 @@
-"""项目应用服务与权限策略（4.1、6.1 节）。
+"""多项目应用服务与权限策略。
 
-权限规则集中在本模块：每个用例显式校验项目角色与资源关系（16 节）。
-审计事件与业务写入同事务（原则 5）：record_event 只 flush，由本服务统一 commit。
-日志纪律：不记录密码、令牌（16 节）。
+每个用例显式校验项目角色和资源归属，跨项目资源按不存在处理。审计事件通过
+`record_event` 仅执行 `flush`，与业务写入在同一事务提交。日志不得记录密码或令牌。
 """
 
 import uuid
@@ -37,11 +36,8 @@ from app.domains.work_items.state_machine import ACTIVE_STATUSES
 logger = setup_logging("backend")
 
 
-# ---------- 查询与权限策略 ----------
-
-
 async def get_default_project(session: AsyncSession) -> Project:
-    """返回首版唯一项目记录（2.2 节不含多项目）。"""
+    """返回创建时间最早的项目，供未显式指定项目的兼容路径使用。"""
     project = (await session.execute(select(Project).order_by(Project.created_at))).scalars().first()
     if project is None:
         raise ApiException(500, ErrorCodes.INTERNAL_ERROR, "项目尚未初始化，请先执行 bootstrap")
@@ -54,11 +50,11 @@ async def get_member(
     stmt = (
         select(ProjectMember)
         .where(ProjectMember.id == member_id)
-        .options(selectinload(ProjectMember.capabilities))  # 预加载，避免异步懒加载
+        .options(selectinload(ProjectMember.capabilities))  # 预加载以避免异步懒加载
     )
     member = (await session.execute(stmt)).scalar_one_or_none()
     if member is None or member.project_id != project_id:
-        # 墙外对象等同不存在（同 work_items 域 get_work_item 的越权 404 模式）
+        # 跨项目资源按不存在处理，避免泄露其存在性
         raise ApiException(404, ErrorCodes.NOT_FOUND, "成员不存在")
     return member
 
@@ -73,14 +69,12 @@ async def get_member_by_user(
 
 
 def require_leader(member: ProjectMember) -> None:
-    """成员账号管理：仅项目负责人可操作（创建/编辑/禁用成员、维护能力）。
-    全局管理员（users.is_admin）不通过成员身份鉴权，由 get_current_admin 依赖单独校验。
+    """要求成员具有项目负责人角色。
+
+    全局管理员不通过项目成员身份鉴权，需要由 `get_current_admin` 单独校验。
     """
     if member.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可执行该操作")
-
-
-# ---------- 序列化 ----------
 
 
 def _capability_to_out(cap: MemberCapability) -> CapabilityOut:
@@ -97,7 +91,7 @@ def _capability_to_out(cap: MemberCapability) -> CapabilityOut:
 def member_to_out(
     member: ProjectMember, username: str, active_work_items: int = 0
 ) -> MemberOut:
-    """成员摘要序列化：仅透明字段，不含密码哈希、令牌（16 节）。"""
+    """序列化成员协作摘要，不包含密码哈希或令牌。"""
     return MemberOut(
         id=member.id,
         user_id=member.user_id,
@@ -117,7 +111,7 @@ def member_to_out(
 async def _active_work_item_counts(
     session: AsyncSession, project_id: uuid.UUID
 ) -> dict[uuid.UUID, int]:
-    """本项目各成员当前负载：作为主执行人的进行中工作项数量（6.2 节"当前有效任务负载"）。"""
+    """统计项目内各成员作为主执行人的活跃工作项数量。"""
     stmt = (
         select(WorkItem.assignee_id, func.count())
         .where(WorkItem.status.in_(ACTIVE_STATUSES), WorkItem.project_id == project_id)
@@ -126,11 +120,8 @@ async def _active_work_item_counts(
     return {row[0]: row[1] for row in (await session.execute(stmt)).all()}
 
 
-# ---------- 用例 ----------
-
-
 async def list_members(session: AsyncSession, actor: ProjectMember) -> list[MemberOut]:
-    """本项目全员摘要（原则 6：项目内透明）。任何项目成员可查，权限在依赖项校验。"""
+    """返回当前项目的全体成员摘要；调用方必须已通过成员身份校验。"""
     stmt = (
         select(ProjectMember)
         .where(ProjectMember.project_id == actor.project_id)
@@ -148,11 +139,10 @@ async def list_members(session: AsyncSession, actor: ProjectMember) -> list[Memb
 async def create_member(
     session: AsyncSession, actor: ProjectMember, payload: MemberCreateIn
 ) -> MemberOut:
-    """负责人添加已有账号成员（16 节，不开放公开注册）。
+    """负责人将已有账号添加到当前项目。
 
-    2026-08-17 规则调整：账号创建收敛到 admin（admin 控制台建号），本接口只按 username
-    （全局唯一）或 user_id 解析已有账号加入本项目，不建号、无初始密码，固定为「成员」角色
-    （每项目仅一名负责人，由 admin 指定/变更）。本函数只建本项目成员，账号建删走 identity/admin 域。
+    账号通过全局唯一的 `username` 或 `user_id` 解析。本用例不创建账号，新成员固定为
+    `member`；全局管理员账号不能参与项目业务，负责人角色由管理员另行维护。
     """
     require_leader(actor)
 
@@ -178,7 +168,7 @@ async def create_member(
         weekly_available_hours=payload.weekly_available_hours,
         git_username=payload.git_username,
     )
-    member.capabilities = []  # 显式初始化集合，避免 commit 后访问触发异步懒加载
+    member.capabilities = []  # 初始化关系，避免提交后访问触发异步懒加载
     session.add(member)
     await session.flush()
     await record_event(
@@ -203,11 +193,10 @@ async def create_member(
 async def update_member(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: MemberUpdateIn
 ) -> MemberOut:
-    """负责人维护成员资料 / 项目内禁用启用。
+    """负责人维护成员资料或项目内启用状态。
 
-    2026-08-17 规则调整：角色仅由 admin 指定/变更（每项目一名负责人），本接口不再处理 role。
-    项目内禁用（is_active）只停本项目成员身份：该账号仍可登录、其他项目照常（get_current_member
-    按本项目 member.is_active 门禁 403）；全局禁用（账号无法登录）走 admin 控制台 PATCH /users/{id}。
+    此处的 `is_active` 只控制当前项目成员身份，不影响账号登录或其他项目；全局账号状态
+    由管理员接口维护。现任负责人不能直接停用，必须先变更项目负责人。
     """
     require_leader(actor)
     member = await get_member(session, member_id, project_id=actor.project_id)
@@ -233,9 +222,6 @@ async def update_member(
         setattr(member, field, new_value)
 
     user = await session.get(User, member.user_id)
-    # 项目内禁用不再联动 users.is_active（2026-08-17 解耦）：账号仍可登录，
-    # 全局禁用由 admin 控制台 PATCH /users/{id} 单独管理。
-
     if after:
         await session.flush()
         await record_event(
@@ -248,7 +234,8 @@ async def update_member(
             after=after,
         )
         await session.commit()
-        await session.refresh(member)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
+        # 异步会话不能隐式重载数据库更新后过期的 `updated_at`
+        await session.refresh(member)
         logger.info("member updated: member_id=%s, fields=%s", member.id, sorted(after))
     return member_to_out(member, user.username if user else "")
 
@@ -256,10 +243,10 @@ async def update_member(
 async def put_capabilities(
     session: AsyncSession, actor: ProjectMember, member_id: uuid.UUID, payload: CapabilitiesPutIn
 ) -> MemberOut:
-    """整体替换能力集（PUT 语义，6.2 节）。
+    """按 `PUT` 语义整体替换成员能力集。
 
-    - 成员本人：只能操作自己的能力，提交后 confirmed 复位为未确认；
-    - 负责人：可对任意成员操作，confirm=true 时同时确认并留痕。
+    普通成员只能修改自己的能力，提交后状态复位为未确认；负责人可以修改任意成员，
+    并通过 `confirm=true` 同时确认和记录审计事件。
     """
     can_manage = actor.role == ROLE_LEADER
     if not can_manage and actor.id != member_id:
@@ -274,7 +261,7 @@ async def put_capabilities(
     changed = before != after
 
     confirmed_at = datetime.now(UTC) if payload.confirm else None
-    # 先删除旧能力并 flush：唯一约束 (member_id, tag) 下，同批 flush 会先插后删导致冲突
+    # 先删除并 `flush`，避免同批插入在 `(member_id, tag)` 唯一约束上与旧记录冲突
     member.capabilities = []
     await session.flush()
     member.capabilities = [
@@ -311,7 +298,8 @@ async def put_capabilities(
             after={"capabilities": after, "confirmed_by_member_id": str(actor.id)},
         )
     await session.commit()
-    await session.refresh(member)  # updated_at 由数据库 onupdate 生成，刷新取回避免异步懒加载
+    # 异步会话不能隐式重载数据库更新后过期的 `updated_at`
+    await session.refresh(member)
 
     user = await session.get(User, member.user_id)
     return member_to_out(member, user.username if user else "")

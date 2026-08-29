@@ -1,4 +1,4 @@
-"""转派申请接口（12.4 节）。
+"""转派申请接口。
 
 - POST /work-items/{id}/transfer-requests   仅工作项当前主执行人：发起转派申请
 - GET  /work-items/{id}/transfer-requests   任何成员：该工作项的转派申请历史
@@ -8,8 +8,8 @@
 - POST /transfer-requests/{id}/reject       仅负责人：PENDING → REJECTED
 - POST /transfer-requests/{id}/cancel       仅发起人：PENDING → CANCELLED
 
-所有写接口支持 Idempotency-Key，且要求携带 version 做乐观锁（17.2 节）。
-approve/reject 可携带 decision_note（审批意见，只入审计不进通知，16 节）。
+所有写接口支持 Idempotency-Key，并要求携带 version 进行乐观锁校验。
+approve/reject 可携带 decision_note，审批意见仅写入审计，不进入通知。
 """
 
 import uuid

@@ -1,14 +1,8 @@
-"""闭环经验总结（设计文档第 10 节，M5.3）。
+"""从已完成工作项中提炼可复用经验。
 
-工作项完成（审核通过）后，后台让模型回看这次过程，提炼可复用的经验文字。
-
-- 输入：工作项结论文本（复用 M5.2 的 build_work_item_conclusion_text）；
-- 输出：一两句可复用经验；模型判断"没有值得沉淀的"时返回约定标记 NO_EXPERIENCE，
-  调用方据此跳过（不产出提议）；
-- 产出接线（M5.4）：create_experience_proposal 把经验文字生成 memory_proposal，
-  走负责人确认通道——经验不直接生效（第 10 节）；
-- 模型错误（ModelError）不由本模块兜底，交给 worker 任务层按 16.9 处理：
-  只记日志、不重试——经验沉淀允许偶尔丢失。
+工作项审核通过后，后台模型根据结论文本生成简短经验。无可沉淀内容时返回
+`NO_EXPERIENCE`，不创建提议。生成结果通过核心记忆审批流交给负责人确认，不能直接生效。
+模型错误交由 `worker` 记录，经验总结失败不影响工作项主流程。
 """
 
 import uuid
@@ -28,13 +22,10 @@ from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
 
-#: 经验总结任务类型（reviews 完成路径投递、worker 消费共用）
 MEMORY_SUMMARY_TASK_TYPE = "memory.summary"
 
-#: 模型表示"无可沉淀经验"的约定输出
 NO_EXPERIENCE = "无"
 
-#: 经验总结运行记录的 agent_type（提议须经 run 推导项目归属，M5.4）
 EXPERIENCE_SUMMARY_AGENT_TYPE = "experience_summary"
 
 _SUMMARY_SYSTEM = (
@@ -50,9 +41,9 @@ _SUMMARY_SYSTEM = (
 async def summarize_work_item(
     work_item_id: uuid.UUID, session: AsyncSession
 ) -> str | None:
-    """回看工作项过程并提炼经验，返回经验文字；未完成/无经验返回 None。
+    """提炼工作项经验；工作项未完成或无可用经验时返回 `None`。
 
-    ModelError（不可用/超时）直接冒泡给调用方（worker 按 16.9 只记日志）。
+    模型不可用或超时时让异常直接交给 `worker` 处理。
     """
     conclusion = await build_work_item_conclusion_text(session, work_item_id)
     if conclusion is None:
@@ -73,10 +64,10 @@ async def summarize_work_item(
 async def create_experience_proposal(
     session: AsyncSession, *, item: WorkItem, summary: str
 ) -> AgentSuggestion:
-    """总结产出自动生成核心记忆提议（M5.4，第 10 节）：走 M4.4 确认通道，不直接生效。
+    """将经验总结转换为待负责人确认的核心记忆提议。
 
-    提议须挂在 agent_runs 上（FK + 项目归属推导）：补一条 experience_summary
-    运行记录（trigger_source=event，status=succeeded——总结本身即本次运行）。
+    提议必须关联 `agent_runs` 以通过外键和运行记录推导项目归属，因此会创建一条
+    成功的 `experience_summary` 运行记录。
     """
     run = AgentRun(
         status="succeeded",
@@ -98,7 +89,7 @@ async def create_experience_proposal(
 
 
 async def enqueue_work_item_summary(item: WorkItem) -> None:
-    """工作项完成（审核通过）后投递经验总结任务（M5.3，best-effort）。"""
+    """工作项审核通过并完成后投递经验总结任务；失败时仅记录日志。"""
     redis_client: redis.Redis = create_redis_client()
     try:
         await enqueue(

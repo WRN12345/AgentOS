@@ -1,9 +1,9 @@
-"""deliverables 数据模型（7.5、11 章）。
+"""交付物数据模型 `deliverables`。
 
-- 三类交付物：git_link（链接 URL 存 content）、text（正文存 content）、
-  file（引用 stored_files，可追溯 sha256，2.1 节）；
-- 版本号在同一工作项内从 1 递增，重提不覆盖旧版本（7.5 节）；
-  (work_item_id, version) 唯一约束兜底并发重提（17.2 节）。
+- `git_link` 和 `text` 将内容存入 `content`，`file` 引用 `stored_files` 并可追溯
+  `sha256`；
+- 版本号在同一工作项内递增，重提不覆盖旧版本；
+  `(work_item_id, version)` 唯一约束用于阻止并发创建重复版本。
 """
 
 import uuid
@@ -24,8 +24,7 @@ class Deliverable(CoreModel):
         UniqueConstraint("work_item_id", "version", name="uq_deliverables_item_version"),
     )
 
-    # 项目归属（spec D1：有独立列表入口的表冗余 project_id，NOT NULL；
-    # 落库时经所属工作项推导填充，API 不接受传入）
+    # 项目归属从所属工作项推导，API 不接受客户端传入。
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
     )
@@ -33,9 +32,9 @@ class Deliverable(CoreModel):
         UUID(as_uuid=True), ForeignKey("work_items.id"), index=True, nullable=False
     )
     type: Mapped[str] = mapped_column(nullable=False)
-    # git_link 的 URL 或 text 的正文；file 类型为 None
+    # 保存 `git_link` 的 URL 或 `text` 正文；`file` 类型为 `None`。
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # file 类型引用的已上传文件（sha256 见 stored_files）
+    # `file` 类型引用已上传文件，完整性哈希保存在 `stored_files`。
     stored_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stored_files.id"), nullable=True
     )

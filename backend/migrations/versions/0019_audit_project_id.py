@@ -1,9 +1,9 @@
 """0019：审计事件项目归属——audit_events 增加 project_id 冗余列。
 
-给「有独立列表入口」的 audit_events 冗余 project_id（spec D1），
-落库时从请求上下文（X-Project-Id 头）快照捕获，不靠查询时推导（ticket 07）：
+为需要按项目独立列出的 audit_events 冗余 project_id，
+落库时从请求上下文的 X-Project-Id 请求头捕获快照，不在查询时推导：
 - project_id 可空：全局动作（登录/登出/管理控制台）无项目上下文，记为 NULL，
-  与幂等记录的零值桶语义一致（ticket 06）；
+  与幂等记录的零值桶语义一致；
 - 外键 → projects.id，加索引供列表按项目过滤（负责人只见本项目事件）；
 - 存量记录（若有）project_id 为 NULL，表示「项目化改造前的全局事件」。
 
@@ -31,8 +31,8 @@ def upgrade() -> None:
             "project_id",
             postgresql.UUID(as_uuid=True),
             nullable=True,
-            # D1 取舍（见迁移头注释）：可空 = 全局动作（登录/登出/管理控制台），
-            # 项目动作必非空（HTTP 流同一 X-Project-Id 头既门禁写操作又供快照）。
+            # 全局动作（登录、登出、管理控制台）允许为空；项目动作必须带项目，
+            # HTTP 请求中的 X-Project-Id 既用于校验写操作，也用于记录项目快照。
             comment="项目归属快照（落库时捕获，不靠派生）；NULL=全局动作，项目动作必带项目",
         ),
     )

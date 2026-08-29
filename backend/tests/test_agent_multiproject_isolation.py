@@ -1,11 +1,7 @@
-"""Ticket 05 验收：AI 辅助与后台扫描路径项目化（跨项目隔离测试）。
+"""验证 AI 辅助、通知和后台扫描的跨项目隔离。
 
-对照 issue 05 的 5 条 check：
-- agent 运行带项目归属；其建议经运行推导归属（agent_suggestions 不冗余 project_id）；
-- agent 全部工具查询限定当前项目，不泄漏其他项目上下文；
-- agent 任务队列载荷显式携带项目上下文（worker 无请求头，不能靠 header 推导）；
-- 到期扫描生成的通知按工作项项目落库；
-- 风险扫描的项目级分析带项目维度、去重键项目化，不跨项目互相 skip。
+运行、队列载荷和通知必须携带项目归属；工具查询只能访问当前项目。风险扫描应按
+项目独立去重，并在并发扫描和陈旧租约场景下保持每个项目最多一个活跃运行。
 """
 
 import asyncio
@@ -57,7 +53,7 @@ async def _make_work_item(
 
 
 async def test_event_triggered_runs_receive_work_item_project_id(monkeypatch) -> None:
-    """工作项提交与开发文档提交触发的 run 都必须显式继承工作项项目归属。"""
+    """工作项和开发文档事件触发的运行应继承工作项项目归属。"""
     from app.domains.dev_docs import service as dev_doc_service
     from app.domains.work_items import service as work_item_service
 
@@ -84,13 +80,10 @@ async def test_event_triggered_runs_receive_work_item_project_id(monkeypatch) ->
     assert captured == [project_id, project_id]
 
 
-# ---------- check ③：队列载荷显式携带项目上下文 ----------
-
-
 async def test_agent_run_queue_payload_and_record_carry_project_id(
     project_a: Project, leader: ProjectMember
 ) -> None:
-    """agent_runs.project_id 落库 + 队列载荷显式带 project_id（worker 无请求头）。"""
+    """运行记录和队列载荷都应显式保存项目 ID。"""
     item = await _make_work_item(leader.id, project_id=project_a.id)
     redis_client = create_redis_client()
     try:
@@ -118,7 +111,7 @@ async def test_agent_run_queue_payload_and_record_carry_project_id(
 async def test_retry_payload_carries_project_id(
     project_a: Project, leader: ProjectMember
 ) -> None:
-    """人工重试的队列载荷同样带 project_id（agent_runs 持久化的原归属）。"""
+    """人工重试应从运行记录恢复原项目 ID 到队列载荷。"""
     item = await _make_work_item(leader.id, project_id=project_a.id)
     redis_client = create_redis_client()
     try:
@@ -131,7 +124,7 @@ async def test_retry_payload_carries_project_id(
                 project_id=project_a.id,
                 work_item_id=item.id,
             )
-            run.status = "failed"  # 仅 failed 可重试（路由层校验，这里直接构造）
+            run.status = "failed"  # 服务只允许重试失败运行。
             from app.agents.service import retry_agent_run
 
             await retry_agent_run(session, redis_client, run)
@@ -143,11 +136,8 @@ async def test_retry_payload_carries_project_id(
         await redis_client.aclose()
 
 
-# ---------- check ②：工具查询限定当前项目，不泄漏 ----------
-
-
 async def test_tools_list_are_project_scoped(project_a: Project, project_b: Project) -> None:
-    """列表类工具按 project 过滤：A 项目只看到 A 的工作项/成员，看不到 B。"""
+    """列表工具只能返回当前项目的工作项和成员。"""
     _, alice = await add_member(project_a, "alice_a", "AliceA123!", display_name="爱丽丝")
     _, bob = await add_member(project_b, "bob_b", "BobB123!", display_name="鲍勃")
     item_a = await _make_work_item(alice.id, project_id=project_a.id, status="IN_PROGRESS")
@@ -173,7 +163,7 @@ async def test_tools_list_are_project_scoped(project_a: Project, project_b: Proj
 async def test_tools_join_derived_are_project_scoped(
     project_a: Project, project_b: Project
 ) -> None:
-    """无 project 冗余列的表（transfer_requests）经 join 推导过滤，不跨项目泄漏。"""
+    """没有项目列的实体应通过关联关系推导归属并隔离查询。"""
     _, alice = await add_member(project_a, "alice_a2", "AliceA2!", display_name="爱丽丝")
     _, charlie = await add_member(project_a, "char_a", "CharA123!", display_name="查理")
     _, bob = await add_member(project_b, "bob_b2", "BobB2!", display_name="鲍勃")
@@ -181,7 +171,7 @@ async def test_tools_join_derived_are_project_scoped(
     item_b = await _make_work_item(bob.id, project_id=project_b.id, status="READY")
 
     async with async_session_factory() as session:
-        # A 项目一条待批转派；B 项目一条待批转派
+        # 分别创建两个项目的数据，验证关联查询不会混合结果。
         session.add_all(
             [
                 TransferRequest(
@@ -194,7 +184,7 @@ async def test_tools_join_derived_are_project_scoped(
                 TransferRequest(
                     work_item_id=item_b.id,
                     from_member_id=bob.id,
-                    to_member_id=alice.id,  # to_member 不必同项目，归属按 work_item 推导
+                    to_member_id=alice.id,  # 转派归属由工作项决定，而非目标成员。
                     reason="转给爱丽丝",
                     impact_note="影响可控",
                 ),
@@ -202,13 +192,11 @@ async def test_tools_join_derived_are_project_scoped(
         )
         await session.commit()
 
-        # A 项目视角只看到 A 的转派
         rows_a = await TOOL_REGISTRY["list_transfer_history"].func(
             session, project_id=project_a.id
         )
         assert [r["work_item_id"] for r in rows_a] == [str(item_a.id)]
 
-        # 待审批汇总同样按项目过滤
         pending_a = await TOOL_REGISTRY["list_pending_approvals"].func(
             session, project_id=project_a.id
         )
@@ -218,14 +206,14 @@ async def test_tools_join_derived_are_project_scoped(
 async def test_tools_single_item_ownership_blocks_cross_project(
     project_a: Project, project_b: Project
 ) -> None:
-    """单条工具做项目归属校验：A 项目查 B 的工作项/文档视为不存在。"""
+    """单条查询访问其他项目实体时应表现为不存在。"""
     _, alice = await add_member(project_a, "alice_a3", "AliceA3!", display_name="爱丽丝")
     _, bob = await add_member(project_b, "bob_b3", "BobB3!", display_name="鲍勃")
     item_a = await _make_work_item(alice.id, project_id=project_a.id, status="IN_PROGRESS")
     item_b = await _make_work_item(bob.id, project_id=project_b.id, status="IN_PROGRESS")
 
     async with async_session_factory() as session:
-        # A 项目查自己 → 可见；查 B → None
+        # 跨项目查询返回空值，避免泄漏实体存在性。
         assert (
             await TOOL_REGISTRY["get_work_item_overview"].func(
                 session, item_a.id, project_id=project_a.id
@@ -236,13 +224,11 @@ async def test_tools_single_item_ownership_blocks_cross_project(
                 session, item_b.id, project_id=project_a.id
             )
         ) is None
-        # 交付物元数据同理（deliverables.project_id 过滤）
         assert (
             await TOOL_REGISTRY["list_deliverable_metadata"].func(
                 session, item_b.id, project_id=project_a.id
             )
         ) == []
-        # dev_doc 经 work_items 推导归属
         assert (
             await TOOL_REGISTRY["get_dev_doc"].func(
                 session, item_b.id, project_id=project_a.id
@@ -250,13 +236,10 @@ async def test_tools_single_item_ownership_blocks_cross_project(
         ) is None
 
 
-# ---------- check ①：API 侧运行/建议跨项目隔离 ----------
-
-
 async def test_agent_api_is_project_scoped(
     client, project_a: Project, project_b: Project, leader: ProjectMember
 ) -> None:
-    """B 项目负责人看不到/操作不了 A 项目的 run 与建议（404/列表不包含）。"""
+    """其他项目负责人不得查看或操作当前项目的运行和建议。"""
     _, leader_b = await add_member(
         project_b, "lead_b", "LeadB123!", role="leader", display_name="负责人B"
     )
@@ -273,7 +256,6 @@ async def test_agent_api_is_project_scoped(
                 work_item_id=item_a.id,
                 prompt="A 项目需求",
             )
-        # 执行图：生成 A 项目的建议
         task = await dequeue(redis_client, timeout=2)
         assert task is not None
         await handle_task(task, redis_client)
@@ -281,22 +263,18 @@ async def test_agent_api_is_project_scoped(
         await redis_client.aclose()
 
     headers_b = await auth_headers(client, "lead_b", "LeadB123!", project_id=str(project_b.id))
-    # 列表：B 看不到 A 的 run
     resp = await client.get("/api/v1/agent-runs", headers=headers_b)
     assert resp.status_code == 200
     assert all(r["id"] != str(run_a.id) for r in resp.json())
-    # 单条：跨项目 → 404
     resp = await client.get(f"/api/v1/agent-runs/{run_a.id}", headers=headers_b)
     assert resp.status_code == 404
-    # 重试：跨项目 → 404
     resp = await client.post(f"/api/v1/agent-runs/{run_a.id}/retry", headers=headers_b)
     assert resp.status_code == 404
-    # 建议列表：B 看不到 A 的建议（经 run 推导归属）
+    # 建议通过关联运行推导项目归属，也必须保持隔离。
     resp = await client.get("/api/v1/agent-suggestions", headers=headers_b)
     assert resp.status_code == 200
     assert all(s["run_id"] != str(run_a.id) for s in resp.json())
 
-    # 对照：A 负责人能看到自己的 run（接口逻辑本身不变）
     headers_a = await auth_headers(client, "leader", "Leader123!", project_id=str(project_a.id))
     resp = await client.get(f"/api/v1/agent-runs/{run_a.id}", headers=headers_a)
     assert resp.status_code == 200
@@ -305,7 +283,7 @@ async def test_agent_api_is_project_scoped(
 async def test_agent_trigger_rejects_cross_project_work_item(
     client, project_a: Project, project_b: Project, leader: ProjectMember
 ) -> None:
-    """B 项目负责人引用 A 工作项时返回 404，且不创建失败 run。"""
+    """跨项目引用工作项时应返回未找到，且不得创建运行记录。"""
     _, leader_b = await add_member(
         project_b, "lead_cross", "LeadCross1!", role="leader", display_name="负责人B"
     )
@@ -336,13 +314,10 @@ async def test_agent_trigger_rejects_cross_project_work_item(
     assert after == before
 
 
-# ---------- check ④：到期扫描通知按工作项项目落库 ----------
-
-
 async def test_due_scan_notifications_store_correct_project(
     project_a: Project, project_b: Project, leader: ProjectMember
 ) -> None:
-    """due_scan 生成的提醒通知按各自工作项项目落库（notifications.project_id）。"""
+    """到期扫描生成的通知应归属于对应工作项项目。"""
     due = datetime.now(UTC) + timedelta(hours=1)
     item_a = await _make_work_item(leader.id, project_id=project_a.id, due_at=due)
     _, leader_b = await add_member(
@@ -364,11 +339,8 @@ async def test_due_scan_notifications_store_correct_project(
         await redis_client.aclose()
 
 
-# ---------- check ⑤：风险扫描按项目维度去重，不跨项目互相 skip ----------
-
-
 async def test_risk_scan_dedup_is_per_project(project_a: Project, project_b: Project) -> None:
-    """A 项目已有活跃 workflow_risk run → 只跳过 A，仍为 B 投递。"""
+    """一个项目的活跃风险运行不得阻止其他项目投递。"""
     redis_client = create_redis_client()
     try:
         async with async_session_factory() as session:
@@ -392,7 +364,7 @@ async def test_risk_scan_dedup_is_per_project(project_a: Project, project_b: Pro
 async def test_risk_scan_skips_only_projects_with_active_runs(
     project_a: Project, project_b: Project
 ) -> None:
-    """两个项目都有活跃 run → 各自跳过，不投递（且不互相 skip 反方向）。"""
+    """每个项目都应独立跳过自己的活跃风险运行。"""
     redis_client = create_redis_client()
     try:
         async with async_session_factory() as session:
@@ -420,7 +392,7 @@ async def test_risk_scan_skips_only_projects_with_active_runs(
 
 
 async def test_concurrent_risk_scans_create_one_run_per_project(project_a: Project) -> None:
-    """两个 worker 同时扫描时，advisory lock 将检查与创建串行化。"""
+    """并发扫描应通过 advisory lock 保证每个项目只创建一个运行。"""
     redis_client = create_redis_client()
     try:
         await redis_client.delete(QUEUE_KEY)
@@ -440,7 +412,7 @@ async def test_concurrent_risk_scans_create_one_run_per_project(project_a: Proje
 
 
 async def test_stale_pending_risk_run_does_not_block_forever(project_a: Project) -> None:
-    """超过租约的 pending run 转为 failed，本轮扫描可创建新 run。"""
+    """超过租约的待处理运行应失败，并允许本轮扫描创建替代运行。"""
     redis_client = create_redis_client()
     try:
         async with async_session_factory() as session:
@@ -473,13 +445,10 @@ async def test_stale_pending_risk_run_does_not_block_forever(project_a: Project)
         await redis_client.aclose()
 
 
-# ---------- 评审 #5：通知读隔离（同一用户挂双项目） ----------
-
-
 async def test_notification_list_and_read_isolated_by_project(
     client, project_a: Project, project_b: Project
 ) -> None:
-    """同一全局账号挂 A/B：A 上下文只见 A 通知；B 上下文读 A 通知 → 404。"""
+    """同一账号加入多个项目时，通知列表和已读操作仍应按项目隔离。"""
     _, member_a = await add_member(project_a, "noti_user", "Noti123!", display_name="通知人")
     async with async_session_factory() as session:
         user = await session.get(User, member_a.user_id)
@@ -509,22 +478,19 @@ async def test_notification_list_and_read_isolated_by_project(
     headers_a = await auth_headers(client, "noti_user", "Noti123!", project_id=str(project_a.id))
     headers_b = await auth_headers(client, "noti_user", "Noti123!", project_id=str(project_b.id))
 
-    # A 上下文：只见 A 通知
     resp = await client.get("/api/v1/notifications", headers=headers_a)
     assert resp.status_code == 200
     assert [n["id"] for n in resp.json()["items"]] == [str(noti_a.id)]
 
-    # B 上下文：只见 B 通知
     resp = await client.get("/api/v1/notifications", headers=headers_b)
     assert resp.status_code == 200
     assert [n["id"] for n in resp.json()["items"]] == [str(noti_b.id)]
 
-    # B 上下文读 A 通知 → 404（不暴露存在性）
+    # 跨项目已读操作返回未找到，避免暴露通知存在性。
     resp = await client.post(f"/api/v1/notifications/{noti_a.id}/read", headers=headers_b)
     assert resp.status_code == 404
     assert resp.json()["code"] == "NOT_FOUND"
 
-    # 对照：A 上下文读自己的 → 200
     resp = await client.post(f"/api/v1/notifications/{noti_a.id}/read", headers=headers_a)
     assert resp.status_code == 200
     assert resp.json()["is_read"] is True

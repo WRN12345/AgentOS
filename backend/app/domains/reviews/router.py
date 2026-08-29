@@ -1,9 +1,9 @@
-"""审核接口（12.5 节）。
+"""审核接口。
 
-- POST /work-items/{id}/reviews   仅项目负责人：提交审核结论（三种，7.5 节）
-- GET  /work-items/{id}/reviews   仅负责人与该工作项主执行人：审核记录含反馈（16 节）
+- POST /work-items/{id}/reviews   仅项目负责人提交审核结论
+- GET  /work-items/{id}/reviews   仅负责人与该工作项主执行人查看含反馈的记录
 
-提交接口支持 Idempotency-Key：重放不重复推进状态、不重复落 reviews（17.2 节）。
+提交接口支持 Idempotency-Key，重放不会重复推进状态或创建审核记录。
 """
 
 import uuid

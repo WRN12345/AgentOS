@@ -1,4 +1,4 @@
-"""T6.1 补批测试共享辅助（并发 / Agent 合约 / API 缺口测试复用）。
+"""并发、Agent 合约与 API 边界测试的共享辅助函数。
 
 规则要求不改 conftest.py；这里只组合 conftest 提供的 add_member / auth_headers
 与既有 API，做测试数据准备与 worker 直接驱动。
@@ -19,7 +19,7 @@ BOB_PW = "Bob123!"
 
 
 async def setup_trio(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader（负责人）+ alice（主执行人）+ bob（普通成员）及各自请求头。"""
+    """返回负责人、主执行人、普通成员及各自请求头。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")

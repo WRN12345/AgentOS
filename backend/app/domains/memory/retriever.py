@@ -1,14 +1,8 @@
-"""记忆检索核心（设计文档第 5 节）：query → embedding → pgvector 余弦相似度 top-k。
+"""基于 `pgvector` 余弦距离的记忆检索核心。
 
-命中口径（多处共用）：
-- 只命中 is_current=True 的块（旧版本文档内容不参与检索，第 3 节）；
-- 只命中当前 EMBEDDING_MODEL 生成的向量（16.4，换模型全量重建前的旧向量不混入）；
-- project_id 严格相等——项目隔离在检索层强制（第 12 节），成员档案
-  （project_id 为 NULL）的跨项目放行是独立规则，在 M3.9 的权限层处理；
-- 余弦距离超过 max_distance 的结果丢弃（16.13 拒答策略的底层依据）。
-
-权限说明：本服务只做"项目内命中"，调用方鉴权（谁能搜哪个项目）在 M2.9/M2.10；
-Agent 与问答页面必须共用同一条带权限校验的路径（第 12 节）。
+检索只使用当前模型生成的有效块，并在查询层强制项目隔离。跨项目成员档案仅在上层
+权限明确放行时加入。超过 `max_distance` 的结果会被丢弃。此服务不鉴权，调用方必须
+通过 `search_memory` 权限层进入。
 """
 
 import uuid
@@ -24,7 +18,7 @@ from app.infrastructure.models.embedding import EmbeddingProvider, get_embedding
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    """一条命中：块内容 + 来源定位（供问答页展示依据、Agent 引用）。"""
+    """包含块内容、来源定位和余弦距离的一条命中。"""
 
     chunk_id: uuid.UUID
     source_type: str
@@ -52,11 +46,10 @@ class MemoryRetriever:
         max_distance: float | None = None,
         include_cross_project_profiles: bool = False,
     ) -> list[RetrievalResult]:
-        """项目内向量检索，按余弦距离升序返回 top-k（超过距离上限的丢弃）。
+        """按余弦距离升序返回项目内的 `top-k` 命中。
 
-        include_cross_project_profiles=True 时（仅 leader_query / agent_assignment
-        两个调用方，16.12），额外命中 project_id 为 NULL 的 profile 块——
-        档案随人走、跨项目可见的唯一例外；是否放行由 search.py 权限层判定。
+        `include_cross_project_profiles=True` 时额外包含不绑定项目的 `profile` 块；
+        是否允许该选项必须由 `search.py` 权限层判定。
         """
         if not query.strip():
             return []

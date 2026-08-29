@@ -1,4 +1,4 @@
-"""Agent 结构化输出 Schema（10.2 节，T5.3）。"""
+"""Agent 结构化输出 Schema。"""
 
 from app.agents.schemas.suggestion import (
     AgentSuggestionEnvelope,

@@ -1,9 +1,8 @@
 """请求上下文：request_id、来源 IP 与项目归属。
 
-由 RequestContextMiddleware 在每个请求进入时写入 contextvars，
-日志、错误响应与审计事件（domains/audit）从中自动读取，业务代码无需手传。
-project_id 从 X-Project-Id 请求头快照捕获（ticket 07，审计事件项目归属）；
-无项目上下文的全局接口（登录/登出/管理控制台）记为 None。
+`RequestContextMiddleware` 在请求进入时写入 contextvars，供日志、错误响应和
+审计事件读取。`project_id` 从 `X-Project-Id` 请求头捕获；登录、登出和管理控制台
+等全局接口没有项目上下文，记为 `None`。
 """
 
 import uuid
@@ -37,12 +36,10 @@ def get_project_id() -> uuid.UUID | None:
 
 
 def project_id_from_header(request: Request) -> uuid.UUID | None:
-    """从 X-Project-Id 头宽松解析项目归属：缺失/无效 → None（全局接口语义）。
+    """宽松解析 `X-Project-Id`；缺失或无效时返回 `None`。
 
-    供 RequestContextMiddleware（审计上下文快照）与 IdempotencyMiddleware
-    （幂等键项目维度）共用，避免两处重复的宽松解析。
-    注意与 project/dependencies.project_id_from_request（严格，无效 → 400）区分：
-    本函数是快照/降级用，不负责请求校验。
+    该结果仅用于审计快照和幂等键的项目维度，不负责请求校验。需要严格校验时应使用
+    `project_id_from_request`，由其对无效值返回 400。
     """
     raw = request.headers.get("X-Project-Id", "").strip()
     if not raw:

@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
     op.drop_index("ux_idempotency_records_user_key_endpoint", table_name="idempotency_records")
-    # 项目 + 用户 + key + endpoint 唯一；project/user 为 NULL 时按零值 UUID 参与唯一性
+    # 项目、用户、幂等键与端点的组合唯一；项目或用户为空时以零值 UUID 参与唯一性
     op.execute(
         f"""
         CREATE UNIQUE INDEX ux_idempotency_records_project_user_key_endpoint

@@ -1,8 +1,7 @@
-"""开发文档接口请求/响应模型（设计文档 2026-07-30 §4.2）。
+"""开发文档接口的请求与响应模型。
 
-写接口沿用现有域约定：携带 version 做乐观锁（17.2 节），
-不匹配返回 409 DEV_DOC_VERSION_CONFLICT，成功后 version + 1。
-PUT 为 upsert 语义：文档不存在时创建（version 省略），存在时必须带版本号。
+写接口携带 `version` 实施乐观锁；版本不匹配返回 `409 DEV_DOC_VERSION_CONFLICT`，
+成功后版本递增。`PUT` 使用 `upsert` 语义：新建时省略 `version`，更新时必须携带。
 """
 
 import uuid
@@ -16,7 +15,7 @@ from app.domains.work_items.schemas import MemberBrief
 class DevDocUpdateIn(BaseModel):
     """撰写/编辑草稿：仅主执行人，DRAFT/RETURNED 状态可编辑。
 
-    version 为 None 表示创建新文档（文档已存在时必填，乐观锁）。
+    `version` 为 `None` 表示创建新文档；文档已存在时必须提供以实施乐观锁。
     """
 
     content: str = Field(default="", max_length=100_000)
@@ -24,7 +23,7 @@ class DevDocUpdateIn(BaseModel):
 
 
 class DevDocCommandIn(BaseModel):
-    """状态命令（submit/confirm/waive）：携带乐观锁版本号。"""
+    """携带乐观锁版本号的状态命令。"""
 
     version: int = Field(ge=1)
 
@@ -54,7 +53,7 @@ class DevDocOut(BaseModel):
     confirmed_at: datetime | None
     doc_version: int
     waived: bool
-    # 最近一次 Agent 初审建议（agent_suggestions，可空：LLM 不可用时降级缺失）
+    # LLM 不可用时允许缺少最近一次 Agent 初审建议。
     latest_review_suggestion_id: uuid.UUID | None
     version: int
     created_at: datetime

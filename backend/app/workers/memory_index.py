@@ -1,16 +1,15 @@
-"""记忆索引任务（M1.8/M2.6，设计文档第 3、6、13 节）。
+"""记忆索引任务。
 
 任务类型 `memory.index`，payload 两种形态：
-- 文档索引（M2.6）：`stored_file_id`（必带）+ `project_id` / `source_type` / `source_id`，
-  任务负责"读文件 → 提取文本 → 切块入库 → 驱动索引状态机"全流程；
+- 文档索引携带 `stored_file_id`、`project_id`、`source_type` 和 `source_id`，负责读取
+  文件、提取文本、切块入库并驱动索引状态；
 - 纯文本索引：`history` 可携带 `text`，`profile` 与 `core_memory` 仅携带来源 ID，
   worker 在执行时读取当前数据库内容，避免延迟任务覆盖后续编辑；
 - `attempt`：已重试次数（重入队时自增）。
 
-失败语义（第 6 节）：
 - 确定性失败（文件损坏、扫描件 PDF）不重试，直接驱动状态机到 failed/unindexed；
 - 瞬态失败（embedding 不可用、DB 瞬断）按指数退避重入队，最多 MAX_ATTEMPTS 次；
-  耗尽后文档状态标记 failed（可人工重试，M2.4）。
+  耗尽后文档状态标记 failed，可由人工重试。
 """
 
 import uuid
@@ -56,7 +55,7 @@ RETRY_BASE_SECONDS = 10.0
 
 
 async def _index_stored_file(file_id: uuid.UUID) -> int:
-    """文档索引全流程（M2.6）：返回写入的块数。确定性失败不抛出（不重试）。"""
+    """执行文档索引并返回写入块数；确定性失败不抛出，以免重试。"""
     async with async_session_factory() as session:
         stored = await session.get(StoredFile, file_id)
         if stored is None:
@@ -96,7 +95,7 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
             logger.info("file has no extractable content, unindexed: %s", file_id)
             return 0
         except ExtractionFailedError:
-            # 文件损坏：failed，留待人工重试（M2.4），任务层面不再重投
+            # 文件损坏是确定性失败，标记为 `failed` 并留待人工重试。
             transition_index_status(stored, INDEX_FAILED)
             await session.commit()
             logger.warning("file content extraction failed: %s", file_id, exc_info=True)
@@ -114,7 +113,7 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
         await session.refresh(stored, attribute_names=["superseded_by"])
         if stored.superseded_by is not None:
             # 索引完成时该版本已被新版本取代（竞态：上传在索引途中发生）：
-            # 块写入后立即标失效，保证检索永远只命中最新版本（设计文档第 3 节）
+            # 块写入后立即标记失效，保证检索只命中最新版本。
             await service.mark_source_stale(source_type="document", source_id=stored.id)
         transition_index_status(stored, INDEX_INDEXED)
         await session.commit()
@@ -187,7 +186,7 @@ async def recover_stale_file_indexes(
 
 
 async def _mark_file_failed(file_id: uuid.UUID) -> None:
-    """重试耗尽后把文档标记为 failed（best-effort，失败只记日志）。"""
+    """重试耗尽后尽力把文档标记为 `failed`，标记失败时仅记录日志。"""
     try:
         async with async_session_factory() as session:
             stored = await session.get(StoredFile, file_id)
@@ -247,7 +246,7 @@ async def execute_memory_index(payload: dict, redis_client: redis.Redis) -> None
                                 session, uuid.UUID(str(source_id))
                             )
                         if text is None:
-                            # 运行/工作项未完成：不索引（15.4）
+                            # 未完成的运行或工作项内容仍可能变化，不应建立历史索引。
                             logger.info("history source not indexable, skipped: %s", source_id)
                             return
                     else:

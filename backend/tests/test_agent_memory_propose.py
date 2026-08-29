@@ -1,9 +1,7 @@
-"""Agent 主动提议记忆测试（M6.7 验收，设计文档第 8 节）。
+"""验证 Agent 主动提议记忆的生成、整合与写入护栏。
 
-- 记忆评估段判定"值得记住" → 产出 memory_proposal（pending，确认前核心记忆不变）；
-- 容量快满（M4.6 判断）→ 提示模型整合精简 → 产出 consolidate 提议；
-- action=none / 输出非法 → 无提议且主建议不受影响；
-- 提议审计（core_memory.proposed）不产生业务状态写入（M6.3 护栏）。
+值得沉淀的经验应生成待确认提议；容量接近上限时应建议整合。无提议或非法输出
+不得影响主建议，负责人确认前核心记忆必须保持不变。
 """
 
 import json
@@ -46,7 +44,7 @@ def _memory_stage(payload: dict) -> str:
 async def _run_pipeline_with_memory_stage(
     client, project: Project, monkeypatch: pytest.MonkeyPatch, memory_payload: dict
 ) -> None:
-    # 每次调用用唯一用户名（同一测试内多次运行不撞 uq_users_username）
+    # 使用唯一用户名，避免同一用例多次运行触发用户名唯一约束。
     suffix = uuid.uuid4().hex[:8]
     _, zhangsan = await add_member(
         project, f"zhangsan-{suffix}", "Zhang123!", display_name="张三"
@@ -98,7 +96,7 @@ async def test_agent_proposes_memory_when_worth_remembering(
     assert proposals[0].content["action"] == "create"
     assert proposals[0].content["content"] == "RAG 类需求评估集先行，接口后置"
 
-    # 未确认前核心记忆不变（红线）；提议审计存在但无业务状态写入
+    # 提议可审计，但负责人确认前不得写入核心记忆。
     async with async_session_factory() as session:
         assert list((await session.execute(select(CoreMemoryEntry))).scalars().all()) == []
         actions = list(
@@ -113,7 +111,7 @@ async def test_agent_proposes_consolidation_when_nearly_full(
 ) -> None:
     async with async_session_factory() as session:
         e1 = await create_entry(session, leader, content="x" * 2000)
-        e2 = await create_entry(session, leader, content="y" * 2000)  # 占用 100% ≥ 90%
+        e2 = await create_entry(session, leader, content="y" * 2000)  # 将容量推至整合阈值以上。
 
     await _run_pipeline_with_memory_stage(
         redis_client,
@@ -136,13 +134,12 @@ async def test_agent_proposes_consolidation_when_nearly_full(
 async def test_no_proposal_when_none_or_invalid(
     project: Project, leader: ProjectMember, redis_client, monkeypatch
 ) -> None:
-    # action=none
     await _run_pipeline_with_memory_stage(
         redis_client, project, monkeypatch, {"action": "none", "content": "", "entry_ids": []}
     )
     assert await _memory_proposals() == []
 
-    # 负载非法（consolidate 少于两条）→ 跳过，主建议不受影响
+    # 无法整合少于两条记忆，非法提议应被忽略而不影响主建议。
     await _run_pipeline_with_memory_stage(
         redis_client,
         project,
@@ -158,4 +155,4 @@ async def test_no_proposal_when_none_or_invalid(
                 )
             ).scalars().all()
         )
-    assert len(pipeline_suggestions) == 2  # 两次运行主建议都正常产出
+    assert len(pipeline_suggestions) == 2

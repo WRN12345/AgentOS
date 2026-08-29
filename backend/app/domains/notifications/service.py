@@ -1,9 +1,8 @@
-"""站内通知服务（2.1、12.6、16 节）。
+"""站内通知服务。
 
-- notify() 供各业务模块在关键事件时调用：与业务写入同一事务，只 flush 不 commit，
-  保证通知不丢（业务回滚则通知一并回滚，不会出现"通知到了但事没成"）；
-- 正文只含摘要信息，不写入审核意见等隐私内容（16 节）；
-- 查询与已读仅限本人；已读操作天然幂等（重复已读返回成功，不报错）。
+`notify()` 只执行 `flush`，由调用方将通知和业务事实放在同一事务提交，避免业务回滚后
+仍发送通知。正文只应包含摘要，不得写入审核意见等隐私内容。查询与已读仅限接收人本人，
+重复标记已读保持幂等。
 """
 
 import uuid
@@ -29,14 +28,12 @@ async def notify(
     link: str | None = None,
     outbox: list[OutgoingEvent] | None = None,
 ) -> Notification:
-    """写入一条站内通知。只 flush 不 commit，由业务用例统一提交。
+    """写入站内通知，仅执行 `flush`，由业务用例提交事务。
 
-    project_id 由调用方从业务上下文派生填充（spec D3：service 层填充，
-    API 不接受传入）；通知归属 = 业务发生时的项目上下文。
+    `project_id` 必须由调用方从可信业务上下文派生，不能直接接受客户端输入。
 
-    传入 outbox 时同步追加一条同内容实时事件；调用方须在业务 commit
-    成功后发布 outbox（infrastructure/events.publish_after_commit），
-    保证订阅者收到的事件对应已落库事实（4.3 节）。
+    传入 `outbox` 时同步追加同内容的实时事件；调用方必须在业务 `commit` 成功后
+    通过 `publish_after_commit` 发布，确保订阅者只收到已经落库的事实。
     """
     notification = Notification(
         project_id=project_id,
@@ -84,7 +81,7 @@ async def list_mine(
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[Notification], int]:
-    """查询本人通知（created_at 倒序），并返回当前未读总数。仅限当前项目。"""
+    """按 `created_at` 倒序查询本人在当前项目的通知，并返回未读总数。"""
     stmt = (
         select(Notification)
         .where(Notification.recipient_id == recipient_id, Notification.project_id == project_id)
@@ -117,8 +114,10 @@ async def mark_read(
     *,
     project_id: uuid.UUID,
 ) -> Notification:
-    """标记已读（仅本人且仅当前项目；他人/他项目通知按 404 处理，不暴露存在性）。
-    幂等：重复已读直接返回。"""
+    """幂等标记本人在当前项目的通知为已读。
+
+    他人或其他项目的通知按不存在处理，避免泄露其存在性。
+    """
     notification = await session.get(Notification, notification_id)
     if (
         notification is None
@@ -131,5 +130,6 @@ async def mark_read(
         notification.read_at = datetime.now(UTC)
         await session.flush()
         await session.commit()
-        await session.refresh(notification)  # updated_at 由数据库 onupdate 生成
+        # 异步会话不能隐式重载数据库更新后过期的 `updated_at`
+        await session.refresh(notification)
     return notification

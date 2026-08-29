@@ -1,9 +1,9 @@
-"""项目领域数据模型（第 11 章）：projects、project_members、member_capabilities。
+"""项目、项目成员与成员能力数据模型。
 
-- projects：单项目配置，首版只有一条有效记录（2.2 节不含多项目）。
-- project_members：项目内成员档案——角色（leader/member/admin）、显示名、
-  每周可投入时间、Git 用户名、启用状态（6.1、6.2 节）。
-- member_capabilities：能力标签与熟练度（1-5），由成员填报、负责人确认（6.2 节）。
+- `projects` 可包含多个项目。
+- `project_members` 按项目保存 `leader` 或 `member` 角色、显示名、可投入时间、
+  Git 用户名和启用状态；同一用户可属于多个项目。
+- `member_capabilities` 保存能力标签与 1 到 5 级熟练度，由成员填报、负责人确认。
 """
 
 import uuid
@@ -25,8 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.models.base import CoreModel
 
-# 项目角色（6.1 节）：leader 负责人全管；member 普通成员
-# 管理员升级为全局角色（users.is_admin），不再作为项目内角色
+# 项目角色仅含 `leader` 和 `member`；管理员是 `users.is_admin` 标识的全局角色
 ROLE_LEADER = "leader"
 ROLE_MEMBER = "member"
 ROLES = (ROLE_LEADER, ROLE_MEMBER)
@@ -63,7 +62,7 @@ class ProjectMember(CoreModel):
         cascade="all, delete-orphan",
         lazy="selectin",
         order_by="MemberCapability.tag",
-        foreign_keys="MemberCapability.member_id",  # 另有 confirmed_by_member_id 指向本表，需消歧
+        foreign_keys="MemberCapability.member_id",  # 与 `confirmed_by_member_id` 的外键关系消歧
     )
 
 
@@ -79,7 +78,7 @@ class MemberCapability(CoreModel):
     )
     tag: Mapped[str] = mapped_column(String(64), nullable=False)
     proficiency: Mapped[int] = mapped_column(Integer, nullable=False)
-    # 负责人确认状态（6.2 节）：成员填报/修改后复位为未确认
+    # 成员填报或修改后复位为未确认，只有负责人可以确认
     confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     confirmed_by_member_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_members.id"), nullable=True

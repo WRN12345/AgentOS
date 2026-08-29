@@ -1,7 +1,7 @@
 """统一日志配置。
 
-遵守设计文档第 16 章：日志不记录密码、令牌、API Key 和文件原文。
-调用方只应记录用户名、ID、状态等非敏感字段。
+日志不得记录密码、令牌、API Key 和文件原文；调用方只应记录用户名、ID、状态等
+非敏感字段。
 """
 
 import logging
@@ -13,7 +13,7 @@ _initialized: set[str] = set()
 
 
 def setup_logging(process_name: str, log_dir: str | None = None) -> logging.Logger:
-    """为进程（backend/worker/scheduler）配置控制台 + 文件日志。"""
+    """为 backend、worker 或 scheduler 配置控制台和文件日志。"""
     from app.core.config import settings
 
     directory = Path(log_dir or settings.log_dir)

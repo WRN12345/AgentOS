@@ -1,4 +1,4 @@
-"""闭环经验总结任务测试（M5.3 验收，设计文档第 10 节、16.9）。
+"""工作项闭环后的经验总结任务测试。
 
 - 工作项完成（审核通过）触发一次 memory.summary 任务；
 - 模型可用时产出经验文字；模型判断无经验（"无"）或工作项未完成 → None；
@@ -100,7 +100,6 @@ async def test_summarize_returns_experience(
 async def test_summarize_no_experience_and_unfinished(
     client: httpx.AsyncClient, project, redis_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # 模型返回约定标记"无" → None
     monkeypatch.setattr(
         summary_module, "get_model_provider", lambda: FakeModelProvider(text="无")
     )
@@ -108,7 +107,6 @@ async def test_summarize_no_experience_and_unfinished(
     async with async_session_factory() as session:
         assert await summarize_work_item(uuid.UUID(item_id), session) is None
 
-    # 未完成的工作项 → None（且不调用模型）；复用同一 ctx 避免重复建号
     unfinished_id, _ = await _item_in_review(client, ctx)
     provider = FakeModelProvider()
     monkeypatch.setattr(summary_module, "get_model_provider", lambda: provider)
@@ -120,15 +118,15 @@ async def test_summarize_no_experience_and_unfinished(
 async def test_worker_skips_silently_when_model_unavailable(
     client: httpx.AsyncClient, project, redis_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """kill 模型服务：任务静默跳过——不抛异常、不留重试、主流程不受影响。"""
+    """模型不可用时任务应静默跳过且不重试。"""
     monkeypatch.setattr(
         summary_module, "get_model_provider", lambda: UnavailableModelProvider()
     )
     _, item_id = await _completed_item(client, project)
-    await redis_client.delete(QUEUE_KEY, DELAYED_QUEUE_KEY)  # 清掉完成时投递的任务
+    await redis_client.delete(QUEUE_KEY, DELAYED_QUEUE_KEY)
 
-    await execute_memory_summary({"work_item_id": item_id})  # 不抛异常
-    assert await redis_client.llen(QUEUE_KEY) == 0  # 不重试
+    await execute_memory_summary({"work_item_id": item_id})
+    assert await redis_client.llen(QUEUE_KEY) == 0
     assert await redis_client.llen(DELAYED_QUEUE_KEY) == 0
 
 
@@ -141,9 +139,9 @@ async def test_worker_drops_unexpected_failure_without_retry(
     _, item_id = await _completed_item(client, project)
     await redis_client.delete(QUEUE_KEY, DELAYED_QUEUE_KEY)
 
-    await execute_memory_summary({"work_item_id": item_id})  # 只记日志
+    await execute_memory_summary({"work_item_id": item_id})
     assert await redis_client.llen(QUEUE_KEY) == 0
 
 
 async def test_worker_missing_payload_noop() -> None:
-    await execute_memory_summary({})  # 不抛异常
+    await execute_memory_summary({})

@@ -1,10 +1,7 @@
-"""文件接口（12.5 节）。
+"""文件接口。
 
-- POST /files                    任何登录成员：multipart 上传（可选 work_item_id 关联）
-- GET  /files/{id}/download      鉴权 + 权限校验（16 节）后由后端流式返回
-
-下载是唯一文件出口：上传目录不经静态服务/反向代理暴露（14 章），
-响应头携带规范的文件名与 Content-Type。
+下载接口在鉴权后流式返回文件，也是唯一文件出口。上传目录不通过静态服务或
+反向代理暴露，响应头携带规范的文件名与 `Content-Type`。
 """
 
 import uuid
@@ -32,7 +29,7 @@ router = APIRouter(tags=["files"])
 
 
 def _content_disposition(filename: str) -> str:
-    """RFC 5987：非 ASCII 文件名走 filename*，ASCII 兜底名走 filename。"""
+    """按 RFC 5987 编码：非 ASCII 文件名使用 `filename*`，同时提供 ASCII `filename`。"""
     fallback = filename.encode("ascii", "replace").decode().replace('"', "_")
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
 
@@ -54,7 +51,7 @@ async def list_files_endpoint(
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[StoredFileOut]:
-    """项目内当前版本文件列表（知识库文档管理，设计文档第 12 节）。"""
+    """返回项目内文件的当前版本。"""
     return await list_current_files(session, actor)
 
 
@@ -64,7 +61,7 @@ async def list_file_versions_endpoint(
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[StoredFileOut]:
-    """同名文档版本历史（新→旧，设计文档第 3 节）。"""
+    """按新到旧返回同名文件的版本历史。"""
     return await list_file_versions(session, actor, file_id)
 
 
@@ -74,7 +71,7 @@ async def retry_file_index_endpoint(
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> StoredFileOut:
-    """索引失败手动重试（设计文档第 6 节）：failed → pending 并重投索引任务。"""
+    """将失败索引重置为 `pending` 并重新投递任务。"""
     return await retry_file_index(session, actor, file_id)
 
 

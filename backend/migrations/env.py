@@ -1,4 +1,4 @@
-"""Alembic 环境：异步引擎，连接串来自 app.core.config（统一配置）。"""
+"""Alembic 迁移环境：使用异步引擎，并从 app.core.config 读取数据库连接串。"""
 
 import asyncio
 from logging.config import fileConfig
@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
 
-# 导入全部领域模型，确保 Base.metadata 完整（供 alembic revision --autogenerate 识别）
+# 导入全部领域模型，确保 Base.metadata 完整，供 Alembic 自动生成迁移时识别
 from app.agents import models as _agent_models  # noqa: F401
 from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401

@@ -1,10 +1,8 @@
-"""索引写入服务（设计文档第 5、13 节）：source 文本 → 切块 → embedding → memory_chunks。
+"""将来源文本切块并生成 `embedding`，统一写入 `memory_chunks`。
 
-四类记忆（document/profile/history/core_memory）共用本服务：
-- rebuild_chunks 整体重建某来源的块（先删旧块再写入），保证内容变更后索引一致；
-- model_version 取当前 EMBEDDING_MODEL（16.4），检索侧只命中当前版本；
-- embedding 不可用时 ModelError 冒泡给调用方（worker 索引任务据此重试/标失败，
-  Agent 侧据此降级为无记忆模式，16.5）。
+`document`、`profile`、`history` 和 `core_memory` 共用此服务。重建按来源先删除后写入，
+并通过来源级事务锁串行化。模型版本取当前 `EMBEDDING_MODEL`；生成向量失败时异常交由
+`worker` 重试或由 `Agent` 调用方降级处理。
 """
 
 import uuid
@@ -17,13 +15,10 @@ from app.domains.memory.chunking import chunk_text
 from app.domains.memory.models import SOURCE_TYPES, MemoryChunk
 from app.infrastructure.models.embedding import EmbeddingProvider, get_embedding_provider
 
-#: 记忆索引任务类型（API 进程投递、worker 消费共用，见 app/workers/memory_index.py）
 MEMORY_INDEX_TASK_TYPE = "memory.index"
 
-#: 来源级互斥（并发重复任务防重）：同一来源的删旧+写新必须串行，否则两个
-#: worker（租约重投与原任务并存）会各自提交一整套 current 块，检索出现重复依据。
-#: pg_advisory_xact_lock 随事务结束（commit/rollback）自动释放，不会泄漏到连接池；
-#: 配合 ux_memory_chunks_source_chunk 唯一约束（迁移 0031）在数据库层兜底。
+# 同一来源的删除和重写必须串行，避免租约重投与原任务并发写出重复的当前块。
+# `pg_advisory_xact_lock` 随事务结束自动释放，并由唯一约束提供最终防重保障。
 _SOURCE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))")
 
 
@@ -44,17 +39,16 @@ class MemoryIndexService:
         source_id: uuid.UUID,
         text: str,
     ) -> int:
-        """整体重建某来源的记忆块，返回写入的块数。
+        """整体重建一个来源的记忆块，并返回写入数量。
 
-        - project_id：仅 profile 类型传 None（随人走，16.12），其余类型必填；
-        - 空文本只删旧块不写新块（来源内容被清空的语义）。
+        只有 `profile` 的 `project_id` 可以为空；空文本只删除旧块，不写入新块。
         """
         if source_type not in SOURCE_TYPES:
             raise ValueError(f"未知记忆来源类型: {source_type}")
         if source_type != "profile" and project_id is None:
             raise ValueError(f"{source_type} 类型必须带 project_id")
 
-        # 临界区开始：删旧+写新须在来源级互斥内完成（见 _SOURCE_LOCK_SQL 注释）
+        # 锁覆盖删除和重写的完整临界区
         await self._session.execute(
             _SOURCE_LOCK_SQL, {"lock_key": f"memory_index:{source_type}:{source_id}"}
         )
@@ -95,10 +89,9 @@ class MemoryIndexService:
         source_id: uuid.UUID,
         commit: bool = True,
     ) -> int:
-        """把某来源的全部块标记为失效（is_current=False），返回影响行数。
+        """将来源的全部块标记为失效，并返回影响行数。
 
-        用于文档版本更替（设计文档第 3 节）：新版本上传后旧版本的块不再参与
-        检索，但保留供人工追溯。
+        旧版本块不再参与检索，但继续保留供追溯。
         """
         result = await self._session.execute(
             update(MemoryChunk)

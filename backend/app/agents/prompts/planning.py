@@ -1,7 +1,8 @@
-"""Planning Advisor 提示词模板（10.1 节，T5.4）。
+"""Planning Advisor 提示词模板。
 
-模型只接收最小上下文（16 节）：需求背景、进行中工作项清单（标题/状态/DDL）、
-成员负载。建议工作项拆分、协作点与 DDL；潜在风险放 risks。
+仅向模型提供规划所需的需求背景、进行中工作项的标题、状态与截止时间以及
+成员负载，不提供无关资料或敏感信息。建议工作项拆分、协作点与截止时间；
+潜在风险放入 risks。
 """
 
 SYSTEM_PROMPT = (
@@ -27,7 +28,7 @@ def render_user_prompt(
     open_work_items: list[dict],
     workload: list[dict],
 ) -> str:
-    """组装 user 提示词（最小上下文：需求背景 + 进行中工作项 + 负载）。"""
+    """使用需求背景、进行中工作项和负载组装最小 user 提示词。"""
     import json
 
     lines = [f"项目：{project_name or '（未知）'}"]

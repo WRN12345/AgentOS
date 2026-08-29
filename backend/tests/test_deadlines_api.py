@@ -1,4 +1,4 @@
-"""DDL 变更申请 API 集成测试（T3.4 验收，7.4、8.4、12.4、16、17.2 节）。"""
+"""DDL 变更申请 API 集成测试。"""
 
 import uuid
 
@@ -18,7 +18,7 @@ BOB_PW = "Bob123!"
 
 
 async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader + alice（主执行人）+ bob（协作接收人）；工作项 DDL 2026-08-01，
+    """返回负责人、主执行人、协作接收人及 DDL 为 2026-08-01 的工作项，
     协作请求（alice → bob）DDL 2026-07-30。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
@@ -128,9 +128,6 @@ async def _collab(client: httpx.AsyncClient, headers: dict[str, str], item_id: s
     return next(r for r in resp.json() if r["id"] == collab_id)
 
 
-# ---------- 协作级：不影响主任务 DDL → 自动生效（7.4 节） ----------
-
-
 async def test_collab_level_auto_approved(client: httpx.AsyncClient, project: Project) -> None:
     """新协作 DDL ≤ 主任务 DDL：同事务直接生效，无需负责人，审计留痕。"""
     ctx = await _setup(client, project)
@@ -163,7 +160,6 @@ async def test_collab_level_auto_approved(client: httpx.AsyncClient, project: Pr
     assert updated["due_at"].startswith("2026-07-31")
     assert updated["version"] == 2  # type: ignore[index] collab 创建为 1
 
-    # 审计：申请 + 自动生效留痕
     assert await _audit_actions(body["id"]) == [
         "deadline_change.requested",
         "deadline_change.approved",
@@ -210,7 +206,6 @@ async def test_collab_level_exceeds_goes_to_leader_approval(
     before = await _collab(client, alice_headers, item["id"], collab["id"])  # type: ignore[arg-type,index]
     assert before["due_at"].startswith("2026-07-30")
 
-    # 负责人在 approvals 看到（kind=deadline_change，含 impact_analysis_status）
     approvals = await client.get("/api/v1/approvals", headers=ctx["leader_headers"])  # type: ignore[arg-type]
     entries = [a for a in approvals.json() if a["kind"] == "deadline_change"]
     assert [a["id"] for a in entries] == [body["id"]]
@@ -237,9 +232,6 @@ async def test_collab_level_exceeds_goes_to_leader_approval(
     assert "deadline_change.approved" in alice_types
 
 
-# ---------- 主任务级：一律负责人审批（7.4 节） ----------
-
-
 async def test_main_level_requires_leader_approval(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -258,11 +250,9 @@ async def test_main_level_requires_leader_approval(
     assert body["status"] == "PENDING_APPROVAL"
     assert body["target_type"] == "work_item"
 
-    # 未经批准：主任务 DDL 不变
     before = await _work_item(client, alice_headers, item["id"])  # type: ignore[arg-type,index]
     assert before["due_at"].startswith("2026-08-01")
 
-    # 同一工作项只能有一个待审批主 DDL 变更（17.2 节）
     dup = await _create_change(
         client, alice_headers, item["id"], "work_item", item["id"], "2026-08-20T00:00:00Z"  # type: ignore[arg-type,index]
     )
@@ -277,7 +267,6 @@ async def test_main_level_requires_leader_approval(
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "APPROVED"
 
-    # 同事务：工作项 DDL 更新 + version+1（publish 后 2 → 3）+ 审计
     after = await _work_item(client, alice_headers, item["id"])  # type: ignore[arg-type,index]
     assert after["due_at"].startswith("2026-08-15")
     assert after["version"] == 3
@@ -322,10 +311,8 @@ async def test_main_level_reject_keeps_due(client: httpx.AsyncClient, project: P
         n for n in await _notifications_of(alice.id) if n.type == "deadline_change.rejected"
     ]
     assert len(alice_notifications) == 1
-    assert "按原计划" not in alice_notifications[0].body  # 意见不进通知（16 节）
-
-
-# ---------- 影响分析失败不阻塞审批（8.4 节） ----------
+    # 审批意见不进入通知正文，避免向收件人披露。
+    assert "按原计划" not in alice_notifications[0].body
 
 
 async def test_impact_analysis_unavailable_still_approvable(
@@ -371,9 +358,6 @@ async def test_impact_analysis_unavailable_still_approvable(
     assert after["due_at"].startswith("2026-08-15")
 
 
-# ---------- 权限与参数校验 ----------
-
-
 async def test_create_permissions(client: httpx.AsyncClient, project: Project) -> None:
     """协作级仅协作双方可发起；主任务级仅主执行人或负责人；目标校验。"""
     ctx = await _setup(client, project)
@@ -382,31 +366,26 @@ async def test_create_permissions(client: httpx.AsyncClient, project: Project) -
     item = ctx["item"]
     collab = ctx["collab"]
 
-    # 协作级：负责人不是协作双方 → 403
     resp = await _create_change(
         client, ctx["leader_headers"], item["id"], "collaboration_request", collab["id"], "2026-07-31T00:00:00Z"  # type: ignore[arg-type,index]
     )
     assert resp.status_code == 403
 
-    # 主任务级：bob 既非主执行人也非负责人 → 403
     resp = await _create_change(
         client, ctx["bob_headers"], item["id"], "work_item", item["id"], "2026-08-15T00:00:00Z"  # type: ignore[arg-type,index]
     )
     assert resp.status_code == 403
 
-    # 主任务级 target_id 必须是路径中的工作项 → 422
     resp = await _create_change(
         client, ctx["alice_headers"], item["id"], "work_item", str(uuid.uuid4()), "2026-08-15T00:00:00Z"  # type: ignore[arg-type,index]
     )
     assert resp.status_code == 422
 
-    # 协作目标不存在 → 404
     resp = await _create_change(
         client, ctx["alice_headers"], item["id"], "collaboration_request", str(uuid.uuid4()), "2026-07-31T00:00:00Z"  # type: ignore[arg-type,index]
     )
     assert resp.status_code == 404
 
-    # 协作双方均可发起（接收人 bob 发起，且新 DDL ≤ 主 DDL → 自动生效）
     resp = await _create_change(
         client, ctx["bob_headers"], item["id"], "collaboration_request", collab["id"], "2026-07-31T00:00:00Z"  # type: ignore[arg-type,index]
     )
@@ -476,9 +455,6 @@ async def test_approve_requires_leader(client: httpx.AsyncClient, project: Proje
     # 取消后主任务 DDL 不变
     after = await _work_item(client, alice_headers, item["id"])  # type: ignore[arg-type,index]
     assert after["due_at"].startswith("2026-08-01")
-
-
-# ---------- 查询（12.4 节） ----------
 
 
 async def test_list_endpoints(client: httpx.AsyncClient, project: Project) -> None:

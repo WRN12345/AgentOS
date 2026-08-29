@@ -1,11 +1,7 @@
-"""Workflow Risk Agent：识别逾期、阻塞、频繁转派与协作等待风险（10.1 节，T5.5）。
+"""Workflow Risk Agent：识别逾期、阻塞、频繁转派与协作等待风险。
 
-触发方式：scheduler 周期风险扫描（app.workers.risk_scan，4.2 节，
-trigger_source="scheduler"）或人工项目级触发（POST /agent-analysis）。
-上下文经工具注册表只读查询加载：list_open_work_items（系统侧再按当前时间
-划分逾期/临期）、list_blocked_items、list_transfer_history、
-list_waiting_collaborations。content 平铺 risks 列表（type/target/severity/
-detail）；fact_refs 引用纳入考量的真实工作项/协作请求/转派记录 ID。
+支持 scheduler 周期扫描和人工项目级触发。上下文全部通过只读工具加载，逾期与临期
+由系统按当前时间划分；fact_refs 仅引用实际参与分析的业务记录 ID。
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,7 +13,7 @@ from app.agents.tools import TOOL_REGISTRY
 from app.core.config import settings
 from app.infrastructure.database.engine import async_session_factory
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "workflow_risk"
@@ -28,7 +24,7 @@ PROMPT_VERSION = "workflow_risk.v1"
 def split_by_due(
     open_items: list[dict], *, now: datetime, horizon_hours: int
 ) -> tuple[list[dict], list[dict]]:
-    """把进行中工作项按截止时间划分为（已逾期， 临期）；无 DDL 的不纳入。"""
+    """按 DDL 将进行中工作项分为已逾期和临期，无 DDL 的工作项不纳入。"""
     horizon = now + timedelta(hours=horizon_hours)
     overdue: list[dict] = []
     due_soon: list[dict] = []

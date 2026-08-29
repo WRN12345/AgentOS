@@ -1,11 +1,7 @@
-"""agent_runs/agent_suggestions 与 LangGraph 基础图测试（T5.2 验收，10.2、17.3 节）。
+"""验证 Agent 运行、建议记录与 LangGraph 基础图的集成行为。
 
-覆盖：
-- 迁移后 agent_runs / agent_suggestions 建表成功；
-- 人工触发 → 队列投递 agent.run → worker handle_task 执行图：
-  agent_runs=succeeded（含耗时）、PostgreSQL 出现 langgraph checkpoint 行、
-  生成 agent_suggestions 记录并产生站内通知（agent.suggestion_ready）；
-- 图内节点抛错 → run 标记 failed + 错误信息，不产生建议。
+成功运行应持久化耗时、检查点和建议，并向负责人发送站内通知；图节点失败时
+应记录错误且不得产生建议或通知。
 """
 
 import uuid
@@ -43,7 +39,7 @@ async def _make_work_item(assignee_id: uuid.UUID, *, project_id: uuid.UUID) -> W
 
 
 async def test_agent_tables_exist() -> None:
-    """迁移 0009 后 agent_runs / agent_suggestions 两表存在。"""
+    """数据库迁移后应存在 Agent 运行表和建议表。"""
     async with async_session_factory() as session:
         rows = (
             await session.execute(
@@ -57,11 +53,11 @@ async def test_agent_tables_exist() -> None:
 
 
 async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMember) -> None:
-    """人工触发 echo 分析：队列 → worker → 图 → 建议 + 通知 + 检查点。"""
+    """人工触发的分析应经队列执行并生成建议、通知和检查点。"""
     item = await _make_work_item(leader.id, project_id=project.id)
     redis_client = create_redis_client()
     try:
-        # 清空共享测试队列：其他用例（如 POST /tasks/example）可能留有残留任务
+        # 隔离共享队列，避免其他用例遗留的任务影响本次消费。
         await redis_client.delete(QUEUE_KEY)
         async with async_session_factory() as session:
             run = await request_agent_analysis(
@@ -76,13 +72,12 @@ async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMem
             )
         assert run.status == "pending"
 
-        # 队列里确实有 agent.run 任务（复用 T1.6 队列机制）
         task = await dequeue(redis_client, timeout=2)
         assert task is not None
         assert task["type"] == "agent.run"
         assert task["payload"]["run_id"] == str(run.id)
 
-        # 测试里直接调用 worker 的处理函数（不真起进程）
+        # 直接调用处理函数，避免测试依赖独立 worker 进程。
         await handle_task(task, redis_client)
 
         async with async_session_factory() as session:
@@ -105,7 +100,6 @@ async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMem
             assert "实现用户登录" in suggestion.content["echo"]["work_item_title"]
             assert suggestion.fact_refs == {"work_item_ids": [str(item.id)]}
 
-            # 站内通知发给项目负责人（复用 T3.5 notify）
             notices = list(
                 (
                     await session.execute(
@@ -118,7 +112,7 @@ async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMem
             assert [n.type for n in notices] == ["agent.suggestion_ready"]
             assert notices[0].link == f"/work-items/{item.id}"
 
-            # LangGraph 检查点已持久化到 PostgreSQL（thread_id = run_id）
+            # 检查点以 run_id 作为 thread_id，便于按运行恢复图状态。
             checkpoint_count = (
                 await session.execute(
                     text("SELECT count(*) FROM checkpoints WHERE thread_id = :tid"),
@@ -133,10 +127,9 @@ async def test_agent_run_success_end_to_end(project: Project, leader: ProjectMem
 async def test_agent_run_failure_marks_failed(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """图内能力节点抛错 → agent_runs=failed + 错误信息，不产生建议/通知。
+    """图节点失败时应记录终态错误，且不得产生建议或通知。
 
-    T5.6 起可重试错误默认按指数退避重投；本用例只验证终态记录语义，
-    故把自动重试次数设为 0（重试行为本身由 test_agent_retry.py 覆盖）。
+    此处关闭自动重试以隔离终态语义；指数退避由重试测试单独覆盖。
     """
     monkeypatch.setattr(settings, "agent_run_max_retries", 0)
 

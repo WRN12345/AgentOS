@@ -1,16 +1,15 @@
-"""Scheduler 入口（4.2 节）。
+"""Scheduler 入口。
 
 按配置周期触发后台任务，实际执行均由 Worker 消费：
 
 - `example.ping`：工程链路示例任务（SCHEDULER_EXAMPLE_INTERVAL_SECONDS）；
-- `due.scan`：到期/逾期提醒扫描（DUE_SCAN_INTERVAL_SECONDS，默认 300s，T3.6）；
+- `due.scan`：到期或逾期提醒扫描，默认每 300 秒触发；
 - `agent.risk_scan`：Workflow Risk Agent 周期风险扫描
-  （AGENT_RISK_SCAN_INTERVAL_SECONDS，默认 86400s 即 24 小时，T5.5）；
+  默认每 24 小时触发；
 - `memory.proposal_expire`：核心记忆提议过期扫描
-  （MEMORY_PROPOSAL_EXPIRE_INTERVAL_SECONDS，默认 86400s，16.6，M4.5）。
+  默认每 24 小时触发。
 
-单循环按各自周期触发：记录上次触发时间，到达周期即 enqueue，
-睡眠取各周期的最小值。阶段 5 的日报等调度如需周期化也在此同样挂接。
+单循环记录各任务的上次触发时间，到达周期即入队，睡眠时间取所有周期的最小值。
 """
 
 import asyncio

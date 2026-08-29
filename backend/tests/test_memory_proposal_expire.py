@@ -1,4 +1,4 @@
-"""核心记忆提议自动过期测试（M4.5 验收，设计文档 16.6）。
+"""核心记忆提议的自动过期、边界、追溯与重新提议测试。
 
 - 挂起超 7 天的 memory_proposal 标记 expired（终态），留审计；
 - 未超期/非提议类型/已反馈的建议不受影响；
@@ -35,7 +35,7 @@ async def _make_run(project_id) -> AgentRun:
 
 
 async def _backdate(suggestion_id, *, days: float) -> None:
-    """把提议的创建时间回拨到 N 天前（造超期场景）。"""
+    """回拨创建时间以构造过期边界场景。"""
     async with async_session_factory() as session:
         await session.execute(
             update(AgentSuggestion)
@@ -50,7 +50,6 @@ async def test_stale_proposal_expired(project_a: Project, leader: ProjectMember)
     async with async_session_factory() as session:
         fresh = await create_memory_proposal(session, run=run, action="create", content="新提议")
         stale = await create_memory_proposal(session, run=run, action="create", content="旧提议")
-        # 非提议类型的挂起建议不受影响
         other = AgentSuggestion(
             run_id=run.id, suggestion_type="planning", content={"x": 1}
         )
@@ -74,7 +73,6 @@ async def test_stale_proposal_expired(project_a: Project, leader: ProjectMember)
         assert fresh_row is not None and fresh_row.review_status == "pending"
         other_row = await session.get(AgentSuggestion, other_id)
         assert other_row is not None and other_row.review_status == "pending"
-        # 审计留痕（16.10，系统动作 actor 为空）
         event = (
             await session.execute(
                 select(AuditEvent).where(
@@ -88,7 +86,7 @@ async def test_stale_proposal_expired(project_a: Project, leader: ProjectMember)
 
 
 async def test_expire_boundary_not_expired(project_a: Project, leader: ProjectMember) -> None:
-    """恰好 7 天边界内（< 7 天）不过期。"""
+    """仍在过期边界内的提议不应被标记为过期。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         proposal = await create_memory_proposal(session, run=run, action="create", content="边界")
@@ -108,20 +106,17 @@ async def test_expired_proposal_not_confirmable_and_reproposable(
         )
         pid = proposal.id
     await _backdate(pid, days=MEMORY_PROPOSAL_EXPIRE_DAYS + 1)
-    await expire_memory_proposals()  # 走 worker 处理器路径
+    await expire_memory_proposals()
 
     headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
-    # 过期提议从待确认列表消失
     resp = await client.get(
         "/api/v1/agent-suggestions", headers=headers, params={"review_status": "pending"}
     )
     assert str(pid) not in [s["id"] for s in resp.json()]
-    # 过期提议可查到（追溯），状态 expired
     resp = await client.get(
         "/api/v1/agent-suggestions", headers=headers, params={"review_status": "expired"}
     )
     assert str(pid) in [s["id"] for s in resp.json()]
-    # 过期后不可再确认 → 409
     resp = await client.post(
         f"/api/v1/agent-suggestions/{pid}/feedback",
         headers=headers,
@@ -129,7 +124,6 @@ async def test_expired_proposal_not_confirmable_and_reproposable(
     )
     assert resp.status_code == 409
 
-    # 同内容可重新提议（Agent 认为仍重要，16.6）
     async with async_session_factory() as session:
         new_proposal = await create_memory_proposal(
             session, run=run, action="create", content="某条经验"
@@ -139,11 +133,11 @@ async def test_expired_proposal_not_confirmable_and_reproposable(
 
 
 async def test_worker_handler_no_stale(project_a: Project, leader: ProjectMember) -> None:
-    """无超期提议时 worker 处理器正常空转。"""
+    """没有过期提议时处理器应正常空转。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         await create_memory_proposal(session, run=run, action="create", content="x")
-    await expire_memory_proposals()  # 不抛异常
+    await expire_memory_proposals()
     async with async_session_factory() as session:
         rows = (
             await session.execute(

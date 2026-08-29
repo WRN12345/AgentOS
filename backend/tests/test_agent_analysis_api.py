@@ -1,10 +1,7 @@
-"""POST /work-items/{id}/agent-analysis 接口测试（12.5 节，T5.4）。
+"""验证工作项 Agent 分析接口的投递行为与访问权限。
 
-覆盖：
-- 负责人 / 工作项相关成员（主执行人）触发 → 202，返回 agent_runs(pending)
-  信息，队列出现 agent.run 任务；
-- 无关成员 → 403；非项目成员 → 403；未登录 → 401；工作项不存在 → 404；
-- 未注册的 agent_type → 400 VALIDATION_ERROR。
+负责人和工作项相关成员可以触发分析；无关成员、未登录用户、无效工作项和
+未注册 Agent 类型应得到对应的拒绝响应。
 """
 
 import httpx
@@ -23,7 +20,7 @@ BOB_PW = "Bob123!"
 
 
 async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader（负责人）+ alice（主执行人）/ bob（无关成员），并建一个工作项。"""
+    """创建负责人、主执行人、无关成员及其测试工作项。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
@@ -52,11 +49,11 @@ def _url(item_id: str) -> str:
 async def test_leader_can_trigger_agent_analysis(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """负责人触发 → 202 + agent_runs(pending) 入库 + 队列投递 agent.run。"""
+    """负责人触发分析后应创建待处理运行并投递队列任务。"""
     ctx = await _setup(client, project)
     redis_client = create_redis_client()
     try:
-        # 清空共享测试队列，避免其他用例残留任务干扰断言
+        # 隔离共享队列，避免其他用例遗留的任务影响本次消费。
         await redis_client.delete(QUEUE_KEY)
         resp = await client.post(
             _url(ctx["item_id"]),  # type: ignore[arg-type]
@@ -85,7 +82,7 @@ async def test_leader_can_trigger_agent_analysis(
 
 
 async def test_related_member_can_trigger(client: httpx.AsyncClient, project: Project) -> None:
-    """工作项相关成员（主执行人）触发 → 202。"""
+    """工作项主执行人应有权触发分析。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]
@@ -97,7 +94,7 @@ async def test_related_member_can_trigger(client: httpx.AsyncClient, project: Pr
 
 
 async def test_unrelated_member_forbidden(client: httpx.AsyncClient, project: Project) -> None:
-    """与工作项无关的成员触发 → 403。"""
+    """与工作项无关的成员不得触发分析。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]
@@ -109,7 +106,7 @@ async def test_unrelated_member_forbidden(client: httpx.AsyncClient, project: Pr
 
 
 async def test_unknown_agent_type_rejected(client: httpx.AsyncClient, project: Project) -> None:
-    """未注册的 agent_type → 400 VALIDATION_ERROR。"""
+    """接口应拒绝未注册的 Agent 类型。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]
@@ -121,7 +118,7 @@ async def test_unknown_agent_type_rejected(client: httpx.AsyncClient, project: P
 
 
 async def test_work_item_not_found(client: httpx.AsyncClient, project: Project) -> None:
-    """工作项不存在 → 404。"""
+    """引用不存在的工作项时应返回未找到。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url("00000000-0000-0000-0000-000000000000"),
@@ -133,7 +130,7 @@ async def test_work_item_not_found(client: httpx.AsyncClient, project: Project) 
 
 
 async def test_unauthenticated_rejected(client: httpx.AsyncClient, project: Project) -> None:
-    """未登录 → 401。"""
+    """未登录用户不得触发分析。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]

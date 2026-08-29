@@ -1,15 +1,9 @@
-"""DDL 变更申请接口（12.4 节）。
+"""DDL 变更申请接口。
 
-- POST /work-items/{id}/deadline-change-requests   协作级：协作双方；主任务级：主执行人或负责人
-- GET  /work-items/{id}/deadline-change-requests   任何成员：该工作项的 DDL 变更历史
-- GET  /deadline-change-requests?role=mine         本人：我发起的 DDL 变更申请摘要
-- GET  /deadline-change-requests/{id}              任何成员：单条详情（含 reason 与 impact_analysis）
-- POST /deadline-change-requests/{id}/approve      仅负责人：PENDING_APPROVAL → APPROVED（同事务更新目标 DDL）
-- POST /deadline-change-requests/{id}/reject       仅负责人：PENDING_APPROVAL → REJECTED
-- POST /deadline-change-requests/{id}/cancel       仅发起人：待审批 → CANCELLED
-
-所有写接口支持 Idempotency-Key，且要求携带 version 做乐观锁（17.2 节）。
-approve/reject 可携带 decision_note（审批意见，只入审计不进通知，16 节）。
+主任务级申请由主执行人或负责人发起，协作级申请由协作双方发起；审批命令仅负责人
+可执行，取消命令仅申请人可执行。
+所有写接口支持 `Idempotency-Key`，状态命令通过 `version` 实施乐观锁。
+`approve` 和 `reject` 的 `decision_note` 仅进入审计记录，不进入通知正文。
 """
 
 import uuid

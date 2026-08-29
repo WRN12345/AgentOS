@@ -1,13 +1,7 @@
-"""Summary Agent：项目进展 / 已完成事项 / 待审批 / 风险摘要（10.1 节，T5.5）。
+"""Summary Agent：汇总项目进展、已完成事项、待审批事项和风险。
 
-触发方式：人工项目级触发（POST /agent-analysis，agent_type=summary_agent），
-支撑日报、阶段总结与负责人汇总（4.2 节；周期触发首版不做，日报由负责人
-按需人工触发，避免低频信息持续占用模型调用）。
-上下文经工具注册表只读查询加载：get_work_item_status_counts、
-list_recently_completed_work_items、list_pending_approvals，
-风险输入复用 list_open_work_items（系统侧划分逾期）与 list_blocked_items。
-content 平铺 progress / completed / pending_approvals / risks；
-fact_refs 引用纳入摘要的真实数据 ID（统计数字来自系统侧查询，非模型自报）。
+由负责人按需人工触发，避免低频信息持续占用模型调用。上下文通过只读工具加载，
+统计数字由系统查询产生，fact_refs 引用摘要所依据的真实业务记录 ID。
 """
 
 from datetime import UTC, datetime
@@ -20,7 +14,7 @@ from app.agents.tools import TOOL_REGISTRY
 from app.core.config import settings
 from app.infrastructure.database.engine import async_session_factory
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "summary_agent"

@@ -1,6 +1,6 @@
-"""多项目改造 ticket 02：工作项项目隔离测试（主接缝，HTTP API 层）。
+"""工作项的项目隔离测试。
 
-覆盖行为矩阵（spec Testing Decisions）：
+覆盖以下行为：
 - 隔离：A 项目的工作项列表不含 B 项目的工作项
 - 落库归属：A 上下文创建的工作项 project_id = A
 - 对象越权：A 上下文访问 B 项目工作项详情 → 404（不是 403）
@@ -71,7 +71,7 @@ async def _create_item(
 async def test_create_work_item_lands_in_project(
     client: httpx.AsyncClient, project_a: Project, project_b: Project
 ) -> None:
-    """A 上下文创建的工作项落库归属 A（spec D1：service 层从请求上下文填充）。"""
+    """在项目 A 上下文中创建的工作项归属于项目 A。"""
     ctx = await _setup_project(client, project_a, tag="a")
     created = await _create_item(client, ctx["leader_headers"], str(ctx["alice"].id))  # type: ignore[union-attr]
     assert created.status_code == 201
@@ -112,12 +112,10 @@ async def test_cross_project_detail_returns_404(
         await _create_item(client, ctx_b["leader_headers"], str(ctx_b["alice"].id), title="任务B")  # type: ignore[union-attr]
     ).json()
 
-    # 用 A 的 header 访问 B 的任务 → 404，不是 403
     resp = await client.get(f"/api/v1/work-items/{item_b['id']}", headers=ctx_a["alice_headers"])
     assert resp.status_code == 404
     assert resp.json()["code"] == "NOT_FOUND"
 
-    # 反向：B 上下文能正常看到自己的任务
     ok = await client.get(f"/api/v1/work-items/{item_b['id']}", headers=ctx_b["alice_headers"])
     assert ok.status_code == 200
 

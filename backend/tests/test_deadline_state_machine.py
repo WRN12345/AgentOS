@@ -1,4 +1,4 @@
-"""DDL 变更申请状态机单元测试（8.4 节，T3.4 验收）。
+"""DDL 变更申请状态机单元测试。
 
 覆盖全部合法迁移与代表性非法迁移；状态机为纯函数，不依赖数据库。
 """
@@ -8,7 +8,6 @@ import pytest
 from app.core.errors import ApiException
 from app.domains.deadlines.state_machine import COMMANDS, DeadlineChangeStatus, transition
 
-# 8.4 节全部合法迁移：(当前状态, 命令, 目标状态)
 LEGAL_TRANSITIONS = [
     ("PENDING_IMPACT_ANALYSIS", "analyze", "PENDING_APPROVAL"),
     ("PENDING_IMPACT_ANALYSIS", "cancel", "CANCELLED"),

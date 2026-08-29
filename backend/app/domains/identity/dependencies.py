@@ -1,4 +1,4 @@
-"""身份依赖项：解析当前登录用户，供后续所有接口使用。"""
+"""解析并校验当前登录用户。"""
 
 import uuid
 
@@ -17,11 +17,11 @@ async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """校验 Bearer Access Token 并返回当前用户。
+    """校验 `Bearer Access Token` 并返回当前用户。
 
     失效条件：令牌无效/过期、用户不存在或被禁用、令牌版本落后于
-    users.token_version（提升版本即全员旧令牌失效，16 节）。
-    解析成功后在 request.state.user_id 登记用户 ID（幂等守卫等下游使用）。
+    `users.token_version`。提升版本会使该用户的旧令牌全部失效。
+    解析成功后将用户 ID 写入 `request.state.user_id`，供幂等守卫等下游使用。
     """
     authorization = request.headers.get("Authorization", "")
     if not authorization.startswith("Bearer "):

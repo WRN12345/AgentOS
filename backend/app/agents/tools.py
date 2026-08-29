@@ -1,20 +1,14 @@
-"""Agent 工具注册表与权限护栏（10.3 节，T5.3）。
+"""Agent 工具注册表与权限护栏。
 
 注册表只包含两类工具：
-- read_query：只读业务查询（纯 SQLAlchemy select，供 T5.4/T5.5 的 Agent
-  加载最小上下文——工作项、成员能力、负载、交付物元数据等）；
-- write_suggestion：写入建议（唯一写工具，只写 agent_suggestions 表；
-  Agent 只生成建议，不能改变正式业务状态）。
+- read_query：使用 SQLAlchemy select 加载最小业务上下文；
+- write_suggestion：唯一写工具，只写 agent_suggestions，不改变正式业务状态。
 
-10.3 节禁止的操作一律不注册为工具（见 FORBIDDEN_OPERATIONS 结构化清单）：
-创建正式工作项、修改负责人、审批转派、修改 DDL、通过审核、
-删除文件或业务记录、合并代码。
+FORBIDDEN_OPERATIONS 中的操作不得注册为工具，只能由人通过正式业务命令执行。
 
-护栏约定（tests/test_agent_guardrails.py 自动化强制，第 22 章标准 10）：
-- 每个工具在 AgentTool.kind 上显式标记类别，注册表与 FORBIDDEN 不相交；
-- 本模块只 import 各 domain 的 models / 只读常量（state_machine），
-  不得 import 任何 domain 的 service（写命令都定义在 service 层）；
-  唯一例外：记忆检索经 memory.search 的带权限只读路径（M6.1，非写命令）；
+护栏由 tests/test_agent_guardrails.py 强制：
+- 每个工具必须显式设置 AgentTool.kind，注册表不得包含禁止操作；
+- 本模块不得导入 domain service；记忆检索只能使用 memory.search 的鉴权只读路径；
 - read_query 工具实现不得出现 session.add / session.delete 等写调用。
 """
 
@@ -44,7 +38,7 @@ from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.state_machine import ACTIVE_STATUSES, WorkItemStatus
 
-#: 工具类别：只读业务查询 / 写入建议（仅此两类，10.3 节）
+#: 工具只允许只读业务查询和建议写入两类。
 ToolKind = Literal["read_query", "write_suggestion"]
 
 
@@ -54,11 +48,11 @@ class AgentTool:
 
     name: str
     kind: ToolKind
-    func: Any  # async (session, **kwargs) -> ...
+    func: Any  # async 可调用对象，首个参数为 session
     description: str
 
 
-# ---------- 只读业务查询工具（read_query） ----------
+# 只读业务查询工具
 
 
 async def get_work_item_overview(
@@ -92,9 +86,9 @@ async def list_open_work_items(
     status: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """进行中工作项清单（默认全部活跃状态，供风险/规划类 Agent 扫描）。
+    """查询进行中工作项，默认返回全部活跃状态。
 
-    project_id 限定当前项目（ticket 05）：不泄漏其他项目上下文。
+    project_id 用于项目隔离，不能泄漏其他项目的上下文。
     """
     stmt = select(WorkItem).order_by(WorkItem.due_at.asc().nulls_last()).limit(limit)
     if project_id is not None:
@@ -120,10 +114,7 @@ async def list_open_work_items(
 async def list_member_capabilities(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[dict]:
-    """成员能力清单：标签、熟练度、负责人确认状态（6.2 节，供分配建议引用）。
-
-    project_id 限定当前项目（ticket 05）。
-    """
+    """查询当前项目成员的能力标签、熟练度和负责人确认状态。"""
     rows = (
         await session.execute(
             select(ProjectMember, MemberCapability)
@@ -147,11 +138,7 @@ async def list_member_capabilities(
 async def list_capability_tags(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[str]:
-    """成员技能标签词表：member_capabilities.tag 去重集合（供需求流水线
-    约束 involved_aspects 的取值范围，保证分配匹配准确）。
-
-    project_id 限定当前项目（ticket 05）。
-    """
+    """查询当前项目去重后的 member_capabilities.tag，约束 involved_aspects 取值。"""
     rows = (
         await session.execute(
             select(MemberCapability.tag)
@@ -167,10 +154,9 @@ async def list_capability_tags(
 async def list_assignable_members(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[dict]:
-    """可分配成员清单：display_name / username（供需求流水线解析需求文本中
-    点名的人选）。
+    """查询当前项目可分配成员的 display_name 和 username。
 
-    停用成员不可分配，不进入清单。project_id 限定当前项目（ticket 05）。
+    停用成员不可分配，因此不进入清单。
     """
     rows = (
         await session.execute(
@@ -189,10 +175,9 @@ async def list_assignable_members(
 async def get_member_workload(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> list[dict]:
-    """成员当前负载：各活跃成员名下的活跃工作项数（6.2 节，供分配建议引用）。
+    """统计当前项目各活跃成员名下的活跃工作项数。
 
-    project_id 限定当前项目（ticket 05）：成员与名下工作项都按项目过滤，
-    避免跨项目污染负载统计。
+    成员和工作项均按 project_id 过滤，避免跨项目污染负载统计。
     """
     rows = (
         await session.execute(
@@ -220,11 +205,10 @@ async def list_deliverable_metadata(
     *,
     project_id: uuid.UUID | None = None,
 ) -> list[dict]:
-    """交付物最小上下文（16 节）：文本正文 / Git 链接文本 / 文件元数据。
+    """查询交付物初审所需的最小上下文。
 
-    text / git_link 类型的 content（正文、链接文本）属于初审最小上下文；
-    file 类型只返回文件名 / 大小 / MIME / sha256 等元数据，绝不读取文件原文。
-    project_id 限定当前项目（deliverables 冗余 project_id，ticket 05）。
+    text 和 git_link 返回 content；file 只返回文件名、大小、MIME 和 sha256 等元数据，
+    绝不读取文件原文。查询按 project_id 隔离。
     """
     rows = (
         await session.execute(
@@ -244,7 +228,7 @@ async def list_deliverable_metadata(
             "version": d.version,
             "submitted_by": str(d.submitted_by),
             "stored_file_id": str(d.stored_file_id) if d.stored_file_id else None,
-            # 仅文本/Git 链接交付物带正文；文件类一律 None（不读原文）
+            # 文件类交付物不得读取原文，避免向 Agent 暴露非必要内容。
             "content": d.content if d.type in ("text", "git_link") else None,
             "file": (
                 {
@@ -262,7 +246,7 @@ async def list_deliverable_metadata(
     ]
 
 
-# ---------- 风险扫描只读工具（T5.5 Workflow Risk Agent） ----------
+# 风险扫描只读工具
 
 
 async def get_dev_doc(
@@ -271,9 +255,9 @@ async def get_dev_doc(
     *,
     project_id: uuid.UUID | None = None,
 ) -> dict | None:
-    """工作项的开发文档（状态/提交次数/Markdown 正文，供 dev_doc_review 初审引用）。
+    """查询工作项的开发文档状态、版本和 Markdown 正文。
 
-    经 work_items 推导归属校验：跨项目文档视为不存在（ticket 05）。
+    项目归属通过 work_items 校验，跨项目文档视为不存在。
     """
     doc = (
         await session.execute(
@@ -296,10 +280,7 @@ async def get_dev_doc(
 async def list_blocked_items(
     session: AsyncSession, *, project_id: uuid.UUID | None = None, limit: int = 50
 ) -> list[dict]:
-    """阻塞中的工作项清单（含阻塞起始时间，供风险 Agent 评估阻塞时长）。
-
-    project_id 限定当前项目（ticket 05）。
-    """
+    """查询当前项目阻塞中的工作项及阻塞起始时间。"""
     items = (
         (
             await session.execute(
@@ -336,9 +317,9 @@ async def list_transfer_history(
     days: int = 30,
     limit: int = 100,
 ) -> list[dict]:
-    """近期转派申请记录（默认近 30 天，供风险 Agent 识别频繁转派）。
+    """查询近期转派申请，默认覆盖近 30 天。
 
-    transfer_requests 无 project_id 冗余列，经关联工作项推导过滤（ticket 05）。
+    transfer_requests 没有 project_id，通过关联工作项执行项目隔离。
     """
     since = datetime.now(UTC) - timedelta(days=days)
     rows = (
@@ -370,9 +351,9 @@ async def list_transfer_history(
 async def list_waiting_collaborations(
     session: AsyncSession, *, project_id: uuid.UUID | None = None, limit: int = 50
 ) -> list[dict]:
-    """等待中的协作请求（未终态：已请求/已接受/处理中/被要求修改），供识别协作等待风险。
+    """查询未终态的协作请求，用于识别协作等待风险。
 
-    collaboration_requests 无 project_id 冗余列，经关联工作项推导过滤（ticket 05）。
+    collaboration_requests 没有 project_id，通过关联工作项执行项目隔离。
     """
     waiting = (
         CollaborationStatus.REQUESTED.value,
@@ -411,16 +392,13 @@ async def list_waiting_collaborations(
     ]
 
 
-# ---------- 摘要统计只读工具（T5.5 Summary Agent） ----------
+# 摘要统计只读工具
 
 
 async def get_work_item_status_counts(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> dict[str, int]:
-    """各状态工作项数量（项目进展统计，供摘要 Agent 引用真实数据）。
-
-    project_id 限定当前项目（ticket 05）。
-    """
+    """统计当前项目各状态的工作项数量。"""
     rows = (
         await session.execute(
             select(WorkItem.status, func.count())
@@ -438,10 +416,7 @@ async def list_recently_completed_work_items(
     days: int = 7,
     limit: int = 20,
 ) -> list[dict]:
-    """近期完成的工作项（默认近 7 天，按完成时间倒序，供摘要 Agent 使用）。
-
-    project_id 限定当前项目（ticket 05）。
-    """
+    """按完成时间倒序查询当前项目近期完成的工作项，默认覆盖近 7 天。"""
     since = datetime.now(UTC) - timedelta(days=days)
     items = (
         (
@@ -473,10 +448,9 @@ async def list_recently_completed_work_items(
 async def list_pending_approvals(
     session: AsyncSession, *, project_id: uuid.UUID | None = None
 ) -> dict[str, list[dict]]:
-    """待负责人审批事项汇总：待审工作项（IN_REVIEW）、待批转派、待批 DDL 变更。
+    """汇总待审工作项、待批转派和待批 DDL 变更。
 
-    project_id 限定当前项目（ticket 05）：transfers / deadline_changes
-    无 project_id 冗余列，经关联工作项推导过滤。
+    transfers 和 deadline_changes 没有 project_id，通过关联工作项执行项目隔离。
     """
     in_review = (
         (
@@ -555,7 +529,7 @@ async def list_pending_approvals(
     }
 
 
-# ---------- 记忆检索只读工具（M6.1，记忆模块设计文档第 11 节） ----------
+# 记忆检索只读工具
 
 
 async def search_project_documents(
@@ -565,10 +539,9 @@ async def search_project_documents(
     project_id: uuid.UUID,
     limit: int = 5,
 ) -> list[dict]:
-    """检索项目文档片段：向量语义检索，供拆解/分配时参考项目资料。
+    """通过向量语义检索项目文档片段，供拆解和分配参考。
 
-    走 M2.9 带权限校验的检索路径（调用方标识 agent_assignment），
-    项目隔离在检索层强制——只命中当前项目的最新版本文档块。
+    使用 caller=agent_assignment 的鉴权路径，检索层强制只命中当前项目的最新文档块。
     """
     results = await search_memory(
         session,
@@ -593,10 +566,7 @@ async def search_history_records(
     project_id: uuid.UUID,
     limit: int = 5,
 ) -> list[dict]:
-    """检索历史与经验：历次拆解/分配记录、已完成工作项结论（M5.1/M5.2 入索引）。
-
-    供拆解新需求时参考"以前类似的需求是怎么拆的、分给谁、结果如何"（第 9 节）。
-    """
+    """检索历史拆解、分配记录和已完成工作项结论，供新需求参考。"""
     results = await search_memory(
         session,
         member=None,
@@ -616,10 +586,9 @@ async def search_history_records(
 async def get_member_stats(
     session: AsyncSession, *, project_id: uuid.UUID
 ) -> list[dict]:
-    """成员完成统计（M3.1/M3.2）：各成员完成数/按时率/负载/样本量。
+    """查询成员完成数、按时率、负载和样本量。
 
-    分配环节参考"他在本项目做过什么、做得怎么样"（事实记录，第 7 节①）；
-    is_active=False 为停用成员（16.7 统计保留，不进分配候选）。
+    is_active=False 的成员保留历史统计，但不进入分配候选。
     """
     stats = await member_completion_stats(session, project_id=project_id)
     return [
@@ -644,10 +613,9 @@ async def search_member_profiles(
     project_id: uuid.UUID,
     limit: int = 5,
 ) -> list[dict]:
-    """检索成员文字档案（M3.5/M3.7 入索引）：统计体现不出来的成员特质。
+    """检索统计数据无法表达的成员特质和历史背景。
 
-    走 M3.9 放行规则——agent_assignment 场景可命中随人走的跨项目档案
-    （16.12），供分配决策参考"某人对支付模块的历史包袱很熟"这类信息。
+    agent_assignment 场景允许命中随成员保留的跨项目档案，供分配决策参考。
     """
     results = await search_memory(
         session,
@@ -665,16 +633,15 @@ async def search_member_profiles(
     ]
 
 
-# ---------- 写入建议工具（write_suggestion，唯一写工具） ----------
+# 建议写入工具
 
 
 async def write_suggestion(
     session: AsyncSession, *, envelope: AgentSuggestionEnvelope
 ) -> AgentSuggestion:
-    """写入一条 AgentSuggestion（只 flush，由调用方与通知一起统一 commit）。
+    """写入一条 AgentSuggestion，仅 flush，由调用方与通知一起 commit。
 
-    这是 Agent 唯一的写路径：只写 agent_suggestions 表，不触碰任何正式
-    业务状态（10.3 节、原则 2）。
+    这是 Agent 唯一的写路径，不得修改任何正式业务状态。
     """
     record = AgentSuggestion(
         run_id=envelope.run_id,
@@ -690,9 +657,7 @@ async def write_suggestion(
     return record
 
 
-# ---------- 工具注册表 ----------
-
-#: 工具名 → 工具。新增工具必须显式标记 kind，并通过护栏测试。
+#: 工具注册表。新增工具必须显式设置 kind 并通过护栏测试。
 TOOL_REGISTRY: dict[str, AgentTool] = {
     tool.name: tool
     for tool in (
@@ -813,8 +778,7 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
     )
 }
 
-#: 10.3 节禁止注册为 Agent 工具的操作（结构化清单，护栏测试断言不相交）。
-#: 这些操作只能由人通过正式业务命令（API → domain service）完成。
+#: 禁止注册为 Agent 工具的操作，只能由人通过 API 到 domain service 的正式命令完成。
 FORBIDDEN_OPERATIONS: list[dict[str, str]] = [
     {"operation": "create_work_item", "description": "创建正式工作项"},
     {"operation": "change_assignee", "description": "修改负责人"},

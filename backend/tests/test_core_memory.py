@@ -1,4 +1,4 @@
-"""核心记忆条目服务测试（M4.2 验收，设计文档第 8 节）。
+"""核心记忆条目服务测试。
 
 - 负责人手写条目立即生效，来源信息（提议者/确认者/生效时间）完整可查；
 - 非负责人写被拒；项目成员可读（含已作废条目，供追溯）；
@@ -34,7 +34,6 @@ async def test_leader_create_entry_effective_immediately(
         assert entry.status == "active"
         assert entry.scope == "project"
         assert entry.project_id == project_a.id
-        # 手写：提议者 = 确认者 = 负责人本人，立即生效
         assert entry.proposed_by_member_id == leader.id
         assert entry.confirmed_by_member_id == leader.id
         assert entry.effective_at is not None
@@ -97,15 +96,12 @@ async def test_deprecate_permission_and_isolation(
 
     async with async_session_factory() as session:
         entry = await create_entry(session, leader, content="约定")
-        # 非负责人作废 → 403
         with pytest.raises(ApiException) as exc_info:
             await deprecate_entry(session, member, entry_id=entry.id)
         assert exc_info.value.status_code == 403
-        # 他项目负责人作废 → 404（多项目规约：跨项目访问按不存在处理）
         with pytest.raises(ApiException) as exc_info:
             await deprecate_entry(session, leader_b, entry_id=entry.id)
         assert exc_info.value.status_code == 404
-        # 正常作废后重复作废 → 409
         await deprecate_entry(session, leader, entry_id=entry.id)
         with pytest.raises(ApiException) as exc_info:
             await deprecate_entry(session, leader, entry_id=entry.id)

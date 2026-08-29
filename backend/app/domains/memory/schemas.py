@@ -1,4 +1,4 @@
-"""记忆检索接口的入参/出参 Schema（设计文档第 11 节）。"""
+"""记忆检索、核心记忆、成员档案和问答接口模型。"""
 
 import uuid
 from datetime import datetime
@@ -11,7 +11,7 @@ from app.domains.memory.retriever import RetrievalResult
 from app.domains.memory.search import CALLER_LEADER_QUERY, CALLER_MEMBER_QA
 from app.domains.work_items.schemas import MemberBrief
 
-#: HTTP 路径允许的调用方标识（agent_assignment 仅供 Agent 内部调用，16.12）
+# `HTTP` 路径不能冒充仅供内部 `Agent` 使用的 `agent_assignment`
 _HTTP_CALLERS = (CALLER_MEMBER_QA, CALLER_LEADER_QUERY)
 
 
@@ -52,19 +52,16 @@ class MemorySearchResponse(BaseModel):
         )
 
 
-# ---------- 核心记忆条目（设计文档第 8 节，M4.3） ----------
-
-
 class CoreMemoryEntryCreateIn(BaseModel):
-    """负责人手写条目（种子记忆，16.11）：立即生效。"""
+    """负责人手写并立即生效的核心记忆条目。"""
 
     content: str = Field(min_length=1, max_length=CORE_MEMORY_BUDGET_CHARS)
 
 
 class CoreMemoryEntryOut(BaseModel):
-    """核心记忆条目：成员可见来源信息——谁提的、谁确认的、何时生效（第 8 节）。
+    """包含提议者、确认者和生效时间的核心记忆条目。
 
-    proposed_by 为 None 表示 Agent 提议（经负责人确认后生效，M4.4）。
+    `proposed_by` 为空表示由 `Agent` 提议并经负责人确认。
     """
 
     id: uuid.UUID
@@ -78,21 +75,17 @@ class CoreMemoryEntryOut(BaseModel):
 
 
 class CoreMemoryEntryListOut(BaseModel):
-    """条目列表 + 容量占用（供前端展示预算，第 8 节）。"""
+    """核心记忆条目列表及容量占用。"""
 
     entries: list[CoreMemoryEntryOut]
     used_chars: int
     budget_chars: int
 
 
-# ---------- 团队记忆：成员统计（设计文档第 7 节①，M3.3） ----------
-
-
 class MemberStatsOut(BaseModel):
-    """成员完成数、负载与按时完成率（分配页面与 Agent 工具共用，M6.2）。
+    """分配页面和 `Agent` 共用的成员完成数、负载与按时完成率。
 
-    on_time_rate 为 None 表示无已完成样本（前端展示"暂无数据"）；
-    sample_sufficient=False 时前端标注"样本不足"（16.8）。
+    `on_time_rate` 为空表示没有已完成样本；`sample_sufficient=False` 表示样本不足。
     """
 
     member_id: uuid.UUID
@@ -120,9 +113,6 @@ class MemberStatsOut(BaseModel):
         )
 
 
-# ---------- 团队记忆：成员文字档案（设计文档第 7 节②，M3.5） ----------
-
-
 class MemberProfileUpsertIn(BaseModel):
     """负责人创建/更新成员档案（写完直接生效，不走确认流程）。"""
 
@@ -130,10 +120,9 @@ class MemberProfileUpsertIn(BaseModel):
 
 
 class MemberProfileOut(BaseModel):
-    """成员档案：随人走（users.id），项目内全员可读含本人（16.1）。
+    """以 `users.id` 归属、可跨项目读取的成员档案。
 
-    membership_active：目标在当前项目的成员状态（16.7 停用标记）——
-    True/False = 本项目在职/停用；null = 不是本项目成员。
+    `membership_active` 表示目标用户在当前项目的成员状态；`None` 表示不属于该项目。
     """
 
     user_id: uuid.UUID
@@ -145,20 +134,17 @@ class MemberProfileOut(BaseModel):
     updated_at: datetime
 
 
-# ---------- 知识库问答（设计文档第 11 节②，M7.3） ----------
-
-
 class MemoryQaRequest(BaseModel):
-    """一问一答入参（本期无多轮、无流式，第 11 节）。"""
+    """单轮、非流式知识库问答请求。"""
 
     question: str = Field(min_length=1, max_length=2000)
 
 
 class QaSourceOut(BaseModel):
-    """依据/线索：来源定位 + 片段内容（点击可查看原文）。
+    """问答依据或拒答线索的来源定位和片段内容。
 
-    history_kind：history 来源的实际种类（work_item / agent_run）——
-    前端据此决定是否提供"查看关联工作项"跳转；非 history 为 null。
+    `history_kind` 区分 `work_item` 与 `agent_run`，供前端决定是否显示工作项跳转；
+    非 `history` 来源为空。
     """
 
     source_type: str
@@ -169,9 +155,9 @@ class QaSourceOut(BaseModel):
 
 
 class MemoryQaResponse(BaseModel):
-    """answered 附依据列表；refused 附最接近的线索（16.13 宁拒答不编造）。"""
+    """`answered` 附依据列表，`refused` 附最接近的线索。"""
 
-    status: str  # "answered" | "refused"
+    status: str
     answer: str | None
     sources: list[QaSourceOut]
     clues: list[QaSourceOut]

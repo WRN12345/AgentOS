@@ -1,10 +1,8 @@
-"""请求上下文中间件：为每个请求生成 request_id 并透传。
+"""请求上下文中间件：为每个请求生成并透传 `request_id`。
 
-- 生成 UUID 作为 request_id，写入 contextvars（日志/错误响应/审计事件自动取用）
-  和响应头 X-Request-ID；
-- 记录来源 IP 到上下文（审计事件使用，第 16 章）；
-- 从 X-Project-Id 请求头快照项目归属到上下文（ticket 07：审计事件项目归属，
-  落库时捕获；缺失/无效头记为 None，即全局接口语义）。
+中间件把 `request_id`、来源 IP 和 `X-Project-Id` 快照写入 contextvars，供日志、
+错误响应和审计事件使用，并在响应头 `X-Request-ID` 中返回请求标识。缺失或无效的
+项目头记为 `None`，表示全局接口。
 """
 
 import uuid

@@ -1,8 +1,4 @@
-"""API v1 路由组装。
-
-领域接口按 4.1 节放进对应领域包，这里只做挂载；
-501 登录占位已在 T2.2 由 domains/identity 的真实认证替代。
-"""
+"""组装各领域的 API v1 路由。"""
 
 from fastapi import APIRouter, Depends
 
@@ -64,14 +60,14 @@ async def v1_root() -> dict[str, str]:
 
 @router.get("/config", response_model=AgentConfigOut)
 async def get_config(_: User = Depends(get_current_user)) -> AgentConfigOut:
-    """前端可用的运行配置（T5.7，16 节）。
+    """返回前端可用的非敏感运行配置。
 
     仅暴露当前模型 Provider 是否为外部（云端）服务等非敏感标识；
     API Key、连接串等敏感配置不下发。前端据此在建议中心提示
     "数据将发送至外部服务"。
 
-    使用 get_current_user（不含项目成员校验），因为 admin 全局化后
-    全局管理员没有项目成员身份，但仍需获取前端配置。
+    此接口只校验当前用户，不校验项目成员身份，使无项目成员记录的全局管理员也能
+    获取配置。
     """
     return AgentConfigOut(
         llm_provider=settings.llm_provider,
@@ -81,7 +77,7 @@ async def get_config(_: User = Depends(get_current_user)) -> AgentConfigOut:
 
 @router.post("/tasks/example")
 async def enqueue_example_task(_: None = Depends(idempotency_guard)) -> dict[str, str]:
-    """投递一个示例后台任务，用于验证 API → 队列 → Worker 链路。
+    """投递示例后台任务，用于验证 API、队列和 Worker 链路。
 
     同时作为 Idempotency-Key 机制的示例命令接口：
     携带同一幂等键的重复请求只入队一次，第二次返回首次结果。

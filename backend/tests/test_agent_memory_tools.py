@@ -1,9 +1,7 @@
-"""Agent 记忆检索工具测试（M6.1 验收，设计文档第 11 节）。
+"""验证 Agent 记忆检索工具的结果、注册类型与项目隔离。
 
-- search_project_documents / search_history_records 走 M2.9 带权限路径
-  （caller=agent_assignment），返回片段；
-- 项目隔离：Agent 只命中当前项目的块；
-- 工具注册进 TOOL_REGISTRY 且为 read_query（护栏断言在 test_agent_guardrails）。
+文档、历史记录和成员数据查询必须使用只读工具；项目记忆不得跨项目泄漏，
+成员档案仅在明确允许的跨项目场景中随成员共享。
 """
 
 import uuid
@@ -25,7 +23,7 @@ from tests.test_file_index_pipeline import FakeEmbeddingProvider
 
 @pytest.fixture(autouse=True)
 def fake_embedding(monkeypatch: pytest.MonkeyPatch):
-    """索引写入与查询向量都用 fake provider（常数向量，余弦距离恒 0）。"""
+    """索引和查询使用同一常量向量替身，确保结果稳定命中。"""
     monkeypatch.setattr(
         indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
     )
@@ -51,13 +49,13 @@ async def test_search_project_documents_tool(project_a: Project, project_b: Proj
             session, "怎么部署", project_id=project_a.id
         )
         assert len(hits) == 1
-        assert "发布步骤" in hits[0]["content"]  # 语义命中（用词不同也能命中）
+        assert "发布步骤" in hits[0]["content"]  # 查询与原文用词不同，仍应语义命中。
         assert hits[0]["source_id"] == str(doc_id)
 
-        # 项目隔离：B 项目视角检索不到 A 的文档
+        # 项目记忆不得向其他项目泄漏。
         assert await search_project_documents(session, "怎么部署", project_id=project_b.id) == []
 
-        # 类型过滤：history 块不出现在文档检索里
+        # 文档检索不得混入历史记录块。
         await MemoryIndexService(session).rebuild_chunks(
             project_id=project_a.id,
             source_type="history",
@@ -87,11 +85,8 @@ def test_tools_registered_as_read_query() -> None:
         assert tool.kind == "read_query"
 
 
-# ---------- M6.2 成员统计与档案查询工具 ----------
-
-
 async def test_get_member_stats_tool(project_a: Project) -> None:
-    """工具返回完成统计；停用成员带 is_active=False（不进分配候选，16.7）。"""
+    """成员统计应保留停用标记，防止停用成员进入分配候选。"""
     from app.agents.tools import get_member_stats
     from tests.conftest import add_member
     from tests.test_memory_member_stats import _add_item
@@ -119,18 +114,18 @@ async def test_get_member_stats_tool(project_a: Project) -> None:
 async def test_search_member_profiles_tool(
     project_a: Project, project_b: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """档案工具走 M3.9 放行：agent_assignment 命中随人走的跨项目档案。"""
+    """分配场景应能检索随成员共享的跨项目档案。"""
     from app.agents.tools import search_member_profiles
     from app.core.config import settings
     from app.domains.memory.models import MemoryChunk
 
     source_id = uuid.uuid4()
-    # 与 FakeEmbeddingProvider 输出同向（[0.1]*dims），保证余弦距离 0 必命中
+    # 与 embedding 替身保持同向，避免相似度波动导致用例不稳定。
     vec = [0.1] * settings.embedding_dimensions
     async with async_session_factory() as session:
         session.add(
             MemoryChunk(
-                project_id=None,  # profile 随人走
+                project_id=None,  # 成员档案不绑定单个项目。
                 source_type="profile",
                 source_id=source_id,
                 content="对支付模块的历史包袱很熟",
@@ -143,7 +138,7 @@ async def test_search_member_profiles_tool(
         hits = await search_member_profiles(session, "支付", project_id=project_a.id)
         assert len(hits) == 1
         assert hits[0]["source_id"] == str(source_id)
-        # B 项目视角同样可命中（随人走，16.12 放行两场景之一）
+        # 成员档案在授权的分配场景中可跨项目复用。
         hits = await search_member_profiles(session, "支付", project_id=project_b.id)
         assert len(hits) == 1
 

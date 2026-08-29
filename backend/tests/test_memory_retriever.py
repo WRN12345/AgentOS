@@ -1,4 +1,4 @@
-"""检索核心测试（M2.8 验收，设计文档第 5、12、16.4、16.13 节）。
+"""记忆向量检索的排序、过滤与项目隔离测试。
 
 - 余弦距离升序 top-k，距离上限过滤（拒答阈值）；
 - 只命中 is_current 且当前模型版本的块；
@@ -18,7 +18,7 @@ from app.infrastructure.models.embedding import EmbeddingProvider
 
 
 def _vec(*pairs: tuple[int, float]) -> list[float]:
-    """稀疏构造 1024 维向量：{维度下标: 值}。"""
+    """按维度下标和值构造稀疏测试向量。"""
     vec = [0.0] * settings.embedding_dimensions
     for index, value in pairs:
         vec[index] = value

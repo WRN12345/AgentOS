@@ -1,18 +1,13 @@
-"""Agent 建议统一输出 Schema（10.2 节，T5.3）。
+"""Agent 建议的统一输出 Schema。
 
-按 10.2 节要求，每条 Agent 建议至少包含：建议类型、建议内容和理由、
-使用的业务事实引用、置信度、风险和限制、模型、提示词版本和运行 ID。
-其中模型 / 运行 ID 由系统侧填充而非模型输出，故拆分为两层：
+每条建议包含类型、内容和理由、业务事实引用、置信度、风险、模型、提示词版本和
+运行 ID。模型和运行 ID 由系统填充，因此契约分为两层：
 
-- AgentSuggestionOutput「模型输出部分」：能力函数（T5.4/T5.5 的六个 Agent）
-  或解析模型 JSON 后必须满足的契约；prompt_version 由能力函数随提示词一起
-  声明（提示词由能力持有，系统侧无从得知，故留在输出部分）。
-- AgentSuggestionEnvelope「信封部分」：系统侧补充 run_id / model 后的完整
-  建议。run_id 贯穿 agent_runs ↔ agent_suggestions；model 冗余记录在建
-  议写入时的运行上下文（运行行上的 agent_runs.model 为准）。
+- AgentSuggestionOutput：能力函数或模型 JSON 必须满足的输出契约；
+- AgentSuggestionEnvelope：系统补充 run_id 和 model 后的完整建议。
 
-校验失败抛 SuggestionValidationError：诊断信息（错误详情、原始输出截断、
-run_id）以 JSON 文本形式承载，worker 原样落入 agent_runs.error（17.3 节）。
+校验失败抛 SuggestionValidationError，诊断 JSON 包含错误详情、截断的原始输出和
+run_id，由 worker 原样写入 agent_runs.error。
 """
 
 import json
@@ -21,12 +16,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-#: 诊断信息中原始输出的截断长度（避免 agent_runs.error 被超长模型输出撑爆）
+#: 截断诊断中的原始输出，避免超长模型响应撑大 agent_runs.error。
 RAW_OUTPUT_MAX_CHARS = 500
 
 
 class SuggestionContent(BaseModel):
-    """建议内容和理由（10.2 节）。
+    """建议内容和理由。
 
     extra="allow"：各能力可在 summary/rationale 之外附加自有结构化字段
     （如 echo 能力的回显块、分配建议的候选人列表），随 content 整体入库。
@@ -34,36 +29,27 @@ class SuggestionContent(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # 建议内容（一句话结论）
     summary: str = Field(min_length=1)
-    # 理由（为什么给出该建议）
     rationale: str = Field(min_length=1)
 
 
 class AgentSuggestionOutput(BaseModel):
     """模型输出部分：能力函数产出（或模型 JSON 解析后）必须满足的契约。"""
 
-    # 建议类型（如 requirement / assignment / planning / risk / review / summary / echo）
     suggestion_type: str = Field(min_length=1, max_length=64)
     content: SuggestionContent
-    # 使用的业务事实引用（如 {"work_item_ids": [...], "member_ids": [...]}）
     fact_refs: dict[str, list[str]] = Field(default_factory=dict)
     confidence: float = Field(ge=0.0, le=1.0)
-    # 风险和限制
     risks: str = Field(min_length=1)
-    # 提示词版本（由能力函数随提示词声明，约定见 tools.py / base.py 注释）
     prompt_version: str = Field(min_length=1, max_length=64)
 
 
 class AgentSuggestionEnvelope(AgentSuggestionOutput):
-    """信封部分：系统侧填充 run_id / model 后的完整建议（10.2 节）。"""
+    """系统填充 run_id 和 model 后的完整建议。"""
 
     run_id: uuid.UUID
-    # 运行时刻的模型名；建议行不冗余存储该字段（以 agent_runs.model 为准）
+    # 建议行不冗余存储模型名，以 agent_runs.model 为准。
     model: str | None = None
-
-
-# ---------- requirement_pipeline 专用载荷（设计文档 2026-07-30 §4.2） ----------
 
 
 class PipelineAssignee(BaseModel):
@@ -79,8 +65,8 @@ class PipelineAssignee(BaseModel):
 class PipelineWorkItem(BaseModel):
     """pipeline 拆解工作项：title/description/验收标准/优先级/建议 DDL + 分配建议。
 
-    user_specified 由系统侧按"需求文本点名解析结果"权威标记（用户指定的项
-    Agent 不得更改人选）；notes 承载对指定人选的合理性提示（技能不匹配、
+    user_specified 由系统按需求文本点名结果设置，Agent 不得更换用户指定的人选；
+    notes 承载对指定人选的合理性提示（技能不匹配、
     负载过高），不阻止分配。
     """
 
@@ -98,7 +84,7 @@ class PipelineWorkItem(BaseModel):
 
 
 class PipelineSuggestionContent(SuggestionContent):
-    """requirement_pipeline 的 content 契约（§4.2）：需求分析 + 拆解 + 分配。
+    """requirement_pipeline 的需求分析、拆解和分配 content 契约。
 
     extra="forbid"：该载荷形状是前端向导的依赖契约，多余字段一律拒绝。
     """
@@ -114,11 +100,8 @@ class PipelineSuggestionContent(SuggestionContent):
     collaboration_points: list[str]
     unresolved_mentions: list[str]
     risks: list[str]
-    #: 记忆参考状态（16.5，M6.6）：ok=已参考记忆；degraded=本次未参考记忆（降级标注）
+    # ok 表示已参考记忆，degraded 表示本次未参考记忆。
     memory_status: Literal["ok", "degraded"] = "ok"
-
-
-# ---------- dev_doc_review 专用载荷（设计文档 2026-07-30 §4.4） ----------
 
 
 class DevDocChecklistItem(BaseModel):
@@ -145,8 +128,7 @@ class DevDocReviewSuggestionContent(SuggestionContent):
     risks: list[str]
 
 
-#: suggestion_type → content 专用载荷模型。命中的类型在通用 Schema 之外
-#: 追加一次严格载荷校验，失败同样抛 SuggestionValidationError。
+#: 特定 suggestion_type 需在通用 Schema 之外追加严格 content 校验。
 CONTENT_PAYLOAD_MODELS: dict[str, type[SuggestionContent]] = {
     "pipeline": PipelineSuggestionContent,
     "dev_doc_review": DevDocReviewSuggestionContent,
@@ -154,7 +136,7 @@ CONTENT_PAYLOAD_MODELS: dict[str, type[SuggestionContent]] = {
 
 
 class SuggestionValidationError(ValueError):
-    """结构校验失败：携带诊断信息（17.3 节）。
+    """结构校验失败，并携带可写入运行记录的诊断信息。
 
     str() 为 JSON 文本：{"run_id", "stage", "errors", "raw_output"(截断)}，
     worker 的通用失败处理会原样写入 agent_runs.error。
@@ -178,7 +160,7 @@ class SuggestionValidationError(ValueError):
 
 
 def parse_suggestion_output(raw: Any, *, run_id: str) -> AgentSuggestionOutput:
-    """把能力产出校验为统一 Schema（10.2、17.3 节）。
+    """将能力产出校验为统一 Schema。
 
     接受两种形态：
     - dict（能力函数直接构造的结构化输出）；

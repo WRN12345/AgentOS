@@ -1,10 +1,9 @@
-"""后台 Worker 入口（4.2 节）。
+"""后台 Worker 入口。
 
 Worker 与 API 共用 domains/ 与 infrastructure/ 的同一套领域模型和数据访问层，
 从 Redis 队列消费后台任务（Agent 运行、到期提醒等）。
 
-约束（4.2 节）：Worker 不得调用"批准、转派、完成"等业务命令，
-只允许生成建议或通知。本骨架中不引入任何业务命令代码路径。
+Worker 不得调用批准、转派或完成等业务命令，只允许生成建议或通知。
 """
 
 import asyncio
@@ -16,7 +15,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 
 # 导入全部领域模型，确保 SQLAlchemy 跨领域外键（如 notifications.recipient_id
-# → project_members.id）在 worker 进程内可解析（与 migrations/env.py 同一模式）
+# → project_members.id）能在 Worker 进程内解析。
 from app.agents import models as _agent_models  # noqa: F401
 from app.domains.audit import models as _audit_models  # noqa: F401
 from app.domains.collaboration import models as _collaboration_models  # noqa: F401
@@ -49,29 +48,29 @@ async def handle_task(task: dict, redis_client: redis.Redis) -> None:
             task.get("payload", {}).get("source", "<unknown>"),
         )
     elif task_type == "due.scan":
-        # 到期/逾期提醒扫描（T3.6）：只写通知 + 发布事件，不触碰业务状态（4.2 硬约束）
+        # 提醒任务只写通知并发布事件，不得修改业务状态。
         await scan_due_reminders(redis_client)
     elif task_type == "agent.run":
-        # Agent 图运行（T5.2）：产出建议与通知，失败只标记 agent_runs，不影响业务
+        # Agent 图只产出建议和通知，失败仅记录在 `agent_runs`，不影响业务状态。
         await execute_agent_run(task.get("payload", {}), redis_client)
     elif task_type == "agent.risk_scan":
-        # Workflow Risk Agent 周期风险扫描（T5.5）：去重后投递 agent.run，不触碰业务状态
+        # 风险扫描去重后投递 `agent.run`，不得修改业务状态。
         await run_risk_scan(redis_client)
     elif task_type == "memory.index":
-        # 记忆索引任务（M1.8）：切块→embedding→memory_chunks，失败按退避重入队
+        # 记忆索引失败时按退避策略重新入队。
         await execute_memory_index(task.get("payload", {}), redis_client)
     elif task_type == "memory.proposal_expire":
-        # 核心记忆提议过期扫描（M4.5，16.6）：挂起超 7 天标记 expired
+        # 挂起超过 7 天的核心记忆提议标记为 `expired`。
         await expire_memory_proposals()
     elif task_type == "memory.summary":
-        # 经验总结任务（M5.3，16.9）：模型不可用静默跳过，失败只记日志不重试
+        # 经验总结在模型不可用时静默跳过，其他失败只记日志、不重试。
         await execute_memory_summary(task.get("payload", {}))
     else:
         logger.warning("unknown task type, skipped: id=%s type=%s", task.get("id"), task_type)
 
 
 async def safe_handle_task(task: dict, redis_client: redis.Redis) -> None:
-    """单个任务的处理异常不拖垮 worker（第 22 章标准 9，T5.6）。
+    """隔离单个任务的异常，避免拖垮 Worker。
 
     handle_task 内各处理器（如 execute_agent_run）已自行兜底业务异常；
     这里再兜住处理器自身的意外错误（如数据库瞬断），记录日志后继续
@@ -101,7 +100,7 @@ async def run() -> None:
                 except Exception:  # noqa: BLE001 - 恢复扫描失败不能停止任务消费
                     logger.exception("stale file index recovery failed")
                 last_file_index_recovery = now
-            # 先把到点的延迟任务（T5.6 退避重试）搬回即时队列
+            # 先恢复到期的延迟任务，避免即时队列持续繁忙时饿死重试任务。
             await promote_due_delayed(redis_client)
             task = await dequeue(redis_client, timeout=5)
             if task is not None:

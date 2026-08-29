@@ -1,6 +1,5 @@
-"""全量重建记忆索引（设计文档 16.4）：更换 1024 维 embedding 模型后执行。
+"""更换 1024 维 embedding 模型后全量重建记忆索引。
 
-做什么：
 1. 清空 memory_chunks（旧模型向量全部作废——检索本来就只命中当前模型版本，
    此步只是腾出空间并让重建结果可预期）；
    不能用于变更 embedding 维度：memory_chunks 的 vector 列固定为 1024 维，
@@ -10,9 +9,9 @@
 3. 成员档案按现内容重投纯文本索引任务；
 4. 已完成的拆解/分配运行与已完成工作项重投历史索引任务
    （worker 从 run/工作项记录现取文本）；
-5. active 核心记忆条目重投 core_memory 索引任务（worker 按条目当前状态重建或作废）。
+5. active 核心记忆条目重投 core_memory 索引任务，Worker 按当前状态重建或作废。
 
-重建期间知识库不可用（设计文档 16.4 已接受）。worker 必须在运行中消费任务。
+重建期间知识库不可用，Worker 必须保持运行以消费任务。
 
 用法（容器内执行）：
     docker compose exec backend python -m scripts.rebuild_memory_index --yes

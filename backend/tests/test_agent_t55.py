@@ -1,17 +1,8 @@
-"""T5.5 验收：风险、初审与总结 Agent（10.1 节后三个 Agent，mock 模型）。
+"""验证风险、交付物初审和项目总结 Agent 的端到端行为。
 
-覆盖：
-- Workflow Risk Agent：构造临期/阻塞工作项 → 直接调 scheduler 侧处理函数
-  run_risk_scan → 投递 agent.run（trigger_source=scheduler）→ 执行后生成
-  risk 建议并通知负责人；同类型 run pending 时周期触发去重跳过；
-- Deliverable Review Agent：工作项 submit（业务事务 commit 后）→ 队列出现
-  deliverable_review 的 agent.run（trigger_source=event）→ 初审建议生成、
-  reviews 表无 Agent 写入、工作项保持 IN_REVIEW；投递失败不影响 submit；
-- Summary Agent：mock 模型 → 摘要建议生成；发给模型的统计与数据库真实
-  数据一致，fact_refs 引用真实 ID；
-- 项目级触发入口 POST /agent-analysis：负责人 202、普通成员 403、
-  未注册 agent_type 400；
-- 交付物最小上下文工具：文本带正文、文件只带元数据（不读文件原文，16 节）。
+风险扫描应按项目去重并通知负责人；初审只能生成建议，不能修改正式评审或工作项
+状态，投递失败也不得影响提交主流程；总结必须基于真实项目数据。文件交付物仅可
+向模型暴露元数据，不能读取原文。
 """
 
 import json
@@ -46,7 +37,7 @@ ALICE_PW = "Alice123!"
 
 
 class _FakeProvider:
-    """模型替身：返回固定 JSON 文本，记录每次调用（断言最小上下文与 json_output）。"""
+    """返回固定 JSON 并记录调用参数的模型替身。"""
 
     name = "fake"
     model = "fake-model"
@@ -104,13 +95,10 @@ async def _reviews_count() -> int:
         return (await session.execute(select(func.count()).select_from(Review))).scalar_one()
 
 
-# ---------- Workflow Risk Agent：scheduler 周期触发 + 去重 + 通知 ----------
-
-
 async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """临期 + 阻塞工作项 → 风险扫描生成 risk 建议，通知负责人，周期触发去重。"""
+    """风险扫描应识别临期和阻塞项、通知负责人并去重活跃运行。"""
     now = datetime.now(UTC)
     due_item = await _make_work_item(
         leader.id, "临期工作项", project_id=project.id, status="IN_PROGRESS", due_at=now + timedelta(hours=2)
@@ -152,22 +140,21 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
 
     redis_client = create_redis_client()
     try:
-        await redis_client.delete(QUEUE_KEY)  # 清空共享测试队列，避免残留任务干扰
+        await redis_client.delete(QUEUE_KEY)  # 隔离共享队列中的遗留任务。
 
-        # 直接调 scheduler 周期任务的处理函数（worker 消费 agent.risk_scan 的入口）
+        # 直接调用周期任务入口，避免依赖独立 scheduler 进程。
         result = await run_risk_scan(redis_client)
         assert result["status"] == "done"
-        assert result["skipped"] == []  # 单项目：无活跃 run，正常投递
+        assert result["skipped"] == []
         assert [e["project_id"] for e in result["enqueued"]] == [str(project.id)]
         run_id = uuid.UUID(result["enqueued"][0]["run_id"])
 
-        # 去重：同类型 run 仍 pending 时，下一周期按项目跳过投递
+        # 同项目已有活跃风险运行时，下一轮扫描不得重复投递。
         again = await run_risk_scan(redis_client)
         assert again["status"] == "done"
         assert again["skipped"] == [str(project.id)]
         assert again["enqueued"] == []
 
-        # 消费投递出的 agent.run 任务
         task = await dequeue(redis_client, timeout=2)
         assert task is not None and task["type"] == "agent.run"
         await handle_task(task, redis_client)
@@ -176,7 +163,7 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
         assert run.status == "succeeded", run.error
         assert run.agent_type == risk.AGENT_TYPE == "workflow_risk"
         assert run.trigger_source == "scheduler"
-        assert run.work_item_id is None  # 项目级扫描不挂单一工作项
+        assert run.work_item_id is None
 
         async with async_session_factory() as session:
             suggestion = (
@@ -191,13 +178,11 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
         assert [r["type"] for r in content["risks"]] == ["overdue", "blocked"]
         assert content["risks"][0]["severity"] == "medium"
         assert content["risks"][1]["target_id"] == str(blocked_item.id)
-        # fact_refs 引用纳入考量的真实工作项
         assert set(suggestion.fact_refs["work_item_ids"]) == {
             str(due_item.id),
             str(blocked_item.id),
         }
 
-        # 通知负责人查看（10.2 节）
         async with async_session_factory() as session:
             notification = (
                 await session.execute(
@@ -206,7 +191,7 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
             ).scalar_one()
         assert notification.recipient_id == leader.id
 
-        # 发给模型的上下文含临期/阻塞工作项标题（最小上下文来自真实查询）
+        # 模型上下文必须来自当前项目的真实风险项。
         prompt_sent = provider.calls[0]["prompt"]
         assert "临期工作项" in prompt_sent and "阻塞工作项" in prompt_sent
         assert provider.calls[0]["json_output"] is True
@@ -214,13 +199,10 @@ async def test_risk_scan_generates_risk_suggestion_and_notifies_leader(
         await redis_client.aclose()
 
 
-# ---------- Deliverable Review Agent：submit 事件触发初审 ----------
-
-
 async def _prepare_submittable_item(
     assignee: ProjectMember, *, acceptance_criteria: str, deliverable_content: str
 ) -> WorkItem:
-    """造一个 IN_PROGRESS 且已有一版文本交付物的工作项。"""
+    """创建包含首版文本交付物的进行中工作项。"""
     item = await _make_work_item(
         assignee.id,
         "实现登录接口",
@@ -231,7 +213,7 @@ async def _prepare_submittable_item(
     async with async_session_factory() as session:
         session.add(
             Deliverable(
-                # 0015 迁移后 project_id NOT NULL：项目归属经所属工作项推导
+                # 交付物项目归属与所属工作项保持一致。
                 project_id=item.project_id,
                 work_item_id=item.id,
                 type="text",
@@ -247,7 +229,7 @@ async def _prepare_submittable_item(
 async def test_submit_triggers_deliverable_review_without_touching_reviews(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """submit commit 后投递 event 触发的初审；建议生成，reviews 表无 Agent 写入。"""
+    """提交后应异步生成初审建议，且不得写入正式评审表。"""
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     item = await _prepare_submittable_item(
         alice,
@@ -288,9 +270,8 @@ async def test_submit_triggers_deliverable_review_without_touching_reviews(
 
         async with async_session_factory() as session:
             out = await run_command(session, alice, item.id, "submit", item.version)
-        assert out.status == "IN_REVIEW"  # 主流程不受 Agent 投递影响
+        assert out.status == "IN_REVIEW"
 
-        # 队列出现 deliverable_review 的 agent.run（trigger_source=event）
         task = await dequeue(redis_client, timeout=2)
         assert task is not None and task["type"] == "agent.run"
         run_id = uuid.UUID(task["payload"]["run_id"])
@@ -317,12 +298,12 @@ async def test_submit_triggers_deliverable_review_without_touching_reviews(
         assert suggestion.fact_refs["work_item_ids"] == [str(item.id)]
         assert len(suggestion.fact_refs["deliverable_ids"]) == 1
 
-        # 最小上下文（16 节）：提示词含验收标准与文本交付物正文
+        # 文本交付物的最小上下文包含验收标准和正文。
         prompt_sent = provider.calls[0]["prompt"]
         assert "账号密码可登录并返回令牌" in prompt_sent
         assert "实现说明：已完成登录接口" in prompt_sent
 
-        # Agent 不触碰正式业务状态（10.3 节）：reviews 表无写入，工作项保持 IN_REVIEW
+        # Agent 初审只能提供建议，不得触碰正式评审和工作项状态。
         assert await _reviews_count() == 0
         async with async_session_factory() as session:
             final_item = await session.get(WorkItem, item.id)
@@ -334,7 +315,7 @@ async def test_submit_triggers_deliverable_review_without_touching_reviews(
 async def test_submit_survives_review_dispatch_failure(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """初审投递抛错不影响 submit 主流程（17.3 节），工作项照常进入 IN_REVIEW。"""
+    """初审投递失败时，提交主流程仍应进入待评审状态。"""
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     item = await _prepare_submittable_item(
         alice, acceptance_criteria="可登录", deliverable_content="实现说明"
@@ -353,16 +334,13 @@ async def test_submit_survives_review_dispatch_failure(
         run_count = (
             await session.execute(select(func.count()).select_from(AgentRun))
         ).scalar_one()
-    assert run_count == 0  # 投递失败未产生运行记录，也无残留
-
-
-# ---------- Summary Agent：摘要与真实统计一致 ----------
+    assert run_count == 0
 
 
 async def test_summary_agent_uses_real_stats(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """摘要建议生成；发给模型的统计与 DB 真实数据一致；fact_refs 引用真实 ID。"""
+    """项目摘要应使用数据库真实统计，并引用对应实体 ID。"""
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     completed = await _make_work_item(alice.id, "已完成事项", project_id=project.id, status="COMPLETED")
     in_review = await _make_work_item(alice.id, "待审工作项", project_id=project.id, status="IN_REVIEW")
@@ -407,7 +385,7 @@ async def test_summary_agent_uses_real_stats(
                 session,
                 redis_client,
                 agent_type=summary.AGENT_TYPE,
-                project_id=project.id,  # 项目级 run 必须带归属（工具按项目过滤）
+                project_id=project.id,  # 项目归属用于约束工具查询范围。
                 trigger_source="manual",
             )
         await handle_task(
@@ -431,13 +409,12 @@ async def test_summary_agent_uses_real_stats(
         for key in ("progress", "completed", "pending_approvals", "risks"):
             assert key in content
 
-        # 发给模型的统计与数据库真实数据一致（抽查核对）
+        # 模型上下文中的状态统计必须来自数据库快照。
         prompt_sent = provider.calls[0]["prompt"]
         for status in ("COMPLETED", "IN_REVIEW", "BLOCKED", "READY"):
             assert f'"{status}": 1' in prompt_sent
         assert "已完成事项" in prompt_sent and "待审工作项" in prompt_sent
 
-        # fact_refs 引用真实的完成/待审工作项与待批转派
         assert set(suggestion.fact_refs["work_item_ids"]) == {
             str(completed.id),
             str(in_review.id),
@@ -447,13 +424,10 @@ async def test_summary_agent_uses_real_stats(
         await redis_client.aclose()
 
 
-# ---------- 项目级触发入口 POST /agent-analysis（T5.5） ----------
-
-
 async def test_project_level_agent_analysis_api(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """负责人触发项目级分析 202（work_item_id 可空）；普通成员 403；未注册类型 400。"""
+    """项目级分析仅允许负责人触发，并校验 Agent 类型和工作项。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
@@ -463,7 +437,6 @@ async def test_project_level_agent_analysis_api(
     try:
         await redis_client.delete(QUEUE_KEY)
 
-        # 负责人：项目级风险扫描（不挂工作项）
         resp = await client.post(
             "/api/v1/agent-analysis",
             json={"agent_type": "workflow_risk"},
@@ -475,7 +448,7 @@ async def test_project_level_agent_analysis_api(
         assert body["work_item_id"] is None
         assert body["trigger_source"] == "manual"
 
-        # 负责人：带 work_item_id 的项目级触发（校验工作项存在）
+        # 可选工作项必须存在于当前项目。
         item = await _make_work_item(leader.id, "关联工作项", project_id=project.id)
         resp = await client.post(
             "/api/v1/agent-analysis",
@@ -485,7 +458,6 @@ async def test_project_level_agent_analysis_api(
         assert resp.status_code == 202, resp.text
         assert resp.json()["work_item_id"] == str(item.id)
 
-        # 普通成员 → 403
         resp = await client.post(
             "/api/v1/agent-analysis",
             json={"agent_type": "workflow_risk"},
@@ -493,7 +465,6 @@ async def test_project_level_agent_analysis_api(
         )
         assert resp.status_code == 403, resp.text
 
-        # 未注册 agent_type → 400
         resp = await client.post(
             "/api/v1/agent-analysis",
             json={"agent_type": "not_registered"},
@@ -501,7 +472,6 @@ async def test_project_level_agent_analysis_api(
         )
         assert resp.status_code == 400, resp.text
 
-        # work_item_id 不存在 → 404
         resp = await client.post(
             "/api/v1/agent-analysis",
             json={"agent_type": "workflow_risk", "work_item_id": str(uuid.uuid4())},
@@ -512,17 +482,14 @@ async def test_project_level_agent_analysis_api(
         await redis_client.aclose()
 
 
-# ---------- 交付物最小上下文工具（16 节） ----------
-
-
 async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
     project: Project, leader: ProjectMember
 ) -> None:
-    """文本/Git 链接交付物带正文；文件类只带元数据，content 一律 None（不读原文）。"""
+    """文本交付物可返回正文，文件交付物只能返回元数据。"""
     item = await _make_work_item(leader.id, "混合交付工作项", project_id=project.id, status="IN_PROGRESS")
     async with async_session_factory() as session:
         stored = StoredFile(
-            project_id=item.project_id,  # 0016 迁移后 project_id NOT NULL
+            project_id=item.project_id,
             storage_key="2026/07/abc.pdf",
             original_filename="设计文档.pdf",
             size_bytes=12345,
@@ -536,7 +503,7 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
         session.add_all(
             [
                 Deliverable(
-                    # 0015 迁移后 project_id NOT NULL：项目归属经所属工作项推导
+                    # 交付物项目归属与所属工作项保持一致。
                     project_id=project.id,
                     work_item_id=item.id,
                     type="text",
@@ -564,7 +531,7 @@ async def test_deliverable_metadata_tool_exposes_text_and_file_meta_only(
     assert [r["version"] for r in rows] == [1, 2]
     assert rows[0]["content"] == "阶段性实现说明"
     assert rows[0]["file"] is None
-    assert rows[1]["content"] is None  # 文件类绝不带正文
+    assert rows[1]["content"] is None  # 文件正文不得进入 Agent 上下文。
     assert rows[1]["file"] == {
         "original_filename": "设计文档.pdf",
         "size_bytes": 12345,

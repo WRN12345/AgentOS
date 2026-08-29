@@ -1,8 +1,8 @@
-"""密码与令牌安全原语（第 16 章）。
+"""密码与令牌安全原语。
 
-- 密码：Argon2id 哈希（argon2-cffi 默认参数）。
-- Access Token：JWT（HS256），载荷含用户 ID 与令牌版本 tv。
-- Refresh Token：不透明随机串，数据库只存 SHA-256 哈希。
+- 密码使用 `Argon2id` 哈希（`argon2-cffi` 默认参数）。
+- `Access Token` 使用 `JWT`，载荷包含用户 ID 与令牌版本 `tv`。
+- `Refresh Token` 是不透明随机串，数据库只存 `SHA-256` 哈希。
 
 日志纪律：本模块任何函数都不记录密码与令牌原文。
 """
@@ -20,7 +20,7 @@ from argon2.exceptions import Argon2Error, VerificationError, VerifyMismatchErro
 from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 
-_password_hasher = PasswordHasher()  # 默认即 Argon2id
+_password_hasher = PasswordHasher()  # 默认算法为 `Argon2id`
 
 
 def hash_password(password: str) -> str:
@@ -47,7 +47,7 @@ def create_access_token(user_id: uuid.UUID, token_version: int) -> str:
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """解析并校验 Access Token，失败抛 ApiException（统一错误格式）。"""
+    """解析并校验 `Access Token`，失败时抛出统一格式的 `ApiException`。"""
     try:
         payload: dict[str, Any] = jwt.decode(
             token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
@@ -60,7 +60,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
 
 
 def generate_refresh_token() -> str:
-    """生成不透明 Refresh Token（仅此返回值是原文，落库一律用哈希）。"""
+    """生成不透明 `Refresh Token`；仅返回原文，持久化时必须使用哈希。"""
     return secrets.token_urlsafe(48)
 
 

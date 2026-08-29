@@ -1,6 +1,6 @@
-"""多项目改造 ticket 04：存储文件项目隔离测试（主接缝，HTTP API 层）。
+"""存储文件的项目隔离测试。
 
-覆盖行为矩阵（spec D1/D5 / ticket 04 验收）：
+覆盖行为：
 - 落库归属：当前项目上下文上传的文件 project_id = 当前项目（经 actor 派生填充）
 - 下载越权：A 上下文访问 B 项目文件 → 404（不是 403，不暴露存在性）
 - 跨实体引用：A 上下文上传关联 B 项目工作项 → 404
@@ -160,7 +160,6 @@ async def test_projects_files_mutually_invisible(
     assert up_a.json()["project_id"] == str(project_a.id)
     assert up_b.json()["project_id"] == str(project_b.id)
 
-    # A 成员（A 上下文）下 B 文件 → 404；下自己 A 文件 → 200
     resp = await client.get(
         f"/api/v1/files/{file_b}/download", headers=ctx_a["leader_headers"]  # type: ignore[arg-type]
     )
@@ -170,7 +169,6 @@ async def test_projects_files_mutually_invisible(
     )
     assert resp.status_code == 200
 
-    # 反向：B 成员（B 上下文）下 A 文件 → 404；下自己 B 文件 → 200
     resp = await client.get(
         f"/api/v1/files/{file_a}/download", headers=ctx_b["leader_headers"]  # type: ignore[arg-type]
     )

@@ -1,15 +1,7 @@
-"""T5.4 验收：需求/分配/规划三个 Agent 能力（10.1 节，mock 模型）。
+"""验证需求分析、人员分配和规划 Agent 的结构化建议。
 
-覆盖：
-- Requirement Analyst：mock 模型返回合法 JSON → 建议入库可查，Schema 字段
-  完整（content 平铺 goals/constraints/deliverables/acceptance_criteria），
-  prompt_version=requirement_analyst.v1；
-- Assignment Advisor：构造成员能力/负载数据 → 断言发给模型的提示词包含真实
-  成员能力与负载，建议含候选人及理由，fact_refs 引用真实成员 ID，
-  capability_adjustments 仅以建议形式存在（不改动 member_capabilities）；
-- Planning Advisor：基本契约（拆分/协作点/DDL 建议字段、fact_refs 引用
-  进行中工作项）；
-- 模型不可用：ModelUnavailableError 冒泡 → run=failed，不产生建议（17.3 节）。
+建议必须基于真实工作项、成员能力和负载数据。能力调整只能作为建议，不能直接
+修改成员能力；模型不可用时应记录失败且不得产生建议。
 """
 
 import json
@@ -32,7 +24,7 @@ from tests.conftest import add_member
 
 
 class _FakeProvider:
-    """模型替身：返回固定 JSON 文本，记录每次调用（断言最小上下文与 json_output）。"""
+    """返回固定 JSON 并记录调用参数的模型替身。"""
 
     name = "fake"
     model = "fake-model"
@@ -50,7 +42,7 @@ class _FakeProvider:
 
 
 class _DownProvider(_FakeProvider):
-    """模型不可用替身：generate 抛 ModelUnavailableError。"""
+    """调用时抛出 ModelUnavailableError 的模型替身。"""
 
     def __init__(self) -> None:
         super().__init__("")
@@ -66,7 +58,7 @@ def _patch_provider(monkeypatch: pytest.MonkeyPatch, provider: _FakeProvider) ->
 
 
 async def _run_once(redis_client, run_id: uuid.UUID, prompt: str = "") -> None:
-    """直接调用 worker 处理函数执行一次 agent.run（不真起进程）。"""
+    """直接执行一次 Agent 任务，避免依赖独立 worker 进程。"""
     await handle_task(
         {
             "id": str(uuid.uuid4()),
@@ -120,13 +112,10 @@ async def _single_suggestion() -> AgentSuggestion:
     return suggestions[0]
 
 
-# ---------- Requirement Analyst ----------
-
-
 async def test_requirement_analyst_produces_structured_suggestion(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """mock 模型返回合法 JSON → 建议入库，content 平铺目标/约束/交付物/验收标准。"""
+    """合法模型输出应保存包含目标、约束、交付物和验收标准的建议。"""
     provider = _FakeProvider(
         json.dumps(
             {
@@ -177,7 +166,7 @@ async def test_requirement_analyst_produces_structured_suggestion(
         assert content["acceptance_criteria"] == ["正确账号密码可登录并返回令牌"]
         assert suggestion.fact_refs == {"work_item_ids": [str(item.id)]}
 
-        # 模型被要求只输出 JSON，且提示词含需求原文与工作项标题（最小上下文）
+        # 模型只接收生成建议所需的需求原文和工作项标题。
         assert provider.calls[0]["json_output"] is True
         assert "做一个账号密码登录" in provider.calls[0]["prompt"]
         assert "实现用户登录" in provider.calls[0]["prompt"]
@@ -186,13 +175,10 @@ async def test_requirement_analyst_produces_structured_suggestion(
         await redis_client.aclose()
 
 
-# ---------- Assignment Advisor ----------
-
-
 async def test_assignment_advisor_uses_real_capability_and_workload(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """提示词含真实成员能力/负载；建议含候选人+理由；fact_refs 引用真实成员。"""
+    """分配建议应基于真实能力和负载，并引用相关成员。"""
     _, alice = await add_member(project, "alice", "Alice123!", display_name="爱丽丝")
     _, bob = await add_member(project, "bob", "Bob123!", display_name="鲍勃")
     async with async_session_factory() as session:
@@ -203,7 +189,7 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
             ]
         )
         await session.commit()
-    # alice 名下两个活跃工作项 → 负载数据；目标工作项挂在 leader 名下
+    # 构造明确负载差异，验证模型上下文来自真实查询。
     await _make_work_item(alice, "检索模块", status="IN_PROGRESS")
     await _make_work_item(alice, "向量化管道")
     item = await _make_work_item(leader, "RAG 问答工作项")
@@ -266,10 +252,9 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
         assert content["recommended_assignee"]["reason"]
         assert content["candidates"][0]["member_id"] == str(bob.id)
         assert content["candidates"][0]["reason"]
-        # 能力修正建议仅以建议形式呈现（6.2 节）
+        # 能力修正只能出现在建议内容中。
         assert content["capability_adjustments"][0]["suggested_proficiency"] == 2
 
-        # fact_refs 引用真实成员能力与负载数据涉及的成员 + 关联工作项
         assert set(suggestion.fact_refs["member_ids"]) == {
             str(leader.id),
             str(alice.id),
@@ -277,13 +262,12 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
         }
         assert suggestion.fact_refs["work_item_ids"] == [str(item.id)]
 
-        # 发给模型的上下文包含真实成员能力与负载数据
         prompt_sent = provider.calls[0]["prompt"]
         assert "爱丽丝" in prompt_sent and "RAG" in prompt_sent
         assert '"proficiency": 4' in prompt_sent
         assert '"active_work_items": 2' in prompt_sent
 
-        # 能力修正建议未触碰 member_capabilities（6.2 节）
+        # Agent 不得直接修改成员能力记录。
         async with async_session_factory() as session:
             bob_caps = list(
                 (
@@ -299,13 +283,10 @@ async def test_assignment_advisor_uses_real_capability_and_workload(
         await redis_client.aclose()
 
 
-# ---------- Planning Advisor ----------
-
-
 async def test_planning_advisor_basic_contract(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """拆分/协作点/DDL 建议字段齐全；fact_refs 引用进行中工作项。"""
+    """规划建议应包含拆分、协作点和期限，并引用活跃工作项。"""
     open_item = await _make_work_item(leader, "既有进行中工作项", status="IN_PROGRESS")
     target = await _make_work_item(leader, "RAG 平台搭建")
 
@@ -360,27 +341,22 @@ async def test_planning_advisor_basic_contract(
         assert content["collaboration_points"] == ["检索模块输出需与生成链路对齐接口"]
         assert "争抢人力" in suggestion.risks
 
-        # fact_refs 引用纳入考量的进行中工作项（READY/IN_PROGRESS 均为活跃状态）
+        # READY 和 IN_PROGRESS 工作项均应纳入规划上下文。
         assert set(suggestion.fact_refs["work_item_ids"]) == {
             str(open_item.id),
             str(target.id),
         }
-        # 发给模型的上下文含进行中工作项标题
         assert "既有进行中工作项" in provider.calls[0]["prompt"]
     finally:
         await redis_client.aclose()
 
 
-# ---------- 模型不可用 → 优雅失败（17.3 节） ----------
-
-
 async def test_model_unavailable_marks_run_failed(
     project: Project, leader: ProjectMember, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """模型不可用错误冒泡 → run=failed + 错误信息，不产生建议。
+    """模型不可用时应记录终态错误，且不得产生建议。
 
-    T5.6 起该错误默认按指数退避重试；本用例只验证错误封装与终态记录，
-    故把自动重试次数设为 0（退避行为由 test_agent_retry.py 覆盖）。
+    此处关闭自动重试以隔离错误封装；指数退避由重试测试单独覆盖。
     """
     monkeypatch.setattr(settings, "agent_run_max_retries", 0)
     _patch_provider(monkeypatch, _DownProvider())

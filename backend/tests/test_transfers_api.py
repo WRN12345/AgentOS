@@ -1,4 +1,4 @@
-"""转派申请 API 集成测试（T3.3 验收，7.3、8.3、12.4、16、17.2 节）。"""
+"""转派申请 API 集成测试。"""
 
 import uuid
 
@@ -17,7 +17,7 @@ BOB_PW = "Bob123!"
 
 
 async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader（负责人）+ alice（工作项主执行人）+ bob（转派目标成员）。"""
+    """返回负责人、工作项主执行人和转派目标成员的测试上下文。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
@@ -107,9 +107,6 @@ async def _work_item(client: httpx.AsyncClient, headers: dict[str, str], item_id
     return resp.json()
 
 
-# ---------- 审批通过链路（7.3 节） ----------
-
-
 async def test_approve_chain_assignee_audit_notifications(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -132,18 +129,15 @@ async def test_approve_chain_assignee_audit_notifications(
     assert req["agent_suggestion_id"] is None
     req_id = req["id"]
 
-    # 审批前主任务负责人不变化（7.3 节）
     before = await _work_item(client, alice_headers, item["id"])  # type: ignore[arg-type,index]
     assert before["assignee"]["id"] == str(alice.id)
 
-    # 负责人收到待审批通知，GET /approvals 可见
     leader_types = [n.type for n in await _notifications_of(leader.id)]
     assert "transfer.requested" in leader_types
     approvals = await client.get("/api/v1/approvals", headers=leader_headers)  # type: ignore[arg-type]
     assert [a["id"] for a in approvals.json()] == [req_id]
     assert approvals.json()[0]["kind"] == "transfer"
 
-    # 负责人通过（带审批意见）
     approved = await client.post(
         f"/api/v1/transfer-requests/{req_id}/approve",
         json={"version": 1, "decision_note": "同意，鲍勃更匹配"},
@@ -156,12 +150,10 @@ async def test_approve_chain_assignee_audit_notifications(
     assert body["approved_by"] == {"id": str(leader.id), "display_name": "负责人"}
     assert body["approved_at"] is not None
 
-    # 同事务：assignee 更新 + version+1（publish 后为 2 → 3）
     after = await _work_item(client, alice_headers, item["id"])  # type: ignore[arg-type,index]
     assert after["assignee"]["id"] == str(bob.id)
     assert after["version"] == 3
 
-    # 审计：申请侧 + 工作项侧负责人变更留痕（历史负责人可追溯）
     assert await _audit_actions(req_id) == ["transfer.requested", "transfer.approved"]
     async with async_session_factory() as session:
         event = (
@@ -176,7 +168,7 @@ async def test_approve_chain_assignee_audit_notifications(
     assert event.after["assignee_id"] == str(bob.id)
     assert event.after["transfer_request_id"] == req_id
 
-    # 审批意见入审计，不进通知正文（16 节）
+    # 审批意见保留在审计中，避免通过通知向收件人披露正文。
     async with async_session_factory() as session:
         approved_event = (
             await session.execute(
@@ -195,12 +187,8 @@ async def test_approve_chain_assignee_audit_notifications(
     assert [n.type for n in bob_notifications] == ["transfer.approved"]
     assert "同意" not in bob_notifications[0].body
 
-    # 审批后 approvals 列表清空
     approvals = await client.get("/api/v1/approvals", headers=leader_headers)  # type: ignore[arg-type]
     assert approvals.json() == []
-
-
-# ---------- 唯一待审批约束（8.3、17.2 节） ----------
 
 
 async def test_pending_conflict(client: httpx.AsyncClient, project: Project) -> None:
@@ -230,9 +218,6 @@ async def test_pending_conflict(client: httpx.AsyncClient, project: Project) -> 
     assert third.status_code == 201
 
 
-# ---------- 并发/重复审批只生效一次（17.2 节） ----------
-
-
 async def test_repeat_approve_only_effective_once(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -259,7 +244,6 @@ async def test_repeat_approve_only_effective_once(
     assert r2.headers.get("Idempotency-Replayed") == "true"
     assert r2.json()["id"] == r1.json()["id"]
 
-    # 不同幂等键重复审批：版本已推进 → 409；再次尝试 → 状态机 409
     again = await client.post(
         f"/api/v1/transfer-requests/{req_id}/approve",
         json={"version": 1},
@@ -275,7 +259,6 @@ async def test_repeat_approve_only_effective_once(
     assert again2.status_code == 409
     assert again2.json()["code"] == "TRANSFER_INVALID_TRANSITION"
 
-    # 副作用只发生一次：一条 approved 审计、一条 assignee 变更审计、双方各一条通知
     assert await _audit_actions(req_id) == ["transfer.requested", "transfer.approved"]
     async with async_session_factory() as session:
         assignee_events = (
@@ -293,9 +276,6 @@ async def test_repeat_approve_only_effective_once(
     assert len(assignee_events) == 1
     bob_types = [n.type for n in await _notifications_of(bob.id)]
     assert bob_types == ["transfer.approved"]
-
-
-# ---------- 驳回与取消 ----------
 
 
 async def test_reject_keeps_assignee(client: httpx.AsyncClient, project: Project) -> None:
@@ -356,9 +336,6 @@ async def test_cancel_only_by_requester(client: httpx.AsyncClient, project: Proj
     assert await _audit_actions(req_id) == ["transfer.requested", "transfer.cancelled"]
 
 
-# ---------- 权限与参数校验 ----------
-
-
 async def test_create_permissions(client: httpx.AsyncClient, project: Project) -> None:
     """仅当前主执行人可发起；不能转给自己；目标必须是活跃成员。"""
     ctx = await _setup(client, project)
@@ -369,7 +346,6 @@ async def test_create_permissions(client: httpx.AsyncClient, project: Project) -
     # bob 不是主执行人
     resp = await _create_transfer(client, ctx["bob_headers"], item_id, str(alice.id))  # type: ignore[arg-type]
     assert resp.status_code == 403
-    # 负责人但不是主执行人
     resp = await _create_transfer(client, ctx["leader_headers"], item_id, str(bob.id))  # type: ignore[arg-type]
     assert resp.status_code == 403
     # 不能转给自己
@@ -412,9 +388,6 @@ async def test_approve_requires_leader_and_version(
     assert stale.status_code == 409
     assert stale.json()["code"] == "TRANSFER_VERSION_CONFLICT"
     assert stale.json()["details"]["current_version"] == 2
-
-
-# ---------- 查询（12.4 节） ----------
 
 
 async def test_list_endpoints(client: httpx.AsyncClient, project: Project) -> None:

@@ -1,7 +1,6 @@
-"""站内通知接口（12.6 节）。
+"""当前项目的站内通知接口。
 
-- GET  /notifications          仅本人：通知列表（unread_only 过滤），响应含未读计数
-- POST /notifications/{id}/read 仅本人：标记已读；幂等——重复已读返回成功不报错
+通知列表和已读操作仅限接收人本人；重复标记已读仍返回成功。
 """
 
 import uuid

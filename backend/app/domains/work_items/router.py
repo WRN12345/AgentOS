@@ -1,4 +1,4 @@
-"""工作项接口（12.3 节）。
+"""工作项接口。
 
 - GET    /work-items                  任何成员：全量列表（assignee_id/status/due 区间过滤）
 - POST   /work-items                  仅负责人：创建（初始 DRAFT）
@@ -10,7 +10,7 @@
 - POST   /work-items/{id}/unblock     仅主执行人：BLOCKED → IN_PROGRESS
 - POST   /work-items/{id}/submit      仅主执行人：IN_PROGRESS → IN_REVIEW
 - POST   /work-items/{id}/cancel      仅负责人：DRAFT/READY/IN_PROGRESS → CANCELLED
-所有写接口支持 Idempotency-Key，且要求携带 version 做乐观锁（17.2 节）。
+所有写接口支持 Idempotency-Key，并要求携带 version 进行乐观锁校验。
 """
 
 import uuid
@@ -94,7 +94,7 @@ async def update_work_item_endpoint(
 
 
 def _command_endpoint(command: str):  # type: ignore[no-untyped-def]
-    """生成状态命令端点：统一携带 version 乐观锁 + Idempotency-Key。"""
+    """生成统一使用 version 乐观锁和 Idempotency-Key 的状态命令端点。"""
 
     async def endpoint(
         item_id: uuid.UUID,

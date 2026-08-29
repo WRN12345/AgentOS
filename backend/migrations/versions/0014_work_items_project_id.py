@@ -4,9 +4,9 @@ Revision ID: 0014_work_items_project_id
 Revises: 0013_admin_global
 Create Date: 2026-08-11
 
-给「有独立列表入口」的 work_items 冗余 project_id（spec D1/D3）：
+为需要按项目独立列出的 work_items 冗余 project_id：
 - project_id NOT NULL，外键 → projects.id；
-- 历史数据回填：无存量兼容义务（D5 重建），全部归属当前唯一项目
+- 迁移执行时无存量兼容义务；回填仅用于完整执行迁移，全部归属当时的唯一项目
   （get_default_project 语义：按 created_at 最早的 project 回填）；
 - 加索引，供列表按项目过滤。
 """

@@ -1,11 +1,10 @@
-"""本地文件系统存储实现（第 14 章，MVP）。
+"""本地文件系统存储实现。
 
-文件写入配置的本地根目录（data/uploads/），storage_key 为根目录内相对路径。
-暂存文件放在根目录下的 .tmp/ 子目录——与正式目录同一文件系统，
-保证 commit 时 os.replace 原子生效。
+文件写入配置的本地根目录，`storage_key` 是根目录内的相对路径。暂存文件位于
+`.tmp/` 子目录，与正式目录处于同一文件系统，保证 `os.replace` 原子生效。
 
 本地磁盘小文件读写为亚毫秒级同步操作，直接在异步方法内执行；
-iter_chunks 用 asyncio.to_thread 避免下载大文件时阻塞事件循环。
+`iter_chunks` 使用 `asyncio.to_thread`，避免下载大文件时阻塞事件循环。
 """
 
 import asyncio
@@ -86,7 +85,7 @@ class LocalStorageProvider(StorageProvider):
         staged.close()
         target = self._resolve(storage_key)
         await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
-        # 同一文件系统内 rename，原子生效（第 14 章上传流程第 4 步）
+        # 暂存目录与目标目录位于同一文件系统，因此替换操作具有原子性。
         await asyncio.to_thread(os.replace, staged.path, target)
 
     async def discard(self, staged: StagedUpload) -> None:

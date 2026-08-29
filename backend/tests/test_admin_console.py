@@ -1,6 +1,6 @@
-"""管理控制台（ticket 10）HTTP API 测试——主接缝。
+"""管理控制台 HTTP API 测试。
 
-覆盖规格 10-admin-console.md 四条验收：
+覆盖以下行为：
 - 管理控制台展示项目列表；
 - admin 可创建项目并指定负责人；负责人/成员不能建；
 - 账号管理与审计查看可用（admin-only 校验）；
@@ -52,9 +52,6 @@ async def _make_ctx(client: httpx.AsyncClient, project: Project) -> _AdminCtx:
     }
 
 
-# ---------- 权限：仅 admin 可访问管理端点 ----------
-
-
 async def test_normal_user_cannot_list_projects(client: httpx.AsyncClient, project: Project) -> None:
     """负责人/成员访问 GET /projects → 403。"""
     ctx = await _make_ctx(client, project)
@@ -78,9 +75,6 @@ async def test_unauthorized_list_projects(client: httpx.AsyncClient, project: Pr
     """未登录访问管理端点 → 401。"""
     resp = await client.get("/api/v1/projects")
     assert resp.status_code == 401
-
-
-# ---------- 项目列表 ----------
 
 
 async def test_admin_lists_projects(client: httpx.AsyncClient, project: Project) -> None:
@@ -124,9 +118,6 @@ async def test_project_list_includes_project_created_via_admin(
     assert new_proj["leader"]["username"] == "alice"
 
 
-# ---------- 创建项目（指定负责人） ----------
-
-
 async def test_admin_creates_project_with_owner(client: httpx.AsyncClient, project: Project) -> None:
     """admin 创建项目并指定负责人 → 201，负责人成为 leader 成员。"""
     ctx = await _make_ctx(client, project)
@@ -141,7 +132,6 @@ async def test_admin_creates_project_with_owner(client: httpx.AsyncClient, proje
     body = resp.json()
     assert body["name"] == "RAG 平台"
     assert body["leader"]["user_id"] == str(ctx["alice"].user_id)
-    # 负责人可在创建后立即进入该工作台（GET /me/projects 含该项目，角色为 leader）
     alice_headers = await auth_headers(client, "alice", ALICE_PW)
     me_projects = await client.get("/api/v1/auth/me/projects", headers=alice_headers)
     assert me_projects.status_code == 200
@@ -200,9 +190,6 @@ async def test_create_project_with_disabled_owner_400(client: httpx.AsyncClient,
         headers=admin_headers,
     )
     assert resp.status_code == 400
-
-
-# ---------- 账号管理（admin-only） ----------
 
 
 async def test_admin_lists_users(client: httpx.AsyncClient, project: Project) -> None:
@@ -298,9 +285,6 @@ async def test_disable_unknown_user_404(client: httpx.AsyncClient, project: Proj
     assert resp.status_code == 404
 
 
-# ---------- 建号（admin-only；建号收敛到 admin） ----------
-
-
 async def test_admin_creates_account(client: httpx.AsyncClient, project: Project) -> None:
     """admin 创建账号 → 201，返回一次性初始密码；新账号可登录；列表不含密码。"""
     ctx = await _make_ctx(client, project)
@@ -375,9 +359,6 @@ async def test_create_account_weak_password_422(
         headers=admin_headers,
     )
     assert resp.status_code == 422
-
-
-# ---------- 变更项目负责人（每项目仅一名，admin-only） ----------
 
 
 async def test_admin_changes_project_leader(
@@ -518,9 +499,6 @@ async def test_change_leader_non_admin_403(client: httpx.AsyncClient, project: P
         assert resp.json()["code"] == "FORBIDDEN"
 
 
-# ---------- 审计查看（admin 全量可见） ----------
-
-
 async def test_admin_sees_audit_for_created_project(client: httpx.AsyncClient, project: Project) -> None:
     """创建项目产生审计事件，admin 在 /audit-events 可见。"""
     ctx = await _make_ctx(client, project)
@@ -553,5 +531,4 @@ async def test_normal_user_cannot_see_global_audit(client: httpx.AsyncClient, pr
     leader_headers = ctx["leader_headers"]
     resp = await client.get("/api/v1/audit-events", headers=leader_headers)
     assert resp.status_code == 200
-    # 全局事件对负责人不可见（隔离：墙外事件等同不存在）
     assert not any(e["action"] == "project.created" for e in resp.json())

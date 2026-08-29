@@ -1,11 +1,7 @@
-"""成员文字档案（设计文档第 7 节②，M3.5）。
+"""跨项目共享的成员文字档案服务。
 
-- 负责人维护、写完直接生效（不走确认流程）；记录统计体现不出来的信息；
-- 编辑权（15.6 默认规则）：该成员所属任一项目的负责人均可编辑——
-  本期实现为"当前项目上下文中，负责人编辑本项目成员的档案"，
-  跨项目负责人在非所属项目上下文编辑的细则实现前确认；
-- 可读性（16.1 + 第 12 节例外）：项目内全员可读，含被评价者本人；
-  档案随人走，跨项目可读（不做暗箱评价，也服务跨项目分配决策）。
+档案由目标成员所在项目的负责人维护，写入后立即生效。档案归属于用户而非项目，
+可跨项目读取，也对被评价者本人公开，避免形成不可见评价。
 """
 
 import uuid
@@ -31,7 +27,7 @@ logger = setup_logging("backend")
 
 
 async def get_profile(session: AsyncSession, user_id: uuid.UUID) -> MemberProfile | None:
-    """按用户取档案；不存在返回 None（新成员尚无档案属正常）。"""
+    """按用户读取档案，不存在时返回 `None`。"""
     return (
         await session.execute(
             select(MemberProfile).where(MemberProfile.user_id == user_id)
@@ -42,10 +38,9 @@ async def get_profile(session: AsyncSession, user_id: uuid.UUID) -> MemberProfil
 async def profile_to_out(
     session: AsyncSession, profile: MemberProfile, *, project_id: uuid.UUID | None = None
 ) -> MemberProfileOut:
-    """档案序列化：创建/编辑者显示名（project_members 可能跨项目，按 id 直取）。
+    """序列化档案及创建者、最后编辑者信息。
 
-    project_id 提供时附带目标在当前项目的成员状态（16.7 停用标记）：
-    True/False = 在本项目在职/停用；None = 不是本项目成员。
+    提供 `project_id` 时附带目标用户在该项目的成员状态；`None` 表示不是该项目成员。
     """
     creator = await session.get(ProjectMember, profile.created_by_member_id)
     editor = await session.get(ProjectMember, profile.last_edited_by_member_id)
@@ -73,10 +68,10 @@ async def profile_to_out(
 async def upsert_profile(
     session: AsyncSession, actor: ProjectMember, *, user_id: uuid.UUID, content: str
 ) -> MemberProfile:
-    """创建或更新成员档案（写完直接生效，第 7 节）。
+    """创建或更新成员档案，提交后立即生效。
 
-    权限：actor 为当前项目负责人，且目标用户是该项目成员（15.6 默认规则的
-    本期实现）；全局 admin 无成员身份，不经此路径编辑（第 12 节）。
+    `actor` 必须是当前项目负责人，目标用户必须属于同一项目。无项目成员身份的
+    全局管理员不能通过此路径编辑档案。
     """
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可编辑成员档案")
@@ -99,7 +94,6 @@ async def upsert_profile(
         )
         session.add(profile)
         await session.flush()
-        # 审计（16.10）：谁建的、何时、内容
         await record_event(
             session,
             action="member_profile.created",
@@ -113,7 +107,6 @@ async def upsert_profile(
         before = {"content": profile.content}
         profile.content = content
         profile.last_edited_by_member_id = actor.id
-        # 审计（16.10）：谁改的、何时、改了什么
         await record_event(
             session,
             action="member_profile.updated",
@@ -125,24 +118,22 @@ async def upsert_profile(
             project_id=actor.project_id,
         )
     await session.commit()
-    # updated_at 的 onupdate=func.now() 在 UPDATE 后被 SQLAlchemy 标记过期，
-    # 异步会话属性访问无法隐式重载（MissingGreenlet），序列化前显式刷新
+    # `onupdate` 会使属性过期；异步会话无法隐式重载，序列化前必须显式刷新
     await session.refresh(profile)
-    # M3.7：档案创建/变更即入索引（source_type=profile，project_id=NULL 随人走），
-    # 重建语义——编辑后旧块被整体替换；best-effort，不拖垮主流程
+    # 档案索引按来源整体重建；投递失败不回滚已提交的档案写入
     await _dispatch_profile_index(profile)
     return profile
 
 
 async def _dispatch_profile_index(profile: MemberProfile) -> None:
-    """投递档案索引任务（纯文本路径）；投递失败只记日志。"""
+    """投递档案索引任务；失败时仅记录日志。"""
     redis_client: redis.Redis = create_redis_client()
     try:
         await enqueue(
             redis_client,
             MEMORY_INDEX_TASK_TYPE,
             {
-                "project_id": None,  # profile 随人走，不挂项目（16.12）
+                "project_id": None,  # `profile` 归属于用户，不绑定项目
                 "source_type": "profile",
                 "source_id": str(profile.id),
             },

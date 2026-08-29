@@ -1,8 +1,8 @@
-"""检索权限层测试（M2.9 验收，设计文档第 12 节）。
+"""记忆检索服务的项目权限与调用方校验测试。
 
 - 项目在职成员可检索本项目；跨项目/停用成员 → 404（不暴露存在性）；
 - 全局 admin 只读可查任意项目（不依赖成员身份）；
-- 调用方标识校验（档案跨项目放行的判定依据，16.12）。
+- 调用方标识作为档案跨项目放行的判定依据。
 """
 
 import uuid
@@ -117,11 +117,7 @@ async def test_unknown_caller_rejected(project_a) -> None:
 
 
 async def test_three_caller_types_accepted_at_service_layer(project_a, monkeypatch) -> None:
-    """M3.8：leader_query / agent_assignment / member_qa 三种标识均可传入并在服务层可判。
-
-    - member_qa / leader_query：HTTP 路径（成员/负责人身份）；
-    - agent_assignment：Agent 内部调用（无成员身份，信任锚为 run 的项目归属）。
-    """
+    """服务层应接受成员问答、负责人查询和内部 Agent 分配三类调用方。"""
     from app.domains.memory.search import (
         CALLER_AGENT_ASSIGNMENT,
         CALLER_LEADER_QUERY,

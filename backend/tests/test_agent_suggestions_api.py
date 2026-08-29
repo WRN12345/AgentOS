@@ -1,14 +1,7 @@
-"""Agent 建议查询与反馈接口测试（12.5 节，T5.7）。
+"""验证 Agent 建议、运行记录、反馈和模型配置接口。
 
-覆盖：
-- GET /agent-suggestions：登录成员可读；按 suggestion_type / review_status /
-  work_item_id 过滤；limit/offset 分页；未登录 401；出参含关联 run 的
-  work_item_id 与 model；
-- POST /agent-suggestions/{id}/feedback：负责人采纳/忽略 → 200 且
-  review_status/reviewed_by/reviewed_at 落库 + agent.suggestion_feedback
-  审计事件；非负责人 403；不存在 404；已反馈重复反馈 409；
-- GET /agent-runs[/{id}]：成员可读；status 过滤；不存在 404；
-- GET /config：返回 llm_provider 与 llm_is_external。
+建议列表应支持项目内过滤和分页；仅负责人可以反馈，且反馈必须持久化审计信息。
+运行详情按项目成员身份授权；模型配置向所有已登录用户开放。
 """
 
 import uuid
@@ -55,9 +48,9 @@ async def _make_suggestion(
     review_status: str = "pending",
     model: str | None = "qwen2.5:7b",
 ) -> AgentSuggestion:
-    """直接造一条 run + suggestion（绕过 worker/模型，专注接口语义）。
+    """直接创建带项目归属的运行和建议，以隔离验证接口语义。
 
-    ticket 05：run 必须带项目归属，建议列表/反馈按 run.project_id 推导隔离。
+    建议通过 ``run.project_id`` 推导项目归属，列表和反馈必须据此隔离。
     """
     async with async_session_factory() as session:
         run = AgentRun(
@@ -86,13 +79,10 @@ async def _make_suggestion(
         return suggestion
 
 
-# ---------- GET /agent-suggestions ----------
-
-
 async def test_member_can_list_suggestions_with_details(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """成员可读；出参含关联 run 的 work_item_id/model 与信封字段。"""
+    """项目成员应能读取包含运行信息和信封字段的建议。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(
         project_id=project.id,
@@ -121,7 +111,7 @@ async def test_member_can_list_suggestions_with_details(
 async def test_project_level_suggestion_has_null_work_item(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """项目级建议（run 无 work_item_id）出参 work_item_id 为 null。"""
+    """项目级建议没有关联工作项时应返回空 work_item_id。"""
     ctx = await _setup(client, project)
     await _make_suggestion(project_id=project.id, suggestion_type="risk")
     resp = await client.get(
@@ -134,7 +124,7 @@ async def test_project_level_suggestion_has_null_work_item(
 async def test_list_suggestions_filters(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """按 suggestion_type / review_status / work_item_id 过滤。"""
+    """建议列表应支持按类型、反馈状态和工作项组合过滤。"""
     ctx = await _setup(client, project)
     await _make_suggestion(project_id=project.id, suggestion_type="requirement", work_item_id=ctx["item_id"])  # type: ignore[arg-type]
     await _make_suggestion(project_id=project.id, suggestion_type="risk")
@@ -172,7 +162,7 @@ async def test_list_suggestions_filters(
 async def test_list_suggestions_pagination(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """limit/offset 分页。"""
+    """建议列表应支持 limit/offset 分页且不遗漏记录。"""
     ctx = await _setup(client, project)
     for i in range(3):
         await _make_suggestion(project_id=project.id, suggestion_type=f"type{i}")
@@ -186,18 +176,15 @@ async def test_list_suggestions_pagination(
 
 
 async def test_list_suggestions_unauthenticated(client: httpx.AsyncClient) -> None:
-    """未登录 → 401。"""
+    """未登录用户不得读取建议列表。"""
     resp = await client.get("/api/v1/agent-suggestions")
     assert resp.status_code == 401
-
-
-# ---------- POST /agent-suggestions/{id}/feedback ----------
 
 
 async def test_leader_feedback_accepted_persisted_with_audit(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """负责人采纳 → 200；review_status/reviewed_by/reviewed_at 落库 + 审计事件。"""
+    """负责人采纳建议后应持久化评审人、时间和审计事件。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="planning")
     leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
@@ -238,7 +225,7 @@ async def test_leader_feedback_accepted_persisted_with_audit(
 async def test_leader_feedback_ignored(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """忽略反馈 → review_status=ignored。"""
+    """负责人忽略建议后应保存 ignored 状态。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="risk")
     resp = await client.post(
@@ -253,7 +240,7 @@ async def test_leader_feedback_ignored(
 async def test_feedback_non_leader_forbidden(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """普通成员反馈 → 403。"""
+    """普通成员不得提交建议反馈。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="requirement")
     resp = await client.post(
@@ -265,7 +252,7 @@ async def test_feedback_non_leader_forbidden(
 
 
 async def test_feedback_not_found(client: httpx.AsyncClient, project: Project) -> None:
-    """建议不存在 → 404。"""
+    """反馈不存在的建议时应返回未找到。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         f"/api/v1/agent-suggestions/{uuid.uuid4()}/feedback",
@@ -279,7 +266,7 @@ async def test_feedback_not_found(client: httpx.AsyncClient, project: Project) -
 async def test_feedback_duplicate_conflict(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """已反馈的建议再次反馈 → 409 AGENT_SUGGESTION_ALREADY_REVIEWED。"""
+    """已评审建议不得重复反馈。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="review", review_status="ignored")
     resp = await client.post(
@@ -294,7 +281,7 @@ async def test_feedback_duplicate_conflict(
 async def test_feedback_invalid_action_rejected(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """非法 action → 422（Literal 校验）。"""
+    """反馈 action 不在允许集合时应校验失败。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="summary")
     resp = await client.post(
@@ -305,13 +292,10 @@ async def test_feedback_invalid_action_rejected(
     assert resp.status_code == 422
 
 
-# ---------- GET /agent-runs[/{id}] 与 GET /config ----------
-
-
 async def test_list_and_get_agent_runs(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """运行列表含状态/错误详情；status 过滤；单条 404。"""
+    """运行接口应返回失败详情、支持状态过滤并处理不存在记录。"""
     ctx = await _setup(client, project)
     await _make_suggestion(project_id=project.id, suggestion_type="risk")
     async with async_session_factory() as session:
@@ -319,7 +303,7 @@ async def test_list_and_get_agent_runs(
             status="failed",
             agent_type="workflow_risk",
             trigger_source="scheduler",
-            project_id=project.id,  # ticket 05：run 列表按项目过滤
+            project_id=project.id,  # 运行列表必须按项目归属过滤。
             error="ModelUnavailableError: timeout",
             duration_ms=1200,
             retry_count=3,
@@ -348,8 +332,8 @@ async def test_list_and_get_agent_runs(
 async def test_config_exposes_llm_external_flag(
     client: httpx.AsyncClient, project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """GET /config 返回 provider 与是否外部服务（ollama → false，与部署环境无关）。"""
-    # 显式固定 provider，避免宿主机 .env（如 openai_compatible）影响断言
+    """模型配置接口应返回 Provider 及其是否为外部服务。"""
+    # 固定 Provider，避免宿主机环境变量改变测试语义。
     monkeypatch.setattr(settings, "llm_provider", "ollama")
     ctx = await _setup(client, project)
     resp = await client.get("/api/v1/config", headers=ctx["alice_headers"])  # type: ignore[arg-type]
@@ -365,7 +349,7 @@ async def test_config_exposes_llm_external_flag(
 async def test_feedback_does_not_touch_business_state(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """反馈审计 action 为 agent. 前缀，不产生业务状态类审计事件（10.3 节）。"""
+    """建议反馈只能产生 Agent 审计事件，不得记录业务状态变更。"""
     ctx = await _setup(client, project)
     suggestion = await _make_suggestion(project_id=project.id, suggestion_type="assignment")
     await client.post(
@@ -374,7 +358,7 @@ async def test_feedback_does_not_touch_business_state(
         headers=ctx["leader_headers"],  # type: ignore[arg-type]
     )
     async with async_session_factory() as session:
-        # 只看反馈针对该建议写入的审计事件（排除 setup 建工作项的 work_item.created）
+        # 按建议过滤，排除准备数据时产生的工作项审计事件。
         actions = [
             e.action
             for e in (

@@ -1,4 +1,4 @@
-"""协作请求 API 与站内通知集成测试（T3.2、T3.5 验收，7.2、8.2、12.4、12.6、16、17.2 节）。"""
+"""协作请求 API 与站内通知集成测试。"""
 
 import uuid
 
@@ -17,10 +17,7 @@ BOB_PW = "Bob123!"
 
 
 async def _setup(client: httpx.AsyncClient, project: Project) -> dict[str, object]:
-    """准备：leader（负责人）+ alice（工作项主执行人）+ bob（协作接收人）。
-
-    leader 创建工作项指派给 alice 并发布（READY）。
-    """
+    """返回负责人、工作项主执行人、协作接收人及已发布工作项。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     _, bob = await add_member(project, "bob", BOB_PW, display_name="鲍勃")
@@ -117,9 +114,6 @@ async def _count_notifications() -> int:
         ).scalar_one()
 
 
-# ---------- 完整链路与分支 ----------
-
-
 async def test_full_chain_and_work_item_untouched(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -183,13 +177,11 @@ async def test_full_chain_and_work_item_untouched(
         "collaboration.completed",
     ]
 
-    # 通知：bob 收到发起与完成；alice 收到接受与回传
     bob_types = [n.type for n in await _notifications_of(bob.id)]
     alice_types = [n.type for n in await _notifications_of(alice.id)]
     assert bob_types == ["collaboration.requested", "collaboration.completed"]
     assert alice_types == ["collaboration.accepted", "collaboration.submitted"]
 
-    # 7.2 节：协作状态变化不影响工作项主执行人与状态
     work_item = (
         await client.get(f"/api/v1/work-items/{item['id']}", headers=alice_headers)  # type: ignore[arg-type]
     ).json()
@@ -257,7 +249,6 @@ async def test_revision_branch(client: httpx.AsyncClient, project: Project) -> N
     assert revision.status_code == 200
     assert revision.json()["status"] == "REVISION_REQUESTED"
 
-    # 反馈记入审计 after 摘要（16 节：不进通知正文）
     async with async_session_factory() as session:
         event = (
             await session.execute(
@@ -290,7 +281,7 @@ async def test_revision_branch(client: httpx.AsyncClient, project: Project) -> N
 async def test_cancel_by_requester_and_assignee(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """REQUESTED 可由发起人取消；ACCEPTED 可由接收人取消（8.2 节首版简化）。"""
+    """REQUESTED 可由发起人取消，ACCEPTED 可由接收人取消。"""
     ctx = await _setup(client, project)
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
     alice_headers = ctx["alice_headers"]
@@ -318,16 +309,12 @@ async def test_cancel_by_requester_and_assignee(
     )
     assert cancelled2.json()["status"] == "CANCELLED"
 
-    # 进行中不可取消（8.2：仅 REQUESTED/ACCEPTED）
     third = (await _create_request(client, alice_headers, item_id, str(bob.id))).json()  # type: ignore[arg-type]
     base = f"/api/v1/collaboration-requests/{third['id']}"
     await client.post(f"{base}/accept", json={"version": 1}, headers=bob_headers)  # type: ignore[arg-type]
     await client.post(f"{base}/start", json={"version": 2}, headers=bob_headers)  # type: ignore[arg-type]
     bad_cancel = await client.post(f"{base}/cancel", json={"version": 3}, headers=alice_headers)  # type: ignore[arg-type]
     assert bad_cancel.status_code == 409
-
-
-# ---------- 权限 ----------
 
 
 async def test_non_assignee_cannot_accept(client: httpx.AsyncClient, project: Project) -> None:
@@ -362,7 +349,6 @@ async def test_only_work_item_assignee_can_create(
     resp = await _create_request(client, ctx["bob_headers"], item_id, str(alice.id))  # type: ignore[arg-type]
     assert resp.status_code == 403
 
-    # 负责人但不是主执行人，也不能发起
     resp = await _create_request(client, ctx["leader_headers"], item_id, str(bob.id))  # type: ignore[arg-type]
     assert resp.status_code == 403
 
@@ -414,9 +400,6 @@ async def test_command_role_checks(client: httpx.AsyncClient, project: Project) 
     assert resp.status_code == 403
 
 
-# ---------- 幂等与乐观锁（17.2 节） ----------
-
-
 async def test_idempotent_create_no_duplicate_side_effects(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -438,7 +421,6 @@ async def test_idempotent_create_no_duplicate_side_effects(
     assert await _audit_actions(first.json()["id"]) == ["collaboration.requested"]
     assert await _count_notifications() == 1
 
-    # 命令接口同样幂等：重复 accept 只产生一条审计与一条通知
     req_id = first.json()["id"]
     accept_key = str(uuid.uuid4())
     headers = {**ctx["bob_headers"], "Idempotency-Key": accept_key}  # type: ignore[dict-item]
@@ -477,9 +459,6 @@ async def test_version_conflict(client: httpx.AsyncClient, project: Project) -> 
     assert stale.json()["details"]["current_version"] == 2
 
 
-# ---------- 查询（12.4、13.2 节） ----------
-
-
 async def test_list_endpoints(client: httpx.AsyncClient, project: Project) -> None:
     """工作项协作列表（成员可查）；我发出的/我收到的摘要列表。"""
     ctx = await _setup(client, project)
@@ -510,7 +489,6 @@ async def test_list_endpoints(client: httpx.AsyncClient, project: Project) -> No
     )
     assert [r["id"] for r in received_bob.json()] == [created.json()["id"]]
 
-    # 不存在的工作项 → 404
     missing = await client.get(
         f"/api/v1/work-items/{uuid.uuid4()}/collaboration-requests",
         headers=ctx["alice_headers"],  # type: ignore[arg-type]
@@ -547,9 +525,6 @@ async def test_get_detail(client: httpx.AsyncClient, project: Project) -> None:
     assert missing.json()["code"] == "NOT_FOUND"
 
 
-# ---------- 通知（T3.5，12.6 节） ----------
-
-
 async def test_notifications_query_and_read_idempotent(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -572,7 +547,6 @@ async def test_notifications_query_and_read_idempotent(
     assert notice["read_at"] is None
     assert notice["link"].startswith("/work-items/")
 
-    # 他人已读 → 404（不暴露存在性）
     forbidden = await client.post(
         f"/api/v1/notifications/{notice['id']}/read", headers=alice_headers  # type: ignore[arg-type]
     )
@@ -594,7 +568,6 @@ async def test_notifications_query_and_read_idempotent(
     ).json()
     assert unread_only["items"] == []
 
-    # 不存在的通知 → 404
     missing = await client.post(
         f"/api/v1/notifications/{uuid.uuid4()}/read", headers=bob_headers  # type: ignore[arg-type]
     )

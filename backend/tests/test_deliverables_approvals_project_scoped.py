@@ -1,6 +1,6 @@
-"""多项目改造 ticket 03：交付物与审批项目隔离测试（主接缝，HTTP API 层）。
+"""交付物与审批的项目隔离测试。
 
-覆盖行为矩阵（spec Testing Decisions / ticket 03 验收）：
+覆盖行为：
 - 落库归属：A 上下文提交的交付物 project_id = A（经所属工作项推导填充）
 - 列表隔离：交付物聚合页、审批待办、我的转派申请只含当前项目
 - 对象越权：A 上下文访问 B 项目交付物/转派/开发文档/评审 → 404（不是 403）
@@ -90,13 +90,10 @@ async def _request_transfer(
     )
 
 
-# ---------- 交付物 ----------
-
-
 async def test_deliverable_lands_in_project(
     client: httpx.AsyncClient, project_a: Project
 ) -> None:
-    """A 上下文提交的交付物落库 project_id = A（spec D1：经所属工作项推导填充）。"""
+    """A 项目提交的交付物从所属工作项推导并记录 project_id=A。"""
     ctx = await _setup_project(client, project_a, tag="a")
     item = (await _create_item(client, ctx["leader_headers"], str(ctx["alice"].id))).json()  # type: ignore[union-attr]
     resp = await _submit_deliverable(client, ctx["alice_headers"], item["id"])  # type: ignore[arg-type]
@@ -164,13 +161,10 @@ async def test_cross_project_deliverable_list_returns_404(
     assert resp.status_code == 404
 
 
-# ---------- 转派 ----------
-
-
 async def test_transfer_mine_isolated_for_same_user_across_projects(
     client: httpx.AsyncClient, project_a: Project, project_b: Project
 ) -> None:
-    """同一用户跨 A/B 项目各发起转派，list_mine 只含当前项目（spec D2 经工作项推导）。"""
+    """同一用户跨 A/B 项目发起转派时，list_mine 只返回当前项目记录。"""
     from app.domains.identity.models import User
 
     ctx_a = await _setup_project(client, project_a, tag="a")
@@ -249,13 +243,10 @@ async def test_cross_project_transfer_approve_returns_404(
     assert resp.status_code == 404
 
 
-# ---------- 协作 ----------
-
-
 async def test_cross_project_collaboration_assignee_returns_400(
     client: httpx.AsyncClient, project_a: Project, project_b: Project
 ) -> None:
-    """A 项目成员作为 B 项目协作接收人 → 400（跨实体引用校验，spec D3）。"""
+    """把 A 项目成员设为 B 项目协作接收人时返回 400。"""
     ctx_a = await _setup_project(client, project_a, tag="a")
     ctx_b = await _setup_project(client, project_b, tag="b")
     item_b = (
@@ -273,9 +264,6 @@ async def test_cross_project_collaboration_assignee_returns_400(
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "CROSS_PROJECT_REFERENCE"
-
-
-# ---------- 开发文档 / 评审 ----------
 
 
 async def test_cross_project_dev_doc_returns_404(
@@ -306,9 +294,6 @@ async def test_cross_project_reviews_returns_404(
     resp = await client.get(f"/api/v1/work-items/{item_b['id']}/reviews", headers=ctx_a["leader_headers"])  # type: ignore[arg-type]
     assert resp.status_code == 404
     assert resp.json()["code"] == "NOT_FOUND"
-
-
-# ---------- 审批聚合 ----------
 
 
 async def test_approvals_pending_isolated_between_projects(

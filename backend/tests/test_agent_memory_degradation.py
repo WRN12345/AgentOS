@@ -1,8 +1,7 @@
-"""记忆降级与标注测试（M6.6 验收，设计文档 16.5）。
+"""验证记忆检索不可用时的降级行为与状态标注。
 
-- embedding/检索不可用：拆解分配照常完成，建议标注 memory_status=degraded
-  并在 risks 中说明"本次未参考记忆"；
-- 记忆服务正常：memory_status=ok，无降级标注。
+embedding 或检索失败不得阻断拆解和分配，但建议必须明确标记未参考记忆；
+服务恢复后应返回正常状态且不再保留降级说明。
 """
 
 import json
@@ -30,7 +29,7 @@ from tests.test_file_index_pipeline import FakeEmbeddingProvider
 
 
 def _assign_stage_null() -> str:
-    """分配段脚本：两个拆解项均无合适人选（null 允许）。"""
+    """生成两个均无合适人选的合法分配结果。"""
     return json.dumps(
         {
             "assignments": [
@@ -78,7 +77,7 @@ async def redis_client():
 async def test_degraded_when_embedding_unavailable(
     project: Project, leader: ProjectMember, redis_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """停 Ollama：拆解/分配照常完成且带降级标注（16.5）。"""
+    """embedding 不可用时流程应继续完成并标记记忆降级。"""
     suggestion = await _run_pipeline(
         project, redis_client, monkeypatch, _RaisingEmbeddingProvider()
     )
@@ -89,7 +88,7 @@ async def test_degraded_when_embedding_unavailable(
 async def test_normal_when_memory_available(
     project: Project, leader: ProjectMember, redis_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """记忆服务正常：标注 ok，无降级说明（恢复后标注消失）。"""
+    """记忆服务正常时应标记可用且不包含降级说明。"""
     suggestion = await _run_pipeline(
         project, redis_client, monkeypatch, FakeEmbeddingProvider()
     )

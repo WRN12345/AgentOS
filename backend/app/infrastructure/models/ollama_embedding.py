@@ -1,10 +1,8 @@
-"""Ollama EmbeddingProvider（记忆模块默认实现）：POST {OLLAMA_BASE_URL}/api/embed。
+"""通过 `POST {OLLAMA_BASE_URL}/api/embed` 调用 Ollama embedding 服务。
 
-- /api/embed 原生支持批量 input，一次调用返回全部向量；
-- 统一错误封装与 OllamaProvider 一致：超时 → ModelTimeoutError，
-  连接失败、非 2xx 或非法响应 → ModelUnavailableError，不泄漏底层异常；
-- 返回维度与 settings.embedding_dimensions 不一致时视为服务异常
-  （多半是 EMBEDDING_MODEL 与 EMBEDDING_DIMENSIONS 配错）。
+接口批量处理 `input`。超时转换为 `ModelTimeoutError`，连接失败、非 2xx 或非法响应
+转换为 `ModelUnavailableError`，不向上泄漏底层异常。返回维度必须与
+`settings.embedding_dimensions` 一致，否则通常表示模型与维度配置不匹配。
 """
 
 import asyncio
@@ -14,7 +12,7 @@ import httpx
 from app.infrastructure.models.embedding import EmbeddingProvider
 from app.infrastructure.models.errors import ModelTimeoutError, ModelUnavailableError
 
-# 与 OllamaProvider 相同的线性退避基数（秒）
+# 与 OllamaProvider 保持一致的线性退避基数，单位为秒。
 _RETRY_BACKOFF_SECONDS = 0.5
 
 
@@ -38,7 +36,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         self.dimensions = dimensions
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
-        # transport 仅供测试注入 MockTransport；生产为 None（httpx 默认网络传输）
+        # `transport` 仅供测试注入 MockTransport；生产环境使用 httpx 默认传输。
         self._transport = transport
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -81,7 +79,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             except httpx.TransportError as exc:
                 last_error = ModelUnavailableError(f"Ollama 不可达: {exc}")
                 last_error.__cause__ = exc
-            # 超时/连接失败按 max_retries 重试；非 2xx 与维度不符（主动抛出）不重试
+            # 仅超时和连接失败会进入此重试路径；响应或维度错误直接向上抛出。
             if attempt < self.max_retries:
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
         assert last_error is not None

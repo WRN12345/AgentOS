@@ -1,4 +1,4 @@
-"""SQLAlchemy 2 异步引擎与会话管理（第 11 章）。"""
+"""SQLAlchemy 2 异步引擎与会话管理。"""
 
 from collections.abc import AsyncGenerator
 
@@ -6,8 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
-# hide_parameters：SQL 语句参数可能包含问答内容、档案等私人数据，
-# 避免异常/日志输出时随语句文本泄露
+# SQL 参数可能包含问答内容和档案等私人数据，`hide_parameters` 防止其随异常或日志泄露。
 engine = create_async_engine(
     settings.database_url, pool_pre_ping=True, hide_parameters=True
 )

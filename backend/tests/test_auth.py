@@ -1,4 +1,4 @@
-"""认证集成测试（T2.2 验收）：登录/刷新/登出/当前用户与存储安全。"""
+"""登录、刷新、登出、当前用户与存储安全的认证集成测试。"""
 
 import hashlib
 
@@ -80,7 +80,6 @@ async def test_refresh_rotation(client: httpx.AsyncClient) -> None:
     rotated = resp.json()
     assert rotated["refresh_token"] != tokens["refresh_token"]
 
-    # 旧 refresh token 再次使用 → 401
     replay = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )

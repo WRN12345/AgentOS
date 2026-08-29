@@ -1,4 +1,4 @@
-"""身份接口（12.1 节）：登录、刷新、登出、当前用户。"""
+"""登录、令牌刷新、登出和当前用户接口。"""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -34,7 +34,7 @@ async def refresh_endpoint(
     payload: RefreshRequest,
     session: AsyncSession = Depends(get_session),
 ) -> TokenPairResponse:
-    """刷新并轮换 Refresh Token：旧令牌立即作废。"""
+    """轮换 `Refresh Token`，并立即撤销旧令牌。"""
     return await rotate_refresh_token(session, payload.refresh_token)
 
 
@@ -43,7 +43,7 @@ async def logout_endpoint(
     payload: LogoutRequest,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
-    """登出：幂等撤销 Refresh Token，不暴露令牌是否曾存在。"""
+    """幂等撤销 `Refresh Token`，不暴露令牌是否存在。"""
     await revoke_refresh_token(session, payload.refresh_token)
     return {"status": "ok"}
 
@@ -64,10 +64,9 @@ async def my_projects_endpoint(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    """返回当前用户参与的所有项目及角色。
+    """返回当前用户参与的所有有效项目及角色。
 
-    用 get_current_user（仅需登录态，不依赖项目成员身份），
-    避免"先有项目上下文才能查项目列表"的鸡生蛋问题。
+    此接口只依赖 `get_current_user`，无需预先提供项目上下文。
     """
     stmt = (
         select(ProjectMember)
@@ -76,7 +75,7 @@ async def my_projects_endpoint(
     )
     memberships = (await session.execute(stmt)).scalars().all()
 
-    from app.domains.project.models import Project  # 避免循环导入
+    from app.domains.project.models import Project  # 延迟导入以避免循环依赖
 
     result = []
     for m in memberships:

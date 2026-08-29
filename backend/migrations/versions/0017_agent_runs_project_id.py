@@ -4,7 +4,7 @@ Revision ID: 0017_agent_runs_project_id
 Revises: 0016_notifications_files
 Create Date: 2026-08-14
 
-给 agent_runs 冗余 project_id（spec D1：有独立列表入口的表冗余 project_id）：
+为需要按项目独立列出的 agent_runs 冗余 project_id：
 - project_id 可空（兼容历史数据；新写入由服务层保证填写）；
 - 历史数据回填：经 work_item_id 推导（work_items.project_id）；
   项目级运行（work_item_id 为空）无推导来源，保持 NULL；

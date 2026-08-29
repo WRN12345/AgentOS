@@ -1,8 +1,8 @@
-"""审计写入服务（原则 5、第 16 章）。
+"""审计写入服务。
 
-record_event 与业务状态变更在同一个数据库事务中写入：只 flush 不 commit，
-由调用方与业务写一起统一提交 —— 事件写入失败会导致业务写入一并回滚。
-request_id、来源 IP 与项目归属从请求上下文（contextvars，中间件自动填充）读取，
+`record_event` 只执行 `flush`，由调用方与业务变更在同一事务中提交；
+事件写入失败时业务变更也会回滚。`request_id`、来源 IP 与项目归属从
+基于 `contextvars` 的请求上下文读取，
 业务代码无需手传。
 """
 
@@ -30,8 +30,8 @@ async def record_event(
 ) -> AuditEvent:
     """追加一条审计事件。只提供追加能力，不提供修改和删除路径。
 
-    默认兼容既有项目接口，从已由门禁校验的请求上下文读取；admin/global
-    服务必须显式传目标项目或 None，避免客户端伪造请求头改变审计归属。
+    默认从已经门禁校验的请求上下文读取项目；全局管理服务必须显式传入目标项目
+    或 `None`，避免客户端通过伪造请求头改变审计归属。
     """
     resolved_project_id = (
         get_project_id() if project_id is _PROJECT_FROM_CONTEXT else project_id
@@ -48,5 +48,5 @@ async def record_event(
         project_id=resolved_project_id,
     )
     session.add(event)
-    await session.flush()  # flush 让写入失败（如约束违反）在 commit 前暴露，保证同生共死
+    await session.flush()  # 在 `commit` 前暴露约束错误，确保审计与业务变更共同回滚。
     return event

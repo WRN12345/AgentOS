@@ -1,26 +1,17 @@
-"""Idempotency-Key 支持（12 章、17.2 节）。
+"""为命令接口提供基于 `Idempotency-Key` 的幂等控制。
 
-命令类接口（POST/PATCH 等状态变更接口）在签名中声明 `Depends(idempotency_guard)`
-即可启用幂等：携带 `Idempotency-Key` 的重复请求不重复执行业务写入，
-直接返回首次响应（响应头 `Idempotency-Replayed: true`）。
+接口通过 `Depends(idempotency_guard)` 启用幂等。守卫按项目、用户、请求方法、
+路径和幂等键查找记录：已完成的请求直接重放首次响应；新请求通过插入占位记录
+抢占执行权。数据库唯一约束保证并发请求中只有一个能够成功占位，其余请求等待
+首次响应落库后再重放。
 
-机制分两半：
-- `idempotency_guard` 依赖项：先查 `idempotency_records`，命中已完成记录则抛
-  `IdempotentReplay`（由全局异常处理返回首次响应）；未命中则以"占位记录"
-  （response_status=0）抢占执行权——唯一索引 ux_idempotency_records_project_user_key_endpoint
-  保证并发下同键只有一个请求占位成功，其余请求转入等待，待首个请求响应
-  落库后按首次结果重放（17.2 节：并发重复请求也只生效一次）；
-- `IdempotencyMiddleware`：请求结束后把首次响应（状态码 + body）写回占位
-  记录；响应为 5xx 或抛出未处理异常时删除占位，允许后续请求重新执行。
+`IdempotencyMiddleware` 在请求成功后将状态码和响应体写回占位记录。请求失败或
+抛出未处理异常时释放占位，使后续同键请求可以重新执行。
 
-项目维度（ticket 06）：幂等唯一键纳入项目维度。项目归属从 `X-Project-Id`
-请求头快照捕获（与 ticket 01 的"请求头即项目上下文事实源"一致），无项目
-上下文的全局接口（登录/登出/任务示例等）project_id 记为 NULL，唯一约束按
-COALESCE(project_id, 零值 UUID) 处理。同一键在 A/B 不同项目下视为不同请求。
-
-注意：若接口同时使用 get_current_user，需把它声明在 idempotency_guard 之前，
-以便守卫能取到 request.state.user_id（未登录接口 user_id 记为 NULL，
-唯一约束按 COALESCE(user_id, 零值 UUID) 处理）。
+项目上下文取自 `X-Project-Id` 请求头。无项目或未登录的接口分别使用空项目、
+空用户参与唯一性判断，因此同一幂等键可以在不同项目或用户下独立使用。接口同时
+依赖身份认证时，必须先解析当前用户，再执行 `idempotency_guard`，以确保守卫能够
+从 `request.state.user_id` 获取用户身份。
 """
 
 import asyncio
@@ -44,9 +35,9 @@ from app.infrastructure.models.idempotency import IdempotencyRecord
 
 logger = setup_logging("backend")
 
-#: 占位记录的 response_status：执行权已被抢占，但首次响应尚未落库
+#: 占位状态表示执行权已被抢占，但首次响应尚未落库。
 RESERVED_STATUS = 0
-#: 并发请求等待首次响应的最长时间与轮询间隔（兜底，正常路径远快于此）
+#: 并发请求等待首次响应的超时与轮询间隔，仅用于异常情况下兜底。
 WAIT_TIMEOUT_SECONDS = 10.0
 WAIT_INTERVAL_SECONDS = 0.05
 
@@ -94,7 +85,7 @@ async def _delete_reservation(
     user_id: uuid.UUID | None,
     project_id: uuid.UUID | None,
 ) -> None:
-    """删除占位记录（请求 5xx / 未处理异常时调用），允许后续请求重新执行。"""
+    """释放失败请求的占位记录，使后续同键请求可以重新执行。"""
     async with async_session_factory() as session:
         record = await _find_record(
             session, key=key, method=method, path=path, user_id=user_id, project_id=project_id
@@ -107,10 +98,10 @@ async def _delete_reservation(
 async def idempotency_guard(
     request: Request,
 ) -> None:
-    """命令接口幂等守卫依赖项。未携带 Idempotency-Key 时直接放行。
+    """为命令接口抢占执行权，或重放同一幂等键的首次响应。
 
-    查询一律使用独立短会话：等待重放的轮询若复用请求会话，ORM identity map
-    会缓存占位记录（response_status=0）而看不到并发事务的更新。
+    未携带 `Idempotency-Key` 时直接放行。查询使用独立短会话，避免 ORM
+    identity map 缓存占位记录，导致轮询无法观察到并发事务写入的响应。
     """
     key = request.headers.get("Idempotency-Key")
     if not key:
@@ -132,11 +123,9 @@ async def idempotency_guard(
                 project_id=project_id,
             )
         if record is not None and record.response_status != RESERVED_STATUS:
-            # 已完成记录：直接重放首次响应
             raise IdempotentReplay(record.response_status, record.response_body)
         if record is None:
-            # 无记录：尝试插入占位记录抢占执行权（独立会话立即提交；
-            # 唯一索引兜底——并发下同键只有一个请求能占位成功）
+            # 独立提交占位记录，让唯一索引决定并发请求中谁获得执行权。
             try:
                 async with async_session_factory() as claim_session:
                     claim_session.add(
@@ -152,7 +141,7 @@ async def idempotency_guard(
                     )
                     await claim_session.commit()
             except IntegrityError:
-                pass  # 并发请求抢先占位，转入等待重放
+                pass  # 其他并发请求已占位，继续等待其响应。
             else:
                 request.state.idempotency_pending = {
                     "key": key,
@@ -162,7 +151,7 @@ async def idempotency_guard(
                     "path": path,
                 }
                 return
-        # 记录处于占位状态（另一并发请求正在执行）：等待其响应落库后重放
+        # 占位记录尚未完成，等待执行方写入响应。
         if time.monotonic() > deadline:
             raise ApiException(
                 409,
@@ -179,7 +168,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            # 未处理异常：释放占位，允许后续同键请求重新执行
+            # 异常请求不能占用幂等键，否则后续重试会一直等待。
             await self._release_if_pending(request)
             raise
 
@@ -195,8 +184,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             try:
                 body = bytes(response.body)  # type: ignore[arg-type]
             except AttributeError:
-                # 某些响应类型（如 _StreamingResponse）没有 body 属性，
-                # 退而迭代 body_iterator
+                # 部分响应类型没有 `body` 属性，只能通过迭代器收集响应体。
                 async for chunk in response.body_iterator:
                     body += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
 
@@ -210,7 +198,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         )
 
         if not 200 <= response.status_code < 300:
-            # 仅成功响应可重放；校验/权限/服务端错误均释放占位，修正后可同键重试。
+            # 失败响应不参与重放，调用方修正请求后仍可使用同一幂等键重试。
             await _delete_reservation(**pending)
             return final
 
@@ -219,7 +207,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         except (json.JSONDecodeError, UnicodeDecodeError):
             parsed = {"_raw": body.decode("utf-8", errors="replace")[:4096]}
 
-        # 把首次响应写回占位记录（占位由 guard 先行插入，正常路径必存在）
+        # 守卫已提交占位记录，此处只需写入首次成功响应。
         async with async_session_factory() as session:
             await session.execute(
                 update(IdempotencyRecord)

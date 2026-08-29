@@ -1,4 +1,4 @@
-"""记忆索引任务测试（M1.8 验收）。
+"""记忆索引任务的成功、重试与耗尽处理测试。
 
 - 成功路径：payload 文本经索引服务写入 memory_chunks（fake embedding provider）；
 - 失败路径：异常按指数退避重入延迟队列，attempt 自增；
@@ -51,7 +51,7 @@ def _payload(source_id: uuid.UUID, project_id: uuid.UUID | None, **extra) -> dic
 
 
 async def test_index_task_success(redis_client, project_a, monkeypatch: pytest.MonkeyPatch) -> None:
-    """成功：文本切块写入 memory_chunks，不进延迟队列。"""
+    """索引成功时应写入记忆块且不进入延迟队列。"""
     monkeypatch.setattr(
         indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
     )
@@ -136,7 +136,7 @@ async def test_core_memory_index_reads_current_state(
 async def test_index_task_failure_retries_with_backoff(
     redis_client, project_a, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """失败：重入延迟队列，attempt+1，退避基数 10s。"""
+    """索引失败时应增加尝试次数并按退避策略进入延迟队列。"""
 
     async def _boom(self, **kwargs):  # noqa: ANN001, ANN003
         raise RuntimeError("embedding service down")
@@ -157,7 +157,7 @@ async def test_index_task_failure_retries_with_backoff(
 async def test_index_task_gives_up_after_max_attempts(
     redis_client, project_a, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """重试耗尽：不再入队，任务丢弃（只记日志）。"""
+    """重试耗尽后任务应被丢弃且不再入队。"""
 
     async def _boom(self, **kwargs):  # noqa: ANN001, ANN003
         raise RuntimeError("still down")

@@ -4,9 +4,9 @@ Revision ID: 0016_notifications_files
 Revises: 0015_deliverables_project_id
 Create Date: 2026-08-12
 
-给「有独立列表入口」的 notifications、stored_files 冗余 project_id（spec D1/D3）：
+为需要按项目独立列出的 notifications、stored_files 冗余 project_id：
 - project_id NOT NULL，外键 → projects.id；
-- 历史数据回填（无存量兼容义务，D5 重建，形式性回填）：
+- 迁移执行时无存量兼容义务；以下更新仅作形式性回填：
   notifications 经 recipient 的成员记录推导（recipient → project_members.project_id）；
   stored_files 优先经 work_item_id 推导（work_items.project_id），
   未关联工作项的经 uploaded_by 的成员记录推导；
@@ -27,7 +27,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # --- notifications ---
+    # 通知
     op.add_column("notifications", sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=True))
     # 回填：通知归属 = 接收人成员记录的项目归属（project_members.project_id 是权威）
     op.execute(
@@ -44,7 +44,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_notifications_project_id", "notifications", ["project_id"])
 
-    # --- stored_files ---
+    # 存储文件
     op.add_column("stored_files", sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=True))
     # 回填：优先经关联工作项推导，未关联的经上传人成员记录推导
     op.execute(

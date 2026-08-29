@@ -1,4 +1,4 @@
-"""0010：agent_runs 增加 prompt 列（T5.6 人工重新触发，17.3 节）。
+"""0010：agent_runs 增加 prompt 列，支持人工重新触发运行。
 
 Revision ID: 0010_agent_runs_prompt
 Revises: 0009_agent_runs_suggestions

@@ -1,8 +1,8 @@
-"""Requirement Analyst 提示词模板（10.1 节，T5.4）。
+"""Requirement Analyst 提示词模板。
 
-模型只接收最小上下文（16 节）：项目名、可选的关联工作项标题、需求原文。
-只输出 JSON；suggestion_type / prompt_version / fact_refs 由系统侧注入，
-模型只需产出 content / confidence / risks。
+仅向模型提供整理需求所需的项目名、可选关联工作项标题和需求原文，不提供
+无关资料或敏感信息。模型只输出 JSON；suggestion_type、prompt_version 和
+fact_refs 由系统侧注入，模型只需产出 content、confidence 和 risks。
 """
 
 SYSTEM_PROMPT = (
@@ -21,7 +21,7 @@ SYSTEM_PROMPT = (
 def render_user_prompt(
     *, project_name: str, work_item_title: str | None, requirement: str
 ) -> str:
-    """组装 user 提示词（最小上下文：项目名 + 可选工作项标题 + 需求原文）。"""
+    """使用项目名、可选工作项标题和需求原文组装最小 user 提示词。"""
     lines = [f"项目：{project_name or '（未知）'}"]
     if work_item_title:
         lines.append(f"关联工作项：{work_item_title}")

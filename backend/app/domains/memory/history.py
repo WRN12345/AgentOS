@@ -1,12 +1,8 @@
-"""历史与经验：拆解/分配记录与工作项结论入索引（设计文档第 9 节，M5.1/M5.2）。
+"""将已落定的拆解、分配记录和工作项结论写入记忆索引。
 
-- 拆解/分配记录（M5.1）：只索引"已完成"的运行（15.4）——run 成功且仅收录
-  已落定（非 pending）的建议，触发时机挂在 submit_suggestion_feedback（反馈落定后重建）；
-- 工作项结论（M5.2）：审核通过（approve → COMPLETED）时异步入索引，
-  内容含做了什么（标题/描述/验收标准）、验收结果与评审意见（含反馈正文，
-  按 2026-08-16 设计文档第 9 节与第 12 节"记忆内容项目内全员可见"，
-  2026-08-22 评审确认突破 reviews 反馈的隐私边界）；
-- 索引为整体重建（rebuild_chunks 语义），块内容始终反映最新状态。
+仅成功运行且已落定的建议进入拆解/分配历史，待确认建议不会被索引。工作项只有在
+审核通过并完成后才异步索引，内容包含描述、验收标准、验收结果和评审意见，因此会在
+项目内记忆检索中可见。索引按来源整体重建，始终反映最新状态。
 """
 
 import uuid
@@ -27,10 +23,10 @@ from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
 
-#: 视为"拆解/分配记录"的 Agent 类型（设计文档第 9 节）
+#: 会沉淀为拆解或分配历史的 `Agent` 类型
 HISTORY_RUN_AGENT_TYPES = ("requirement_pipeline", "requirement_analyst", "assignment_advisor")
 
-#: 历史来源种类（worker 据此取文本）：拆解/分配运行 / 工作项结论
+#: `worker` 根据来源种类选择运行记录或工作项结论
 HISTORY_KIND_RUN = "run"
 HISTORY_KIND_WORK_ITEM = "work_item"
 
@@ -51,12 +47,12 @@ _DECISION_LABELS = {
 async def build_run_history_text(
     session: AsyncSession, run_id: uuid.UUID
 ) -> str | None:
-    """组装一次拆解/分配运行的可检索文本；不满足"已完成"口径返回 None（不索引）。"""
+    """组装拆解或分配运行的可检索文本；未成功完成时返回 `None`。"""
     run = await session.get(AgentRun, run_id)
     if run is None or run.agent_type not in HISTORY_RUN_AGENT_TYPES:
         return None
     if run.status != "succeeded":
-        return None  # 进行中的不索引（15.4）
+        return None
 
     suggestions = (
         await session.execute(
@@ -68,8 +64,7 @@ async def build_run_history_text(
 
     parts = [f"需求拆解/分配记录\n\n输入需求：\n{run.prompt}"]
     for s in suggestions:
-        # 一次运行可产出多条建议。首次反馈时其余建议仍可能待确认，不能让
-        # 未经人工定论的内容进入可检索历史；后续反馈会整体重建该来源。
+        # 只让人工已定论的建议进入检索，后续反馈会整体重建该来源
         if s.review_status == "pending":
             continue
         label = _REVIEW_STATUS_LABELS.get(s.review_status, s.review_status)
@@ -102,7 +97,7 @@ async def build_run_history_text(
 async def _enqueue_history_index(
     project_id: uuid.UUID, source_id: uuid.UUID, kind: str
 ) -> None:
-    """投递历史索引任务（best-effort：投递失败只记日志，不拖垮主流程）。"""
+    """投递历史索引任务；失败时仅记录日志，不阻塞主流程。"""
     redis_client: redis.Redis = create_redis_client()
     try:
         await enqueue(
@@ -124,17 +119,17 @@ async def _enqueue_history_index(
 
 
 async def enqueue_run_history_index(run: AgentRun) -> None:
-    """反馈落定后投递拆解/分配记录索引任务（M5.1）。"""
+    """反馈落定后投递拆解或分配记录的索引任务。"""
     await _enqueue_history_index(run.project_id, run.id, HISTORY_KIND_RUN)
 
 
 async def build_work_item_conclusion_text(
     session: AsyncSession, work_item_id: uuid.UUID
 ) -> str | None:
-    """组装已完成工作项的结论文本（M5.2）；未完成或不存在返回 None（不索引）。"""
+    """组装已完成工作项的结论文本；未完成或不存在时返回 `None`。"""
     item = await session.get(WorkItem, work_item_id)
     if item is None or item.status != WorkItemStatus.COMPLETED.value:
-        return None  # 只索引已完成（15.4）
+        return None
 
     assignee = await session.get(ProjectMember, item.assignee_id)
     parts = [
@@ -165,5 +160,5 @@ async def build_work_item_conclusion_text(
 
 
 async def enqueue_work_item_conclusion_index(item: WorkItem) -> None:
-    """工作项完成（审核通过）后投递结论索引任务（M5.2）。"""
+    """工作项审核通过并完成后投递结论索引任务。"""
     await _enqueue_history_index(item.project_id, item.id, HISTORY_KIND_WORK_ITEM)

@@ -60,9 +60,6 @@ async def _create_work_item(
     return resp.json()
 
 
-# ---------- admin 无法访问项目内业务接口 ----------
-
-
 async def test_admin_cannot_access_project_endpoints(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -71,7 +68,6 @@ async def test_admin_cannot_access_project_endpoints(
     admin_headers = ctx["admin_headers"]
     assert isinstance(admin_headers, dict)
 
-    # admin 没有项目上下文 → 400（MISSING_PROJECT_ID）
     resp = await client.get("/api/v1/members", headers=admin_headers)
     assert resp.status_code == 400
     assert resp.json()["code"] == "MISSING_PROJECT_ID"
@@ -86,16 +82,12 @@ async def test_admin_write_business_requires_project_context(
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     assert isinstance(admin_headers, dict)
 
-    # 建工作项 → 400（缺失项目上下文）
     created = await client.post(
         "/api/v1/work-items",
         json={"title": "越权工作项", "priority": "low", "assignee_id": str(alice.id)},
         headers=admin_headers,
     )
     assert created.status_code == 400
-
-
-# ---------- admin 可访问无项目上下文的管理端点 ----------
 
 
 async def test_admin_read_access_without_project(
@@ -120,9 +112,6 @@ async def test_admin_read_access_without_project(
     assert resp.status_code == 200
 
 
-# ---------- admin 不可被指派（没有成员记录） ----------
-
-
 async def test_admin_cannot_be_assigned_no_member_record(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -144,9 +133,6 @@ async def test_admin_cannot_be_assigned_no_member_record(
     assert "成员不存在" in created.json()["message"]
 
 
-# ---------- 成员列表不含 admin（admin 无记录） ----------
-
-
 async def test_member_list_does_not_contain_admin(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -162,9 +148,6 @@ async def test_member_list_does_not_contain_admin(
     usernames = {m["username"] for m in members}
     assert "admin" not in usernames
     assert usernames >= {"leader", "alice", "bob"}
-
-
-# ---------- 成员账号管理：仅 leader 可操作 ----------
 
 
 async def test_only_leader_can_add_member(
@@ -186,16 +169,11 @@ async def test_only_leader_can_add_member(
 
     payload = {"username": "carol"}
 
-    # 普通成员 → 403
     resp = await client.post("/api/v1/members", json=payload, headers=alice_headers)
     assert resp.status_code == 403
 
-    # leader → 201
     resp = await client.post("/api/v1/members", json=payload, headers=leader_headers)
     assert resp.status_code == 201, resp.text
-
-
-# ---------- Agent 分配建议数据源：自动不含 admin ----------
 
 
 async def test_agent_tools_exclude_admin(project: Project) -> None:
@@ -220,9 +198,6 @@ async def test_agent_tools_exclude_admin(project: Project) -> None:
     # admin 没有 member 记录，工具自然不返回
     assert all(c["member_id"] == alice_id for c in caps)
     assert all(w["member_id"] == alice_id for w in workload)
-
-
-# ---------- 角色仅由 admin 指定：成员接口不接受 role 字段 ----------
 
 
 async def test_member_create_rejects_role_field(

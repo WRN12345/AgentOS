@@ -1,4 +1,4 @@
-"""上传即入库与索引管道测试（M2.6 验收，设计文档第 3、6 节）。
+"""上传入库与索引管道测试。
 
 - 上传可读取格式（.md）→ 状态 pending 且自动投递 memory.index 任务；
 - 上传不支持格式（.png）→ 直接 unindexed，不投递任务；
@@ -218,7 +218,7 @@ async def _run_worker_for_exhausted(file_id: str, storage) -> None:
         await client.aclose()
 
 
-# ---------- 并发重复任务防重（P2 修复回归） ----------
+# 并发重复任务曾导致重复块，保留回归测试防止原子认领和来源级互斥失效。
 
 
 class _SlowEmbeddingProvider(FakeEmbeddingProvider):

@@ -1,18 +1,4 @@
-"""T6.4 双任务并行端到端验收场景（18.3 节、第 22 章标准 7 之二）。
-
-负责人同时创建两个互不依赖的工作项——RAG 任务（主执行人 alice，协作者 carol）
-与 Agent 工具设计任务（主执行人 bob，协作者 dave）——并行推进，分别经历
-协作、提交、审核直至完成，不形成内部 DAG（第 9 章并行场景说明）。
-
-验证点（18.3 节）：
-- 并行创建：同一 Idempotency-Key 并发重复提交只建一个工作项（17.2 节）；
-- 两个工作项的状态、通知、审计事件互不串扰（审计目标集合不相交、
-  协作者只收到本任务协作的通知）；
-- 同一成员的负载在成员列表接口中正确汇总（推进中与完成后的计数变化）；
-- 并行审批：负责人并发审核两个工作项，各自独立通过；
-- Agent 建议生成但不改变正式业务状态（快照前后比对）；
-- 两个工作项各自审计链完整，可独立回放。
-"""
+"""两个独立工作项并行推进时的幂等、隔离、负载、审批和审计链测试。"""
 
 import asyncio
 import uuid
@@ -109,7 +95,6 @@ async def test_dual_items_parallel_end_to_end(
     ch = ctx["carol_headers"]
     dh = ctx["dave_headers"]
 
-    # ---- 步骤 1：并行创建两个工作项；同幂等键并发重复提交只生效一次 ----
     resp_a1, resp_a2, resp_b = await asyncio.gather(
         _create_item(client, lh, str(alice.id), "RAG 任务", "e2e-parallel-key-a"),
         _create_item(client, lh, str(alice.id), "RAG 任务", "e2e-parallel-key-a"),
@@ -127,16 +112,13 @@ async def test_dual_items_parallel_end_to_end(
     assert [e.action for e in events] == ["work_item.created", "work_item.created"]
     assert len({str(e.target_id) for e in events}) == 2  # 只建了两个工作项
 
-    # ---- 步骤 2：并行发布、并行开始 ----
     resp_pub_a, resp_pub_b = await asyncio.gather(
         command_work_item(client, lh, item_a_id, "publish", 1),
         command_work_item(client, lh, item_b_id, "publish", 1),
     )
     assert resp_pub_a.status_code == 200, resp_pub_a.text
     assert resp_pub_b.status_code == 200, resp_pub_b.text
-    # 开发文档前置（设计 2026-07-30 §4.3）：直接建库豁免行放行 start——
-    # 本场景按 target 划分两条审计链做串扰断言，waive 接口会引入
-    # 与场景无关的 dev_doc 事件
+    # 直接写入豁免行，避免 waive 接口产生与两条目标审计链无关的 dev_doc 事件。
     async with async_session_factory() as session:
         session.add_all(
             [
@@ -154,19 +136,16 @@ async def test_dual_items_parallel_end_to_end(
     assert resp_start_a.json()["status"] == "IN_PROGRESS"
     assert resp_start_b.json()["status"] == "IN_PROGRESS"
 
-    # 负载汇总：两位主执行人各 1 个进行中工作项，协作者为 0
     loads = await _member_loads(client, lh)
     assert loads["爱丽丝"] == 1
     assert loads["鲍勃"] == 1
     assert loads["卡罗尔"] == 0
     assert loads["戴夫"] == 0
 
-    # ---- 步骤 3：并行发起各自协作（RAG 数据准备 / 工具评测用例） ----
     collab_a, collab_b = await asyncio.gather(
         create_collaboration(client, ah, item_a_id, carol.id, title="准备检索语料"),
         create_collaboration(client, bh, item_b_id, dave.id, title="设计工具评测用例"),
     )
-    # ---- 步骤 4：两位协作者并行推进各自协作流，随后主执行人并行确认完成 ----
     await asyncio.gather(
         _collab_flow(client, ch, collab_a["id"], "语料已按模板整理"),
         _collab_flow(client, dh, collab_b["id"], "评测用例初稿完成"),
@@ -178,7 +157,6 @@ async def test_dual_items_parallel_end_to_end(
     assert resp_ca.status_code == 200, resp_ca.text
     assert resp_cb.status_code == 200, resp_cb.text
 
-    # ---- 步骤 5：并行推进中开启 Agent——建议生成，不改变正式业务状态 ----
     before = await snapshot_business_state([item_a_id, item_b_id])
     stub_provider.set_script(VALID_REQUIREMENT_OUTPUT)
     run = await drive_agent_run(item_a_id, project_id=project.id)
@@ -187,7 +165,6 @@ async def test_dual_items_parallel_end_to_end(
     after = await snapshot_business_state([item_a_id, item_b_id])
     assert_business_state_unchanged(before, after)
 
-    # ---- 步骤 6：并行提交交付物、并行提交审核 ----
     del_a, del_b = await asyncio.gather(
         create_deliverable(client, ah, item_a_id, type="text", content="RAG 评估结果 87%"),
         create_deliverable(
@@ -205,7 +182,6 @@ async def test_dual_items_parallel_end_to_end(
     assert resp_sub_a.status_code == 200, resp_sub_a.text
     assert resp_sub_b.status_code == 200, resp_sub_b.text
 
-    # ---- 步骤 7：并行审批——负责人并发审核两个工作项，各自独立通过 ----
     resp_rev_a, resp_rev_b = await asyncio.gather(
         client.post(
             f"/api/v1/work-items/{item_a_id}/reviews",
@@ -224,19 +200,15 @@ async def test_dual_items_parallel_end_to_end(
     current_b = await get_work_item(client, lh, item_b_id)
     assert current_a["status"] == "COMPLETED"
     assert current_b["status"] == "COMPLETED"
-    # 主责任全程未串扰
     assert current_a["assignee"]["id"] == str(alice.id)
     assert current_b["assignee"]["id"] == str(bob.id)
 
-    # 完成后负载归零
     loads = await _member_loads(client, lh)
     assert loads["爱丽丝"] == 0
     assert loads["鲍勃"] == 0
 
-    # ---- 步骤 8：互不串扰断言——通知与审计目标集合 ----
     carol_notices = await notifications_for(carol.id)
     dave_notices = await notifications_for(dave.id)
-    # 协作者收到的全部是本任务协作的通知（请求 + 完成回执），且标题不含对方任务内容
     assert {n.type for n in carol_notices} <= {"collaboration.requested", "collaboration.completed"}
     assert {n.type for n in dave_notices} <= {"collaboration.requested", "collaboration.completed"}
     assert any(n.type == "collaboration.requested" for n in carol_notices)
@@ -250,11 +222,9 @@ async def test_dual_items_parallel_end_to_end(
     assert a_targets.isdisjoint(b_targets)
     events_a = [e for e in events if str(e.target_id) in a_targets]
     events_b = [e for e in events if str(e.target_id) in b_targets]
-    # 全部事件都归属于两个任务的审计链，无越界、无 Agent 业务事件
     assert len(events_a) + len(events_b) == len(events)
     assert all(not e.action.startswith("agent.") for e in events)
 
-    # ---- 步骤 9：两个工作项各自审计链完整，可独立回放 ----
     assert_audit_replay(
         events_a,
         [

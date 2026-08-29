@@ -1,6 +1,6 @@
-"""按需检索装配测试（M6.5 验收，设计文档 15.3、第 11 节①）。
+"""按需检索结果和团队记忆的上下文装配测试。
 
-- 文档+历史合计 ≤8 段、总字符 ≤3000；检索失败降级标记（16.5）；
+- 文档与历史合计不超过 8 段、总字符不超过 3000；检索失败时降级标记；
 - 分配上下文含成员完成统计与档案摘录；提示词渲染含装配块。
 """
 
@@ -63,7 +63,7 @@ async def test_retrieval_block_hits_docs_and_history(project_a: Project) -> None
 
 
 async def test_retrieval_block_snippet_limit(project_a: Project) -> None:
-    """片段数不超限（15.3）：10 个文档块只取前 8。"""
+    """检索片段数不得超过配置上限。"""
     for i in range(10):
         await _index(project_a, "document", f"文档段落编号{i:02d}" + "内容" * 100)
 
@@ -108,15 +108,11 @@ async def test_retrieval_block_degrades_on_model_error(
 
 
 async def test_team_memory_block_stats_and_profiles(project_a: Project) -> None:
-    """分配上下文含成员完成统计与档案摘录（M3.9 放行内）。
-
-    档案正文不写成员姓名，装配时必须按档案归属（user_id）补充结构化
-    成员身份——否则分配模型无法判断特质属于哪个候选人。
-    """
+    """分配上下文应包含统计，并按档案归属补充正文中缺失的成员身份。"""
     alice_user, alice = await add_member(project_a, "alice", "Alice123!", display_name="爱丽丝")
     await _add_item(project_a, alice, "COMPLETED")
     await _add_item(project_a, alice, "IN_PROGRESS")
-    # 档案块（profile，project_id=NULL，随人走）；source_id 指向真实档案
+    # 档案不挂项目，source_id 必须指向真实档案以解析所有者身份。
     vec = [0.1] * settings.embedding_dimensions
     async with async_session_factory() as session:
         profile = MemberProfile(
@@ -146,7 +142,6 @@ async def test_team_memory_block_stats_and_profiles(project_a: Project) -> None:
     assert "爱丽丝" in block
     assert "完成 1 项" in block
     assert "当前活跃 1 项" in block
-    # 结构化归属：正文未含姓名，成员身份由装配层解析
     assert "- 爱丽丝：对支付模块的历史包袱很熟" in block
 
 
@@ -157,7 +152,7 @@ async def test_team_memory_block_profile_owner_fallbacks(
     outsider, outsider_member = await add_member(project_b, "outsider", "Out12345!")
     vec = [0.1] * settings.embedding_dimensions
     async with async_session_factory() as session:
-        # 档案随人走：所有者在 B 项目，A 项目分配检索命中时回退用户名
+        # 所有者不属于当前项目时，仍需用稳定用户名标识跨项目档案。
         profile = MemberProfile(
             user_id=outsider.id,
             content="熟悉对账链路",
@@ -176,7 +171,7 @@ async def test_team_memory_block_profile_owner_fallbacks(
                 model_version=settings.embedding_model,
             )
         )
-        # 残留块：source_id 指向不存在的档案，应被跳过而非匿名输出
+        # 残留块指向不存在的档案，必须跳过以免输出无法归属的内容。
         session.add(
             MemoryChunk(
                 project_id=None,
@@ -193,7 +188,6 @@ async def test_team_memory_block_profile_owner_fallbacks(
             session, project_id=project_a.id, query="对账"
         )
     assert ok is True
-    # 非本项目成员：回退到稳定用户名
     assert "- outsider：熟悉对账链路" in block
     assert "残留块不应出现" not in block
 
