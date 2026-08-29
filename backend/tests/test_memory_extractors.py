@@ -1,4 +1,4 @@
-"""内容提取器测试（M2.5 验收，设计文档第 4 节）。
+"""内容提取器对支持格式、编码异常和损坏文件的处理测试。
 
 - md/txt 直接读取（含非 utf-8 编码降级）；
 - PDF：文字型提取成功；扫描件（无文字层）→ UnsupportedFormatError（unindexed）；
@@ -78,7 +78,7 @@ def test_markdown_and_txt() -> None:
 
 
 def test_txt_non_utf8_degrades_gracefully() -> None:
-    """GBK 等非法 utf-8 字节不阻塞索引，降级 replace。"""
+    """非 UTF-8 字节应降级替换且不阻塞索引。"""
     text = extract_text("legacy.txt", "中文".encode("gbk"))
     assert len(text) > 0
 

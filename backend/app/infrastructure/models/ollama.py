@@ -1,8 +1,8 @@
-"""Ollama Provider（默认，第 15 章）：POST {OLLAMA_BASE_URL}/api/chat。
+"""通过 `POST {OLLAMA_BASE_URL}/api/chat` 调用 Ollama。
 
-- 使用 /api/chat（支持 system+user 消息与 format=json 结构化输出）；
-- 统一错误封装：超时 → ModelTimeoutError，连接失败/非 2xx → ModelUnavailableError；
-- 不在顶层泄漏 httpx 异常；Ollama 停机等场景上层按 17.3 节策略处理。
+接口支持 system、user 消息和 `format=json` 结构化输出。超时转换为
+`ModelTimeoutError`，连接失败或非 2xx 响应转换为 `ModelUnavailableError`，
+不向上泄漏 httpx 异常。
 """
 
 import asyncio
@@ -12,13 +12,13 @@ import httpx
 from app.infrastructure.models.errors import ModelTimeoutError, ModelUnavailableError
 from app.infrastructure.models.provider import ModelProvider
 
-# 连接失败/响应非 2xx 时重试次数以外的退避基数（秒），简单线性退避即可
+# 连接失败时使用线性退避，基数单位为秒。
 _RETRY_BACKOFF_SECONDS = 0.5
 
 
 class OllamaProvider(ModelProvider):
     name = "ollama"
-    is_external = False  # 本地/内网服务，不涉及数据外发（16 节）
+    is_external = False  # 本地或内网服务不向第三方发送数据。
 
     def __init__(
         self,
@@ -35,7 +35,7 @@ class OllamaProvider(ModelProvider):
         self.model = model
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
-        # transport 仅供测试注入 MockTransport；生产为 None（httpx 默认网络传输）
+        # `transport` 仅供测试注入 MockTransport；生产环境使用 httpx 默认传输。
         self._transport = transport
 
     async def generate(
@@ -75,7 +75,7 @@ class OllamaProvider(ModelProvider):
             except httpx.TransportError as exc:
                 last_error = ModelUnavailableError(f"Ollama 不可达: {exc}")
                 last_error.__cause__ = exc
-            # 超时/连接失败按 max_retries 重试；非 2xx（ModelUnavailableError 主动抛出）不重试
+            # 仅超时和连接失败会进入此重试路径；非 2xx 响应直接向上抛出。
             if attempt < self.max_retries:
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
         assert last_error is not None

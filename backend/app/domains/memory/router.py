@@ -1,9 +1,7 @@
-"""记忆检索接口（设计文档第 11、12 节）。
+"""项目记忆检索、核心记忆、成员档案和知识库问答接口。
 
-- POST /memory/search：项目成员检索本项目记忆；全局 admin 只读可查任意项目；
-- 与 Agent 工具共用 search_memory 权限路径——检索层强制项目隔离（第 12 节）；
-- caller 标识：HTTP 路径仅允许 member_qa（默认）与 leader_query（需负责人角色），
-  agent_assignment 仅供 Agent 内部调用（16.12，M3.9 放行规则的判定依据）。
+成员只能读取当前项目，全局管理员可进行跨项目只读监督。`HTTP` 检索只接受
+`member_qa` 和仅负责人可用的 `leader_query`；`agent_assignment` 仅供内部运行使用。
 """
 
 import uuid
@@ -68,10 +66,10 @@ async def search_memory_endpoint(
 
     caller = body.caller or CALLER_MEMBER_QA
     if caller not in (CALLER_MEMBER_QA, CALLER_LEADER_QUERY):
-        # agent_assignment 仅供 Agent 内部调用（16.12），HTTP 路径不开放
+        # 禁止客户端冒充内部 `Agent` 调用以绕过成员鉴权
         raise ApiException(403, ErrorCodes.FORBIDDEN, "不允许的检索调用方标识")
     if caller == CALLER_LEADER_QUERY and (member is None or member.role != ROLE_LEADER):
-        # leader_query 会命中档案跨项目内容（M3.9），HTTP 路径须确为负责人
+        # `leader_query` 可读取跨项目档案，因此必须校验负责人角色
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可按分配场景检索")
 
     results = await search_memory(
@@ -87,16 +85,13 @@ async def search_memory_endpoint(
     return MemorySearchResponse.from_results(results)
 
 
-# ---------- 核心记忆条目（设计文档第 8 节，M4.3） ----------
-
-
 @router.get("/memory/core-entries", response_model=CoreMemoryEntryListOut)
 async def list_core_memory_entries(
     project_id: uuid.UUID = Depends(project_id_from_request),
     _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> CoreMemoryEntryListOut:
-    """核心记忆条目列表 + 容量占用：项目成员可读；全局 admin 只读查看（第 12 节）。"""
+    """返回核心记忆条目及容量占用；全局管理员仅可只读查看。"""
     entries = await list_entries(session, project_id=project_id)
     used, budget = await budget_usage(session, project_id=project_id)
     return CoreMemoryEntryListOut(
@@ -112,7 +107,7 @@ async def create_core_memory_entry(
     leader: ProjectMember = Depends(get_current_leader),
     session: AsyncSession = Depends(get_session),
 ) -> CoreMemoryEntryOut:
-    """负责人手写条目（种子记忆，16.11），立即生效；超容量预算 400 拒绝。"""
+    """由负责人手写并立即生效一条核心记忆；超出容量预算时拒绝。"""
     entry = await create_entry(session, leader, content=body.content)
     return (await entries_to_out(session, [entry]))[0]
 
@@ -123,12 +118,9 @@ async def deprecate_core_memory_entry(
     leader: ProjectMember = Depends(get_current_leader),
     session: AsyncSession = Depends(get_session),
 ) -> CoreMemoryEntryOut:
-    """负责人作废条目：保留供追溯；跨项目按 404（多项目规约）。"""
+    """由负责人作废条目并保留追溯记录；跨项目访问按不存在处理。"""
     entry = await deprecate_entry(session, leader, entry_id=entry_id)
     return (await entries_to_out(session, [entry]))[0]
-
-
-# ---------- 团队记忆：成员统计（设计文档第 7 节①，M3.3） ----------
 
 
 @router.get("/memory/member-stats", response_model=list[MemberStatsOut])
@@ -137,14 +129,12 @@ async def list_member_stats(
     _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberStatsOut]:
-    """成员完成数/按时率/负载统计：项目成员可查（分配页面与 Agent 工具共用）；
-    全局 admin 只读查看（第 12 节）。统计严格项目内口径（含停用成员，16.7）。
+    """返回严格按项目统计的成员完成数、按时率和负载。
+
+    结果包含停用成员以保留历史口径；全局管理员仅可只读查看。
     """
     stats = await member_completion_stats(session, project_id=project_id)
     return [MemberStatsOut.from_stats(s) for s in stats]
-
-
-# ---------- 团队记忆：成员文字档案（设计文档第 7 节②，M3.5） ----------
 
 
 @router.get("/memory/member-profiles/{user_id}", response_model=MemberProfileOut)
@@ -154,8 +144,9 @@ async def get_member_profile(
     _: tuple[ProjectMember | None, bool] = Depends(get_member_or_readonly_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProfileOut:
-    """读取成员档案：项目内全员可读（含被评价者本人，16.1），档案随人走跨项目可读；
-    全局 admin 只读（第 12 节）。无档案 404（新成员尚无档案属正常）。
+    """读取跨项目共享的成员档案。
+
+    项目成员和被评价者本人均可读取，全局管理员仅可只读查看；无档案时返回 404。
     """
     profile = await get_profile(session, user_id)
     if profile is None:
@@ -170,12 +161,9 @@ async def upsert_member_profile(
     leader: ProjectMember = Depends(get_current_leader),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProfileOut:
-    """创建/更新成员档案：仅负责人（15.6），写完直接生效（第 7 节）。"""
+    """由负责人创建或更新成员档案，提交后立即生效。"""
     profile = await upsert_profile(session, leader, user_id=user_id, content=body.content)
     return await profile_to_out(session, profile, project_id=leader.project_id)
-
-
-# ---------- 知识库问答（设计文档第 11 节②，M7.3） ----------
 
 
 @router.post("/memory/qa", response_model=MemoryQaResponse)
@@ -184,11 +172,10 @@ async def ask_knowledge_base(
     member: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> MemoryQaResponse:
-    """一问一答：项目成员提问，命中则生成回答并附依据，低于阈值拒答并给线索。
+    """根据项目记忆回答成员问题，依据不足时拒答并返回线索。
 
-    仅项目成员可用：问答是生成服务而非内容查看，全局 admin 的只读查看
-    走列表/检索接口（第 12 节），不经此路径。模型不可用时返回 503
-    （明确失败，不编造）；查询与问答不审计（16.10）。
+    问答是生成服务，仅项目成员可用；全局管理员应使用只读列表或检索接口。
+    模型不可用时返回 503，查询和问答不写入审计事件。
     """
     try:
         result = await answer_question(
@@ -199,9 +186,7 @@ async def ask_knowledge_base(
             503, ErrorCodes.INTERNAL_ERROR, "模型服务暂不可用，请稍后重试"
         ) from exc
 
-    # 问答历史按人落库（2026-08-24 修订，仅本人可见）；best-effort：
-    # 历史写入失败不影响问答本身。INSERT 参数含问题/答案/依据片段，
-    # 异常文本会带出这些私人内容，因此只记异常类型，不记堆栈与参数
+    # 历史写入失败不影响回答；为避免日志泄露问题、答案和依据，只记录异常类型
     try:
         await save_qa_history(session, member=member, query=body.question, result=result)
     except Exception as exc:  # noqa: BLE001
@@ -243,8 +228,7 @@ async def list_my_qa_history(
     member: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[QaHistoryOut]:
-    """本人问答历史（时间倒序，分页）。仅本人可见——负责人/admin 无成员身份
-    或查他人历史均无此路径（2026-08-24 决策修订）。"""
+    """分页返回本人问答历史；负责人和全局管理员也不能查看他人记录。"""
     records = await list_qa_history(session, member=member, limit=limit, offset=offset)
     return [
         QaHistoryOut(

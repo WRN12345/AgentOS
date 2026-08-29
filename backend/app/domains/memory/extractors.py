@@ -1,14 +1,10 @@
-"""文档内容提取器（设计文档第 4 节）：文件字节 → 纯文本，供索引管道切块。
+"""将文档字节提取为供索引管道切块的纯文本。
 
-格式支持矩阵（与第 4 节一致）：
-- .md / .txt：直接读（utf-8，解码失败降级 replace，不因编码问题阻塞索引）；
-- .pdf：pypdf 提取文字层；提取结果为空视为扫描件（本质是图片，本期后置）→ 不支持；
-- .docx：python-docx 提取段落与表格文字；
-- 其余（zip/图片等）：不支持读取内容。
+`.md` 和 `.txt` 按 `UTF-8` 解码，失败时替换无效字符；`.pdf` 通过 `pypdf`
+提取文字层，无文字层的扫描件视为不支持；`.docx` 通过 `python-docx` 提取段落和表格。
 
-两种失败语义对应索引状态机的不同终态（第 6 节）：
-- UnsupportedFormatError → unindexed（格式不支持，终态，不重试）；
-- ExtractionFailedError → failed（文件损坏等，可重试）。
+`UnsupportedFormatError` 表示格式不支持，对应不可重试的 `unindexed`；
+`ExtractionFailedError` 表示支持的格式解析失败，对应可重试的 `failed`。
 """
 
 import io
@@ -16,23 +12,22 @@ import io
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-#: 支持读取内容的扩展名（其余一律 UnsupportedFormatError）
 SUPPORTED_EXTENSIONS = frozenset({".md", ".txt", ".pdf", ".docx"})
 
 
 class UnsupportedFormatError(Exception):
-    """格式不支持读取内容（zip/图片/扫描件 PDF 等）→ 索引状态 unindexed。"""
+    """格式不支持读取内容，对应索引状态 `unindexed`。"""
 
 
 class ExtractionFailedError(Exception):
-    """声称支持但提取失败（文件损坏等）→ 索引状态 failed（可重试）。"""
+    """支持的格式提取失败，对应可重试的索引状态 `failed`。"""
 
 
 def _extract_text_file(data: bytes) -> str:
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
-        # 非 utf-8（如 GBK 文本）：降级 replace，保留可检索的大部分内容
+        # 替换无效字节，避免编码问题阻塞整份文档索引
         return data.decode("utf-8", errors="replace")
 
 
@@ -44,7 +39,7 @@ def _extract_pdf(data: bytes) -> str:
         raise ExtractionFailedError(f"PDF 解析失败: {exc}") from exc
     text = "\n\n".join(p for p in pages if p.strip())
     if not text.strip():
-        # 提取不到文字层 → 扫描件（设计文档第 4 节：本质是图片，本期后置）
+        # 无文字层的扫描件需要 `OCR`，当前提取器不支持
         raise UnsupportedFormatError("扫描件 PDF（无文字层）")
     return text
 
@@ -54,7 +49,7 @@ def _extract_docx(data: bytes) -> str:
 
     try:
         document = Document(io.BytesIO(data))
-    except Exception as exc:  # python-docx 对损坏文件抛多种异常（PackageNotFoundError 等）
+    except Exception as exc:  # `python-docx` 对损坏文件可能抛出多种异常
         raise ExtractionFailedError(f"DOCX 解析失败: {exc}") from exc
     parts = [p.text for p in document.paragraphs if p.text.strip()]
     for table in document.tables:
@@ -64,11 +59,10 @@ def _extract_docx(data: bytes) -> str:
 
 
 def extract_text(filename: str, data: bytes) -> str:
-    """按扩展名提取纯文本。
+    """按文件扩展名提取纯文本。
 
-    - 不支持的格式抛 UnsupportedFormatError（→ unindexed）；
-    - 支持但解析失败抛 ExtractionFailedError（→ failed，可重试）；
-    - 提取结果可能是空字符串（如空文档），由索引管道按"空内容"处理。
+    不支持的格式抛出 `UnsupportedFormatError`；解析失败抛出 `ExtractionFailedError`；
+    空文档可以返回空字符串，由索引管道按空内容处理。
     """
     suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
     if suffix not in SUPPORTED_EXTENSIONS:

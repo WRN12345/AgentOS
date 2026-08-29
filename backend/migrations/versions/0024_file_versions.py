@@ -1,4 +1,4 @@
-"""0024：知识文档版本化——stored_files 增加版本链（设计文档第 3 节）。
+"""0024：为 stored_files 增加版本链，实现知识文档版本化。
 
 Revision ID: 0024_file_versions
 Revises: 0023_memory_chunks
@@ -8,7 +8,7 @@ Create Date: 2026-08-21
 - superseded_by：旧版本指向取代它的新版本；NULL 即"当前最新版本"；
 - 部分唯一索引 ux_stored_files_current_name：同项目同文件名至多一个当前版本，
   数据库级防止并发同名上传产生两个"最新版"；
-- 文档不可删除（16.3）：旧版本永久保留供人工追溯，检索只命中当前版本（M2.7）。
+- 文档不可删除：旧版本永久保留供人工追溯，检索只命中当前版本。
 
 注意 superseded_by 的自引用外键必须 DEFERRABLE INITIALLY DEFERRED：
 版本更替事务里要"先把旧版本指向新版本、再插入新版本行"（部分唯一索引的要求），

@@ -1,7 +1,7 @@
-"""总结 → 记忆提议接线测试（M5.4 验收，设计文档第 10 节）。
+"""工作项总结生成核心记忆提议的闭环测试。
 
 - 总结产出自动生成 memory_proposal（pending），不直接生效；
-- 确认后进入核心记忆（复用 M4.4 通道）；拒绝后核心记忆不变；
+- 确认后进入核心记忆；拒绝后核心记忆不变；
 - 模型判断无经验 / 模型不可用时都不产生提议。
 """
 
@@ -39,7 +39,7 @@ async def redis_client():
 async def _run_summary(
     client: httpx.AsyncClient, project: Project, redis_client, monkeypatch, text: str
 ) -> tuple[dict, str]:
-    """完成一个工作项并执行总结任务，返回 (ctx, item_id)。"""
+    """完成工作项并执行总结任务。"""
     monkeypatch.setattr(
         summary_module, "get_model_provider", lambda: FakeModelProvider(text=text)
     )
@@ -71,7 +71,6 @@ async def test_summary_produces_pending_proposal(
         assert proposal.content["content"] == "导入类需求后端占比最大"
         assert "自动沉淀的经验" in proposal.content["reason"]
 
-        # 提议挂在 experience_summary 运行记录上，可溯源到工作项
         run = await session.get(AgentRun, proposal.run_id)
         assert run is not None
         assert run.agent_type == EXPERIENCE_SUMMARY_AGENT_TYPE
@@ -79,14 +78,13 @@ async def test_summary_produces_pending_proposal(
         assert run.work_item_id == uuid.UUID(item_id)
         assert run.project_id == project.id
 
-        # 未确认前核心记忆不变（红线）
         assert await list_entries(session, project_id=project.id) == []
 
 
 async def test_confirm_summary_proposal_enters_core_memory(
     client: httpx.AsyncClient, project: Project, redis_client, monkeypatch
 ) -> None:
-    """闭环全链路：完成 → 总结 → 提议 → 负责人确认 → 核心记忆生效。"""
+    """工作项经验经总结和负责人确认后应进入核心记忆。"""
     ctx, _ = await _run_summary(client, project, redis_client, monkeypatch, "经验一条")
 
     leader = cast(ProjectMember, ctx["leader"])  # _setup 创建的负责人（每项目一名负责人）

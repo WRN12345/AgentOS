@@ -1,11 +1,7 @@
-"""ModelProvider 适配层测试（T5.1 验收，15、17.3 节）。
+"""验证 ModelProvider 适配层的请求契约、配置切换和错误封装。
 
-全部用 httpx.MockTransport，不依赖真实 Ollama / 外部服务：
-- Ollama 成功调用（/api/chat，system+user，format=json）；
-- 切换 OpenAI 兼容配置时代码零改动（同一 ModelProvider 接口）；
-- 服务不可用/超时 → 统一封装的 ModelUnavailableError / ModelTimeoutError，
-  不向上层泄漏 httpx 异常；
-- settings.llm_is_external 外部服务标识（供 T5.7）。
+测试使用 httpx.MockTransport，不依赖真实模型服务。连接失败和超时必须转换为
+统一领域错误，不能向上层泄漏 httpx 异常。
 """
 
 import json
@@ -54,7 +50,7 @@ def _openai_ok_transport(captured: list[httpx.Request]) -> httpx.MockTransport:
 
 
 async def test_ollama_generate_success() -> None:
-    """Ollama Provider 成功调用：路径、system/user 消息与 format=json 均正确。"""
+    """Ollama Provider 应按约定发送路径、消息角色和 JSON 格式参数。"""
     captured: list[httpx.Request] = []
     provider = OllamaProvider(
         "http://host.docker.internal:11434",
@@ -80,7 +76,7 @@ async def test_ollama_generate_success() -> None:
 
 
 async def test_factory_switch_to_openai_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LLM_PROVIDER=openai_compatible 时工厂零代码改动切换到 OpenAI 兼容 Provider。"""
+    """切换配置后工厂应返回 OpenAI 兼容 Provider。"""
     monkeypatch.setattr(settings, "llm_provider", "openai_compatible")
     monkeypatch.setattr(settings, "llm_model", "gpt-4o-mini")
     monkeypatch.setattr(settings, "openai_compatible_base_url", "https://llm.example.com/v1")
@@ -91,7 +87,7 @@ async def test_factory_switch_to_openai_compatible(monkeypatch: pytest.MonkeyPat
     assert provider.is_external is True
     assert settings.llm_is_external is True
 
-    # 同一生成接口可用（替换 transport 后调用）
+    # 两种 Provider 共享同一生成接口契约。
     captured: list[httpx.Request] = []
     provider._transport = _openai_ok_transport(captured)
     result = await provider.generate("你好", json_output=True)
@@ -104,7 +100,7 @@ async def test_factory_switch_to_openai_compatible(monkeypatch: pytest.MonkeyPat
 
 
 async def test_factory_defaults_to_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认 LLM_PROVIDER=ollama；is_external 为 False。"""
+    """Ollama 配置应创建内部模型 Provider。"""
     monkeypatch.setattr(settings, "llm_provider", "ollama")
     monkeypatch.setattr(settings, "llm_model", "qwen2.5:7b")
     provider = get_model_provider()
@@ -114,7 +110,7 @@ async def test_factory_defaults_to_ollama(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_unavailable_raises_wrapped_error() -> None:
-    """Ollama 停机（连接失败）→ ModelUnavailableError，重试 max_retries 次，不漏 httpx 异常。"""
+    """连接失败应按上限重试并封装为 ModelUnavailableError。"""
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -131,11 +127,11 @@ async def test_unavailable_raises_wrapped_error() -> None:
     with pytest.raises(ModelUnavailableError) as exc_info:
         await provider.generate("ping")
     assert not isinstance(exc_info.value, httpx.HTTPError)
-    assert calls == 3  # 首次 + 2 次重试
+    assert calls == 3  # 最大重试数不包含首次请求。
 
 
 async def test_timeout_raises_wrapped_error() -> None:
-    """读取超时 → ModelTimeoutError，不漏 httpx.TimeoutException。"""
+    """读取超时应封装为 ModelTimeoutError。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("read timed out", request=request)
@@ -151,7 +147,7 @@ async def test_timeout_raises_wrapped_error() -> None:
 
 
 async def test_non_2xx_raises_unavailable_without_retry() -> None:
-    """非 2xx 响应 → ModelUnavailableError，且不重试。"""
+    """非成功响应应直接封装为 ModelUnavailableError，且不得重试。"""
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:

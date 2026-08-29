@@ -1,4 +1,4 @@
-"""FastAPI 应用入口：模块化单体骨架（4.1 节）。"""
+"""FastAPI 应用入口。"""
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -21,13 +21,13 @@ logger = setup_logging("backend")
 
 app = FastAPI(title="AgentOS", version="0.1.0")
 
-# 中间件（后添加的在更内层）：request_id 上下文在最外层，幂等持久化在其内
+# Starlette 后添加的中间件位于外层，确保 request_id 覆盖幂等处理全过程。
 app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(RequestContextMiddleware)
 
 
 def _error_body(code: str, message: str, details: dict | None = None) -> dict:
-    """统一错误格式（17.1 节）。"""
+    """构造统一错误响应体。"""
     return {
         "code": code,
         "message": message,
@@ -108,7 +108,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    # 日志纪律（16 章）：异常只记类型名，避免连接串等敏感信息落日志
+    # 只记录异常类型，避免连接串等敏感信息进入日志。
     logger.error("unhandled error: %s (request_id=%s)", type(exc).__name__, get_request_id())
     return JSONResponse(
         status_code=500,

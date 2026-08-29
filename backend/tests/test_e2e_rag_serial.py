@@ -1,6 +1,6 @@
-"""T6.3 RAG 串行端到端验收场景（设计文档第 9 章时序、18.3 节、第 22 章标准 7）。
+"""RAG 串行端到端场景测试。
 
-一个测试函数内跑完整个第 9 章时序（conftest 每个用例后 TRUNCATE 清库，
+完整时序必须在一个测试函数内运行，因为 conftest 在每个用例后 TRUNCATE 清库，
 跨函数无法保留场景状态）：
 
     负责人 L → 后端开发 B：分配 RAG 工作项
@@ -14,7 +14,7 @@
     R 上传归档证据文件（“勾选已同步”为飞书手工步骤，平台以终态归档 +
     证据文件留痕表达）
 
-验证点（18.3 节）：
+验证点：
 - 每一步产生对应审计事件；该有站内通知的步骤通知到正确接收人
   （工作项状态命令按设计只发 SSE 实时事件、不写站内通知，见
   domains/work_items/service.py._build_status_events 注释）；
@@ -22,7 +22,7 @@
 - 历史负责人完整可查（转派历史接口 + work_item.assignee_changed 审计）；
 - 场景中段开启 Agent（替身 ModelProvider 驱动 agent run）：建议生成并通知
   负责人，但工作项/审批等正式业务状态只由人的操作改变（快照前后比对）；
-- 场景末尾按审计事件完整回放第 9 章时序，与预期步骤逐一比对。
+- 场景末尾按审计事件完整回放时序，与预期动作逐一比对。
 """
 
 import uuid
@@ -85,7 +85,6 @@ async def test_rag_serial_end_to_end(
     rh = ctx["bob_headers"]
     sh = ctx["carol_headers"]
 
-    # ---- 步骤 1：负责人分配 RAG 工作项（后端开发为主执行人）并发布 ----
     item = await create_work_item(client, lh, backend_dev.id, title=ITEM_TITLE)
     item_id = item["id"]
     item = await publish_work_item(client, lh, item)
@@ -100,17 +99,14 @@ async def test_rag_serial_end_to_end(
     created_event = events[0]
     assert created_event.after["assignee_id"] == str(backend_dev.id)
 
-    # ---- 步骤 2：后端开发申请转派给 RAG 工程师（转派必须审批） ----
     resp = await create_transfer(client, bh, item_id, rag_eng.id)
     assert resp.status_code == 201, resp.text
     transfer = resp.json()
     transfer_id = transfer["id"]
     assert transfer["status"] == "PENDING"
 
-    # 审批前主责任不转移（7.3 节：转派必须审批才生效）
     current = await get_work_item(client, lh, item_id)
     assert current["assignee"]["id"] == str(backend_dev.id)
-    # 负责人待审批列表中出现该转派申请
     approvals = await _approvals(client, lh)
     assert [a["id"] for a in approvals] == [transfer_id]
     assert approvals[0]["kind"] == "transfer"
@@ -121,7 +117,6 @@ async def test_rag_serial_end_to_end(
     leader_notices = await notifications_for(leader.id)
     assert_notification(leader_notices, type="transfer.requested")
 
-    # ---- 步骤 3：负责人审批通过（主责任转移，历史负责人可查） ----
     resp = await client.post(
         f"/api/v1/transfer-requests/{transfer_id}/approve",
         json={"version": 1, "decision_note": "同意，RAG 部分由专人负责"},
@@ -132,7 +127,7 @@ async def test_rag_serial_end_to_end(
 
     current = await get_work_item(client, lh, item_id)
     assert current["assignee"]["id"] == str(rag_eng.id)  # 主责任转移
-    assert current["version"] == 3  # create v1 → publish v2 → approve v3
+    assert current["version"] == 3  # 创建为版本 1，发布和批准各推进一次。
 
     # 历史负责人完整可查：转派历史接口 + 审计 before/after 双侧留痕
     resp = await client.get(f"/api/v1/work-items/{item_id}/transfer-requests", headers=rh)
@@ -163,8 +158,7 @@ async def test_rag_serial_end_to_end(
     )
     assert await _approvals(client, lh) == []
 
-    # ---- 步骤 4：RAG 工程师开始执行 ----
-    # 开发文档前置（设计 2026-07-30 §4.3）：直接建库豁免行放行 start——
+    # 直接写入开发文档豁免，避免引入与场景目标无关的接口动作。
     # 本场景做精确审计链回放，走 waive 接口会引入与场景无关的 dev_doc 事件
     async with async_session_factory() as session:
         session.add(DevDoc(work_item_id=uuid.UUID(item_id), waived=True))
@@ -175,7 +169,6 @@ async def test_rag_serial_end_to_end(
     events = await all_audit_events()
     assert (events[-1].action, str(events[-1].target_id)) == ("work_item.started", item_id)
 
-    # ---- 步骤 5-6：协作请求 1（按模板整理销售资料），无需负责人审批 ----
     collab1 = await create_collaboration(
         client, rh, item_id, sales.id, title="按模板整理销售资料"
     )
@@ -206,7 +199,6 @@ async def test_rag_serial_end_to_end(
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "COMPLETED"
 
-    # ---- 步骤 7：协作请求 2（人工标注测试集），回传含标注结果文件 ----
     collab2 = await create_collaboration(
         client, rh, item_id, sales.id, title="人工标注测试集"
     )
@@ -239,7 +231,6 @@ async def test_rag_serial_end_to_end(
     resp = await command_collaboration(client, rh, collab2["id"], "complete", 4)
     assert resp.status_code == 200, resp.text
 
-    # ---- 步骤 8：场景中开启 Agent——建议生成，但不改变正式业务状态 ----
     before = await snapshot_business_state([item_id])
     stub_provider.set_script(VALID_REQUIREMENT_OUTPUT)
     run = await drive_agent_run(item_id, project_id=project.id)
@@ -247,7 +238,6 @@ async def test_rag_serial_end_to_end(
     suggestions = await get_suggestions_for_run(run.id)
     assert len(suggestions) == 1  # Agent 建议已生成
     assert suggestions[0].suggestion_type == "requirement"
-    # 建议就绪通知负责人查看（10.2 节流程末节点）
     assert_notification(
         await notifications_for(leader.id), type="agent.suggestion_ready"
     )
@@ -258,7 +248,6 @@ async def test_rag_serial_end_to_end(
     assert current["status"] == "IN_PROGRESS"
     assert current["assignee"]["id"] == str(rag_eng.id)
 
-    # ---- 步骤 9：RAG 工程师提交交付（Git 链接 + 评估结果文本 + 说明文件）----
     git_deliverable = await create_deliverable(
         client,
         rh,
@@ -292,7 +281,6 @@ async def test_rag_serial_end_to_end(
     events = await all_audit_events()
     assert (events[-1].action, str(events[-1].target_id)) == ("work_item.submitted", item_id)
 
-    # ---- 步骤 10：负责人审核通过（IN_REVIEW → COMPLETED） ----
     resp = await client.post(
         f"/api/v1/work-items/{item_id}/reviews",
         json={"deliverable_id": git_deliverable["id"], "decision": "approve"},
@@ -306,8 +294,7 @@ async def test_rag_serial_end_to_end(
         await notifications_for(rag_eng.id), type="review.approved", title_contains="审核通过"
     )
 
-    # ---- 步骤 11：勾选“已同步”并归档证据 ----
-    # “在飞书项目群手工同步 / 勾选已同步”是系统外手工步骤（第 9 章），平台侧
+    # “在飞书项目群手工同步 / 勾选已同步”是系统外手工步骤，平台侧
     # 以 COMPLETED 终态（归档只读）+ 归档证据文件留痕表达。
     resp = await upload_file(
         client,
@@ -330,7 +317,6 @@ async def test_rag_serial_end_to_end(
     )
     assert resp.status_code == 409, resp.text
 
-    # ---- 收尾：按审计事件完整回放第 9 章时序，与预期步骤逐一比对 ----
     # 说明：同一事务写入的事件（transfer.approved 与 work_item.assignee_changed）
     # created_at 相同，断言按"同刻分组"比对（组间顺序严格、组内无序）。
     events = await all_audit_events()

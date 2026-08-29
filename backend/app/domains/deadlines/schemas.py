@@ -1,8 +1,8 @@
-"""DDL 变更申请接口请求/响应模型（12.4 节）。
+"""DDL 变更申请接口的请求与响应模型。
 
-命令接口（approve/reject/cancel）均要求携带 version 做乐观锁（17.2 节）：
-不匹配返回 409 DEADLINE_CHANGE_VERSION_CONFLICT，成功后 version + 1。
-approve/reject 可携带审批意见（decision_note），只进审计留痕，不进通知正文（16 节）。
+状态命令均携带 `version` 实施乐观锁；版本不匹配返回
+`409 DEADLINE_CHANGE_VERSION_CONFLICT`，成功后版本递增。审批意见 `decision_note`
+仅进入审计记录，不进入通知正文。
 """
 
 import uuid
@@ -17,10 +17,10 @@ DeadlineTarget = Literal["work_item", "collaboration_request"]
 
 
 class DeadlineChangeCreateIn(BaseModel):
-    """发起 DDL 变更申请（7.4 节）。
+    """发起 DDL 变更申请。
 
-    - target_type=work_item：主任务级，一律负责人审批，target_id 须为路径中的工作项；
-    - target_type=collaboration_request：协作级，target_id 为协作请求，
+    - `target_type=work_item`：主任务级，一律由负责人审批，`target_id` 须为路径中的工作项；
+    - `target_type=collaboration_request`：协作级，`target_id` 为协作请求，
       由协作双方（发起人或接收人）发起。
     """
 
@@ -31,13 +31,13 @@ class DeadlineChangeCreateIn(BaseModel):
 
 
 class DeadlineChangeCommandIn(BaseModel):
-    """状态命令（cancel）：携带乐观锁版本号。"""
+    """携带乐观锁版本号的取消命令。"""
 
     version: int = Field(ge=1)
 
 
 class DeadlineChangeDecisionIn(BaseModel):
-    """审批命令（approve/reject）：可带审批意见，意见只入审计不进通知（16 节）。"""
+    """审批意见仅进入审计记录，不进入通知正文。"""
 
     version: int = Field(ge=1)
     decision_note: str | None = None

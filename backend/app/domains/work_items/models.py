@@ -1,8 +1,8 @@
-"""工作项数据模型（7.1、11 章）：work_items 与 work_item_collaborators。
+"""work_items 与 work_item_collaborators 数据模型。
 
-- 主责任唯一（原则 4）：assignee_id 为唯一当前主执行人；
+- assignee_id 是唯一当前主执行人；
   协作者走 work_item_collaborators 关联表，不承担最终交付责任。
-- version（VersionMixin）为乐观锁版本号（17.2 节）。
+- version（VersionMixin）用于乐观锁。
 """
 
 import uuid
@@ -33,7 +33,7 @@ class WorkItem(CoreModel, VersionMixin):
         ),
     )
 
-    # 项目归属（spec D1：有独立列表入口的表冗余 project_id，NOT NULL）
+    # 独立列表按项目过滤，因此直接保存不可为空的 project_id
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
     )
@@ -44,7 +44,7 @@ class WorkItem(CoreModel, VersionMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=WorkItemStatus.DRAFT.value, index=True
     )
-    # 当前唯一主执行人（原则 4）；历史负责人变化见 audit_events
+    # 仅保存当前主执行人，历史变更记录在 audit_events
     assignee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_members.id"), index=True, nullable=False
     )

@@ -1,4 +1,4 @@
-"""DDL 影响规则单元测试补充（7.4 节，T6.1）。
+"""DDL 影响规则单元测试。
 
 只补既有 test_deadlines_api 未覆盖的边界：
 - 协作级自动生效的边界：新协作 DDL 恰等于主任务 DDL（≤ 取等）→ 自动生效；
@@ -35,7 +35,7 @@ async def _get_collab(
 async def test_collab_due_equal_to_work_item_due_auto_approved(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """新协作 DDL 恰等于主任务 DDL（≤ 边界）：不影响主任务 DDL，直接确认生效（7.4 节）。"""
+    """新协作 DDL 等于主任务 DDL 时直接生效，不影响主任务 DDL。"""
     ctx = await make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
@@ -46,7 +46,6 @@ async def test_collab_due_equal_to_work_item_due_auto_approved(
     await publish_work_item(client, leader_headers, item)
     collab = await create_collaboration(client, alice_headers, item["id"], bob.id, due_at="2026-07-30T00:00:00Z")  # type: ignore[arg-type]
 
-    # 07-30 → 08-01（与主任务 DDL 相等）
     created = await create_deadline_change(
         client, alice_headers, item["id"], "collaboration_request", collab["id"], "2026-08-01T00:00:00Z"  # type: ignore[arg-type]
     )
@@ -65,7 +64,7 @@ async def test_collab_due_equal_to_work_item_due_auto_approved(
 async def test_collab_change_auto_approved_when_work_item_has_no_due(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """主任务无 DDL：协作级变更无论新 DDL 多晚都直接确认生效（7.4 节），无需负责人审批。"""
+    """主任务无 DDL 时，协作级变更直接生效，无需负责人审批。"""
     ctx = await make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
@@ -76,14 +75,12 @@ async def test_collab_change_auto_approved_when_work_item_has_no_due(
     await publish_work_item(client, leader_headers, item)
     collab = await create_collaboration(client, alice_headers, item["id"], bob.id, due_at="2026-07-30T00:00:00Z")  # type: ignore[arg-type]
 
-    # 新协作 DDL 很晚，但主任务无 DDL → 不构成影响
     created = await create_deadline_change(
         client, alice_headers, item["id"], "collaboration_request", collab["id"], "2027-01-01T00:00:00Z"  # type: ignore[arg-type]
     )
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["status"] == "APPROVED"
-    # 主任务无 DDL：影响分析中 exceeds_work_item_due 为 False，work_item.due_at 为 None
     assert body["impact_analysis"]["exceeds_work_item_due"] is False
     assert body["impact_analysis"]["work_item"]["due_at"] is None
 
@@ -96,7 +93,7 @@ async def test_collab_change_auto_approved_when_work_item_has_no_due(
 async def test_leader_can_initiate_main_level_change(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """主任务 DDL 的任何修改都必须由负责人批准（7.4 节）：负责人本人可发起，且仍走审批流。"""
+    """主任务 DDL 的任何修改都需负责人批准，负责人本人发起时也进入审批流。"""
     ctx = await make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     leader_headers = ctx["leader_headers"]
@@ -105,7 +102,6 @@ async def test_leader_can_initiate_main_level_change(
     item = await create_work_item(client, leader_headers, alice.id, due_at="2026-08-01T00:00:00Z")  # type: ignore[arg-type]
     published = await publish_work_item(client, leader_headers, item)
 
-    # 负责人（非主执行人）发起主任务级变更：允许，落 PENDING_APPROVAL
     created = await create_deadline_change(
         client, leader_headers, item["id"], "work_item", item["id"], "2026-08-15T00:00:00Z"  # type: ignore[arg-type]
     )
@@ -143,7 +139,6 @@ async def test_pending_collab_change_cancel_keeps_due_and_reopenable(
     await publish_work_item(client, leader_headers, item)
     collab = await create_collaboration(client, alice_headers, item["id"], bob.id, due_at="2026-07-30T00:00:00Z")  # type: ignore[arg-type]
 
-    # 新 DDL 晚于主任务 DDL → 走审批流
     created = await create_deadline_change(
         client, alice_headers, item["id"], "collaboration_request", collab["id"], "2026-08-10T00:00:00Z"  # type: ignore[arg-type]
     )
@@ -191,7 +186,6 @@ async def test_impact_analysis_excludes_terminal_collaborations(
     await publish_work_item(client, leader_headers, item)
     item_id = item["id"]
 
-    # 三个协作：carol 的进行中（未完成）、bob 的已取消、dave 的已拒绝
     open_collab = await create_collaboration(client, alice_headers, item_id, carol.id, title="进行中的协作")  # type: ignore[arg-type]
     cancelled_collab = await create_collaboration(client, alice_headers, item_id, bob.id, title="已取消的协作")  # type: ignore[arg-type]
     declined_collab = await create_collaboration(client, alice_headers, item_id, dave.id, title="已拒绝的协作")  # type: ignore[arg-type]
@@ -214,7 +208,7 @@ async def test_impact_analysis_excludes_terminal_collaborations(
 async def test_multiple_pending_collab_level_changes_allowed(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """唯一待审批约束仅针对主任务级（17.2 节）：同一工作项可同时存在多个待审批的协作级变更。"""
+    """唯一待审批约束仅适用于主任务级，同一工作项可有多个待审批协作级变更。"""
     ctx = await make_ctx(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
@@ -227,7 +221,6 @@ async def test_multiple_pending_collab_level_changes_allowed(
     collab1 = await create_collaboration(client, alice_headers, item["id"], bob.id, title="协作一")  # type: ignore[arg-type]
     collab2 = await create_collaboration(client, alice_headers, item["id"], carol.id, title="协作二")  # type: ignore[arg-type]
 
-    # 两个协作级变更均超过主任务 DDL → 都进入待审批，互不冲突
     first = await create_deadline_change(
         client, alice_headers, item["id"], "collaboration_request", collab1["id"], "2026-08-10T00:00:00Z"  # type: ignore[arg-type]
     )

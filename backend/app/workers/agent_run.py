@@ -1,24 +1,19 @@
-"""Worker 承载 Agent 图运行（4.2 节，T5.2）与失败恢复（17.3 节，T5.6）。
+"""Worker 中的 Agent 图运行与失败恢复。
 
 消费 `agent.run` 队列任务：
-1. agent_runs 置 running；
-2. 用 AsyncPostgresSaver（psycopg 连接串由 DATABASE_URL 转换）把 LangGraph
-   检查点持久化到 PostgreSQL，thread_id = run_id（重试重跑同一 thread，
-   检查点机制保证不重复执行已完成节点，建议以 run 为单位不产生重复）；
-3. 执行基础图；成功置 succeeded；失败按 17.3 节处理：
-   - Schema 校验失败（SuggestionValidationError）是确定性错误，重试结果
-     相同，直接终态 failed，不自动重试；
-   - 其余错误（模型超时/不可用、图执行异常）按指数退避自动重试：
-     retry_count+1、状态回 pending、经 ZSET 延迟队列重投，
-     间隔 = AGENT_RUN_RETRY_BASE_SECONDS * 2^attempt；
-   - 超过 AGENT_RUN_MAX_RETRIES 后终态 failed，错误信息留在
-     agent_runs.error 可查，人工可经 POST /agent-runs/{id}/retry 重触发。
+运行状态先置为 `running`。LangGraph 检查点通过 `AsyncPostgresSaver` 持久化到
+PostgreSQL，并以 `run_id` 作为 `thread_id`，使重试沿用同一线程且不重复执行已完成
+节点。成功后状态置为 `succeeded`。
+
+`SuggestionValidationError` 是确定性错误，直接置为 `failed`。模型超时、服务不可用
+或图执行异常按运行粒度指数退避，经 ZSET 延迟重投；重试耗尽后错误保存在
+`agent_runs.error`，可由人工接口重新触发。
 
 与 provider 层重试的关系：LLM_MAX_RETRIES 是单次模型调用内的线性重试
 （应对瞬时抖动），本层是 run 粒度的第二道退避，两层不叠加放大——
 provider 重试耗尽后错误才冒泡到本层。
 
-检查点只做中断恢复，不替代 agent_runs/agent_suggestions 业务记录（原则 1）。
+检查点只用于中断恢复，不替代 `agent_runs` 和 `agent_suggestions` 业务记录。
 """
 
 import time
@@ -46,7 +41,7 @@ def _checkpoint_dsn() -> str:
 
 
 def retry_delay_seconds(attempt: int) -> float:
-    """第 attempt 次（0 起）自动重试的退避间隔：base * 2^attempt（17.3 节）。"""
+    """计算第 `attempt` 次自动重试的指数退避间隔，计数从 0 开始。"""
     return settings.agent_run_retry_base_seconds * (2**attempt)
 
 
@@ -76,7 +71,7 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
     final_state: dict = {}
     try:
         async with AsyncPostgresSaver.from_conn_string(_checkpoint_dsn()) as checkpointer:
-            # 幂等创建检查点表（checkpoints 等，不归 Alembic 管理）
+            # 检查点表不归 Alembic 管理，因此在运行时幂等创建。
             await checkpointer.setup()
             graph = build_agent_graph(checkpointer=checkpointer)
             final_state = await graph.ainvoke(
@@ -91,7 +86,7 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
                 ),
                 config={"configurable": {"thread_id": str(run.id)}},
             )
-    except Exception as exc:  # 图内任何失败都在此兜底（17.3 节），不向上抛
+    except Exception as exc:  # 图内任何失败都在此兜底，不向上抛
         logger.exception("agent run failed: run_id=%s", run_id)
         retry_delay: float | None = None
         async with async_session_factory() as session:
@@ -127,7 +122,7 @@ async def execute_agent_run(payload: dict, redis_client: redis.Redis) -> AgentRu
         run.duration_ms = int((time.monotonic() - started) * 1000)
         await session.commit()
 
-    # 建议已落库后再发 SSE 事件（4.3 节："Agent 分析完成"触发建议中心刷新，T5.7）
+    # 建议提交成功后再发布 SSE，确保客户端刷新时能读取到对应记录。
     recipient = final_state.get("notification_recipient_id")
     project_id = final_state.get("notification_project_id")
     if recipient and project_id:

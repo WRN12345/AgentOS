@@ -1,8 +1,7 @@
-"""模型输出清洗（strip_model_noise）与推理模型链路回归。
+"""验证模型输出清洗及推理模型链路回归。
 
-背景：MiniMax M2.x 等推理模型 content 前部固定带 <think>...</think>
-（thinking 无法关闭），导致 Agent 结构化输出 json_parse 失败（17.3 节）。
-清洗在 call_model_json 入口统一完成。
+部分推理模型无法关闭 thinking，会在结构化内容前添加 ``<think>`` 块；统一清洗
+必须移除该噪声，避免合法 JSON 被误判为解析失败。
 """
 
 import json
@@ -22,7 +21,7 @@ from tests.helpers_t6a import make_ctx
 
 
 class TestStripModelNoise:
-    """清洗函数单元用例。"""
+    """验证模型噪声清洗的边界行为。"""
 
     def test_pure_json_passthrough(self) -> None:
         assert strip_model_noise('{"a": 1}') == '{"a": 1}'
@@ -32,7 +31,7 @@ class TestStripModelNoise:
         assert json.loads(strip_model_noise(raw)) == {"a": 1}
 
     def test_unclosed_think_removed(self) -> None:
-        # 输出被截断导致 think 未闭合：全部剥掉（解析失败走诊断路径）
+        # 截断的思考块没有可用正文，应清空并交由解析层生成诊断。
         assert strip_model_noise("<think>还没想完") == ""
 
     def test_json_fence_removed(self) -> None:
@@ -49,7 +48,7 @@ async def test_agent_run_with_think_wrapped_output(
     project: Project,  # noqa: ARG001
     stub_provider: StubModelProvider,
 ) -> None:
-    """集成回归：模型返回 <think> 包装的合法 JSON，Agent 运行应成功并产出建议。"""
+    """带思考块的合法 JSON 应完成 Agent 运行并产出建议。"""
     await make_ctx(client, project)
     stub_provider.set_script(f"<think>\n先分析需求再输出。\n</think>\n{VALID_REQUIREMENT_OUTPUT}")
     run = await drive_agent_run(

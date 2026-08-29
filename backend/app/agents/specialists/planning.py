@@ -1,9 +1,6 @@
-"""Planning Advisor：建议工作项拆分、协作点、DDL 与潜在风险（10.1 节，T5.4）。
+"""Planning Advisor：根据进行中工作项和成员负载建议拆分、协作点、DDL 与风险。
 
-上下文经工具注册表只读查询加载：list_open_work_items、get_member_workload。
-content 自有字段（平铺）：work_item_breakdown（含 suggested_due_date 与
-collaborator_hint）/ collaboration_points；潜在风险统一放 risks。
-fact_refs 引用纳入考量的进行中工作项 ID。
+上下文通过只读工具加载，fact_refs 引用实际参与分析的工作项 ID。
 """
 
 from typing import TYPE_CHECKING, Any
@@ -13,7 +10,7 @@ from app.agents.specialists.common import build_output, call_model_json, context
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "planning_advisor"

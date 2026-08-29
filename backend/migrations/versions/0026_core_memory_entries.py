@@ -1,13 +1,13 @@
-"""0026：core_memory_entries 表——项目核心记忆条目（设计文档第 8 节）。
+"""0026：创建 core_memory_entries，存储项目核心记忆条目。
 
 Revision ID: 0026_core_memory_entries
 Revises: 0025_file_index_status
 Create Date: 2026-08-22
 
 - 条目式核心笔记：技术约定 / 关键决策 / 踩坑教训，全量注入 Agent 拆解分配上下文；
-- scope 预留组织级归属（16 节组织级预留）：本期接口层只接受 project，
+- scope 为组织级归属预留；本次迁移对应的接口层只接受 project，
   organization 条目不属于任何项目（project_id 为 NULL），表结构不为此返工；
-- proposed_by_member_id 可空：NULL 表示 Agent 提议（经负责人确认后生效，第 8 节）；
+- proposed_by_member_id 可空：NULL 表示由 Agent 提议，经负责人确认后生效；
   confirmed_by_member_id 必填：条目必须经负责人确认（或负责人手写）才生效，
   守住"Agent 不直接改数据"的红线；
 - status：active（生效）/ deprecated（作废），作废条目保留供追溯，不再注入。

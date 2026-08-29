@@ -1,4 +1,4 @@
-"""站内通知接口响应模型（12.6 节）。"""
+"""站内通知接口响应模型。"""
 
 import uuid
 from datetime import datetime
@@ -18,7 +18,7 @@ class NotificationOut(BaseModel):
 
 
 class NotificationListOut(BaseModel):
-    """通知列表（仅本人），附当前未读计数（2.1 节待办中心入口）。"""
+    """当前用户的通知列表及未读总数。"""
 
     items: list[NotificationOut]
     unread_count: int

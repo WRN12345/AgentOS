@@ -1,12 +1,4 @@
-"""T6.3/T6.4 端到端验收场景共用辅助。
-
-只组合既有资产（conftest fixtures、helpers_t6a/helpers_t6b、领域只读查询），
-不修改任何既有文件。提供：
-- StubModelProvider / stub_provider fixture：替身模型 Provider（同 test_agent_contract
-  的契约思路，独立定义避免测试文件互相 import）；
-- 业务状态快照/比对：验证 Agent 运行不改变正式业务状态（18.3 节）；
-- 审计/通知只读查询与"按审计事件回放时序"的断言工具。
-"""
+"""端到端场景共用的模型替身、状态快照、审计和通知辅助函数。"""
 
 import json
 import uuid
@@ -29,7 +21,7 @@ from tests.helpers_t6b import run_agent_once
 
 
 class StubModelProvider(ModelProvider):
-    """替身 ModelProvider（15 节接口）：set_script 编程输出文本。
+    """通过 set_script 设置输出文本的替身 ModelProvider。
 
     与 test_agent_contract.StubModelProvider 同思路，这里独立定义一份，
     避免端到端场景文件 import 其他测试模块造成耦合。
@@ -57,7 +49,7 @@ class StubModelProvider(ModelProvider):
         return self._script
 
 
-#: Requirement Analyst 的合法结构化输出（10.2 节 Schema），供替身 Provider 返回
+#: Requirement Analyst 的合法结构化输出，供替身 Provider 返回。
 VALID_REQUIREMENT_OUTPUT = json.dumps(
     {
         "content": {
@@ -82,9 +74,6 @@ def stub_provider(monkeypatch: pytest.MonkeyPatch) -> StubModelProvider:
     return provider
 
 
-# ---------- Agent 运行驱动 ----------
-
-
 async def drive_agent_run(
     work_item_id: str | None = None,
     *,
@@ -92,10 +81,7 @@ async def drive_agent_run(
     agent_type: str = "requirement_analyst",
     prompt: str = "端到端场景：请给出分析建议",
 ) -> AgentRun:
-    """创建一次 agent 运行并用替身 Provider 同步驱动到终态（不真起 worker 进程）。
-
-    复用 helpers_t6b.run_agent_once（直接调 worker 处理函数，并清空队列残留）。
-    """
+    """创建 Agent 运行，并用替身 Provider 同步驱动到终态。"""
     redis_client = create_redis_client()
     try:
         async with async_session_factory() as session:
@@ -130,14 +116,8 @@ async def get_suggestions_for_run(run_id: uuid.UUID) -> list[AgentSuggestion]:
         )
 
 
-# ---------- 业务状态快照（验证 Agent 不污染正式业务状态） ----------
-
-
 async def snapshot_business_state(item_ids: list[str]) -> dict[str, Any]:
-    """正式业务状态快照：工作项 (status, version) + 全部审计事件 id 集合。
-
-    Agent 运行前后各取一次并比对：工作项/审批等正式状态只应由人的操作改变。
-    """
+    """返回工作项状态、版本及全部审计事件 id 的业务状态快照。"""
     async with async_session_factory() as session:
         items: dict[str, dict[str, Any]] = {}
         for item_id in item_ids:
@@ -149,13 +129,10 @@ async def snapshot_business_state(item_ids: list[str]) -> dict[str, Any]:
 
 
 def assert_business_state_unchanged(before: dict[str, Any], after: dict[str, Any]) -> None:
-    """18.3 节：Agent 建议不得改变正式业务状态（工作项状态/版本、审计事件）。"""
+    """Agent 建议不得改变工作项状态、版本或审计事件。"""
     assert after["work_items"] == before["work_items"], "Agent 运行不得触碰工作项业务状态"
     new_events = after["audit_ids"] - before["audit_ids"]
     assert new_events == set(), "Agent 运行不得新增业务审计事件"
-
-
-# ---------- 审计 / 通知只读查询 ----------
 
 
 async def all_audit_events() -> list[AuditEvent]:
@@ -202,9 +179,6 @@ def assert_notification(
             f"{type} 通知标题不含「{title_contains}」，实际: {[n.title for n in matches]}"
         )
     return matches[0]
-
-
-# ---------- 审计回放 ----------
 
 
 def replay_timeline(events: list[AuditEvent]) -> list[tuple[str, str | None]]:

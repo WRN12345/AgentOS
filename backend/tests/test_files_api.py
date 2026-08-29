@@ -1,7 +1,7 @@
-"""文件上传/下载 API 集成测试（T4.2/T4.3 验收，12.5、14、16、17.2 节）。
+"""文件上传和下载 API 集成测试。
 
 Provider 通过 app.dependency_overrides 注入指向临时目录的 LocalStorageProvider，
-业务层只经 StorageProvider 接口与存储交互（14 章）。
+用于验证业务层只经 StorageProvider 接口与存储交互。
 """
 
 import hashlib
@@ -34,7 +34,7 @@ CONTENT = b"RAG evaluation report\nline2\n"
 
 @pytest.fixture
 def storage(tmp_path: Path):
-    """把存储 Provider 注入为指向临时目录的 LocalStorageProvider（接口注入，T4.1）。"""
+    """将存储 Provider 注入指向临时目录的 LocalStorageProvider。"""
     provider = LocalStorageProvider(tmp_path)
     app.dependency_overrides[get_storage_provider] = lambda: provider
     yield provider
@@ -105,9 +105,6 @@ async def _upload(
     )
 
 
-# ---------- T4.2 上传 ----------
-
-
 async def test_upload_success_persists_row_and_matching_hash(
     client: httpx.AsyncClient, project: Project, storage: LocalStorageProvider
 ) -> None:
@@ -126,14 +123,14 @@ async def test_upload_success_persists_row_and_matching_hash(
     assert body["original_filename"] == "report.txt"
     assert body["storage_backend"] == "local"
     assert body["work_item_id"] == item_id
-    assert "storage_key" not in body  # 内部键不外泄（16 节）
+    assert "storage_key" not in body  # 存储内部键不属于公开 API。
 
     async with async_session_factory() as session:
         row = (await session.execute(select(StoredFile))).scalar_one()
         assert row.sha256 == expected_sha
         assert row.uploaded_by == alice.id  # type: ignore[attr-defined]
         assert str(row.work_item_id) == item_id
-        assert not row.storage_key.startswith("/")  # 仅存相对键（14 章）
+        assert not row.storage_key.startswith("/")  # 相对键避免把主机路径写入数据库。
         events = (
             (await session.execute(select(AuditEvent).where(AuditEvent.action == "file.uploaded")))
             .scalars()
@@ -144,7 +141,6 @@ async def test_upload_success_persists_row_and_matching_hash(
     assert events[0].actor_id == alice.user_id  # type: ignore[attr-defined]
     assert events[0].after["sha256"] == expected_sha
 
-    # 磁盘文件内容与库中哈希一致
     on_disk = await storage.load(row.storage_key)
     assert on_disk == CONTENT
     assert hashlib.sha256(on_disk).hexdigest() == row.sha256
@@ -217,7 +213,7 @@ async def test_upload_db_failure_compensates_disk_file(
     storage: LocalStorageProvider,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """落库失败 → 补偿删除已落盘文件（17.2 节），且无库存记录。"""
+    """落库失败时补偿删除已落盘文件，且不保留库存记录。"""
     import app.domains.files.service as files_service
 
     async def _boom(*args, **kwargs):
@@ -243,13 +239,10 @@ async def test_upload_db_failure_compensates_disk_file(
     assert _files_on_disk(storage._root) == []
 
 
-# ---------- T4.3 下载 ----------
-
-
 async def test_download_permission_matrix(
     client: httpx.AsyncClient, project: Project, storage: LocalStorageProvider
 ) -> None:
-    """负责人/主执行人/协作者/协作请求相关人可下；无关成员 403（16 节）。"""
+    """仅工作项负责人、执行人、协作者和协作请求相关人可下载关联文件。"""
     ctx = await _setup(client, project)
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     bob: ProjectMember = ctx["bob"]  # type: ignore[assignment]
@@ -291,8 +284,7 @@ async def test_download_permission_matrix(
 async def test_download_unlinked_knowledge_doc_all_members(
     client: httpx.AsyncClient, project: Project, storage: LocalStorageProvider
 ) -> None:
-    """未关联工作项的知识库文档：项目内在职成员均可下载（第 12 节 + M7.5——
-    与文件列表、问答检索可见性一致，问答"查看原文"链路不再 403）。"""
+    """项目内在职成员均可下载未关联工作项的知识库文档。"""
     ctx = await _setup(client, project)
     uploaded = await _upload(client, ctx["alice_headers"])  # type: ignore[arg-type]
     file_id = uploaded.json()["id"]
@@ -330,7 +322,7 @@ async def test_download_missing_or_cleaned_file_unified_error(
 async def test_guessing_storage_key_cannot_bypass_api(
     client: httpx.AsyncClient, project: Project, storage: LocalStorageProvider
 ) -> None:
-    """直接猜测 storage_key 路径无法绕过 API：不存在任何静态映射（14 章）。"""
+    """上传目录没有静态映射，猜测 storage_key 路径无法绕过 API。"""
     ctx = await _setup(client, project)
     uploaded = await _upload(client, ctx["alice_headers"])  # type: ignore[arg-type]
     assert uploaded.status_code == 201

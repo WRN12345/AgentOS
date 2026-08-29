@@ -1,8 +1,8 @@
-"""成员档案 CRUD 与权限测试（M3.5 验收，设计文档第 7 节②、16.1）。
+"""成员档案读写、审计、停用与跨项目可见性测试。
 
 - 负责人创建/更新档案（upsert 直接生效），来源信息（创建/编辑者）可查；
 - 非负责人写 403；目标用户不存在或不是本项目成员 404；admin 只读可读写 403；
-- 项目内全员可读，含被评价者本人（16.1）；跨项目成员也可读（随人走）。
+- 项目内全员可读，含被评价者本人；跨项目成员也可读。
 """
 
 import httpx
@@ -46,7 +46,6 @@ async def test_leader_create_and_update_profile(
     assert body["created_by"]["display_name"] == "负责人"
     assert body["last_edited_by"]["display_name"] == "负责人"
 
-    # 更新：内容替换，编辑者留痕
     resp = await client.put(
         f"/api/v1/memory/member-profiles/{uid}",
         headers=ctx["leader_headers"],
@@ -73,7 +72,6 @@ async def test_write_target_outside_project_not_found(
 ) -> None:
     ctx = await _setup_users(client, project_a)
     bob_user, _ = await add_member(project_b, "bob", "Bob12345!")
-    # A 项目负责人给 B 项目成员写档案 → 404（目标不是本项目成员）
     resp = await client.put(
         f"/api/v1/memory/member-profiles/{bob_user.id}",
         headers=ctx["leader_headers"],
@@ -93,12 +91,12 @@ async def test_read_visible_to_all_including_self_and_cross_project(
         json={"content": "档案内容"},
     )
 
-    # 本人可读（16.1，不做暗箱评价）
+    # 被评价者本人必须可读，避免形成不可见评价。
     resp = await client.get(f"/api/v1/memory/member-profiles/{uid}", headers=ctx["alice_headers"])
     assert resp.status_code == 200, resp.text
     assert resp.json()["content"] == "档案内容"
 
-    # 他项目成员也可读（档案随人走、跨项目可见的唯一例外）
+    # 档案随成员流转，是项目数据隔离的只读例外。
     _, carol = await add_member(project_b, "carol", "Carol123!")
     carol_headers = await auth_headers(client, "carol", "Carol123!", project_id=str(project_b.id))
     resp = await client.get(f"/api/v1/memory/member-profiles/{uid}", headers=carol_headers)
@@ -117,7 +115,6 @@ async def test_admin_readonly(client: httpx.AsyncClient, project_a: Project, adm
     admin_headers["X-Project-Id"] = str(project_a.id)
     resp = await client.get(f"/api/v1/memory/member-profiles/{uid}", headers=admin_headers)
     assert resp.status_code == 200, resp.text
-    # admin 无项目成员身份，编辑 403（第 12 节）
     resp = await client.put(
         f"/api/v1/memory/member-profiles/{uid}",
         headers=admin_headers,
@@ -135,11 +132,8 @@ async def test_read_missing_profile_404(client: httpx.AsyncClient, project_a: Pr
     assert resp.status_code == 404
 
 
-# ---------- M3.6 档案审计与停用标记（16.7、16.10） ----------
-
-
 async def test_profile_audit_events(client: httpx.AsyncClient, project_a: Project) -> None:
-    """创建/编辑均入审计域：谁改的、何时、改了什么（16.10）。"""
+    """档案创建与编辑应记录操作者、时间及前后内容。"""
     ctx = await _setup_users(client, project_a)
     uid = str(ctx["alice_user"].id)
     await client.put(
@@ -177,7 +171,7 @@ async def test_profile_audit_events(client: httpx.AsyncClient, project_a: Projec
 async def test_deactivated_member_marked_and_excluded(
     client: httpx.AsyncClient, project_a: Project
 ) -> None:
-    """停用成员档案保留并标记停用（16.7）；分配候选中排除。"""
+    """停用成员的档案应保留并标记停用，同时从分配候选中排除。"""
     ctx = await _setup_users(client, project_a)
     uid = str(ctx["alice_user"].id)
     await client.put(
@@ -185,7 +179,6 @@ async def test_deactivated_member_marked_and_excluded(
         headers=ctx["leader_headers"],
         json={"content": "档案保留"},
     )
-    # 负责人停用 alice（项目内禁用）
     alice_member = ctx["alice_member"]
     resp = await client.patch(
         f"/api/v1/members/{alice_member.id}",
@@ -194,7 +187,6 @@ async def test_deactivated_member_marked_and_excluded(
     )
     assert resp.status_code == 200, resp.text
 
-    # 档案仍可读，标记停用
     resp = await client.get(
         f"/api/v1/memory/member-profiles/{uid}", headers=ctx["leader_headers"]
     )
@@ -202,7 +194,6 @@ async def test_deactivated_member_marked_and_excluded(
     assert resp.json()["content"] == "档案保留"
     assert resp.json()["membership_active"] is False
 
-    # 分配候选（Agent 分配工具的候选清单）中排除停用成员
     async with async_session_factory() as session:
         from app.agents.tools import list_assignable_members
 

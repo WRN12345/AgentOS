@@ -1,4 +1,4 @@
-"""0012：开发文档前置（dev_docs，设计文档 2026-07-30 §4.1）。
+"""0012：创建 dev_docs，将开发文档确认作为工作项开工前置条件。
 
 Revision ID: 0012_dev_docs
 Revises: 0011_member_role_admin
@@ -6,7 +6,7 @@ Create Date: 2026-07-30
 
 每个工作项一份开发文档（work_item_id 唯一）：主执行人开工前撰写并提交，
 负责人确认通过（或豁免）后工作项才允许 READY → IN_PROGRESS。
-doc_version 每次提交 +1；历史快照表 dev_doc_versions 为 P2 可选项，本期不建。
+doc_version 每次提交加 1；本次迁移不创建历史快照表 dev_doc_versions。
 """
 
 from collections.abc import Sequence

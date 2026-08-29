@@ -1,12 +1,6 @@
-"""多项目改造 ticket 01：项目上下文与 admin 全局化测试。
-
-验证 X-Project-Id header 语义、admin 全局化、GET /me/projects。
-"""
+"""项目上下文、全局 admin 与 GET /me/projects 测试。"""
 
 import pytest
-
-
-# ---------- X-Project-Id header 语义 ----------
 
 
 async def test_missing_project_id_returns_400(client, leader):
@@ -17,7 +11,6 @@ async def test_missing_project_id_returns_400(client, leader):
     token = resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 访问需要项目上下文的端点（/members 依赖 get_current_member）
     resp = await client.get("/api/v1/members", headers=headers)
     assert resp.status_code == 400
     body = resp.json()
@@ -64,9 +57,6 @@ async def test_valid_member_with_project_id_succeeds(client, project_a, leader):
     assert resp.status_code == 200
 
 
-# ---------- GET /me/projects ----------
-
-
 async def test_me_projects_returns_user_projects(client, project_a, project_b, leader):
     """GET /me/projects 返回当前用户参与的所有项目及角色。"""
     leader_headers = await _login(client, "leader", "Leader123!")
@@ -88,7 +78,6 @@ async def test_me_projects_cross_project_member(client, project_a, project_b, le
     from tests.conftest import add_member_for_existing_user, async_session_factory
     from app.domains.identity.models import User
 
-    # leader 在项目 A 是 leader（通过 fixture），再把它加到项目 B 作为 member
     async with async_session_factory() as session:
         user = await session.get(User, leader.user_id)
     await add_member_for_existing_user(
@@ -121,13 +110,9 @@ async def test_me_projects_empty_for_user_with_no_membership(client):
     assert resp.json() == []
 
 
-# ---------- admin 全局化 ----------
-
-
 async def test_admin_can_access_config_without_project(client, admin_user):
     """全局管理员无需项目上下文即可访问 /config。"""
     headers = await _login(client, "admin", "Admin123!")
-    # 不带 X-Project-Id
     resp = await client.get("/api/v1/config", headers=headers)
     assert resp.status_code == 200
 
@@ -144,15 +129,13 @@ async def test_admin_user_has_no_member_record(client, admin_user, project_a):
     headers = await _login(client, "admin", "Admin123!")
     headers_with_project = {**headers, "X-Project-Id": str(project_a.id)}
 
-    # admin 不是任何项目的成员 → 403
     resp = await client.get("/api/v1/members", headers=headers_with_project)
     assert resp.status_code == 403
 
 
 async def test_normal_user_cannot_access_admin_endpoint(client, leader):
-    """普通成员调用需 get_current_admin 的端点 → 403。"""
-    # 目前 get_current_admin 尚未被任何端点使用（ticket 10 才会加 admin 专有接口）
-    # 这里验证 /config 确实对所有登录用户可用（用 get_current_user）
+    """普通成员可访问使用 get_current_user 的 /config。"""
+    # admin 专用端点已由管理控制台测试覆盖；此处限定 /config 的普通用户权限。
     headers = await _login(client, "leader", "Leader123!")
     resp = await client.get("/api/v1/config", headers=headers)
     assert resp.status_code == 200
@@ -169,9 +152,6 @@ async def test_me_endpoint_includes_is_admin(client, admin_user, leader):
     resp = await client.get("/api/v1/auth/me", headers=leader_headers)
     assert resp.status_code == 200
     assert resp.json()["is_admin"] is False
-
-
-# ---------- API 不接受传入 project_id（D3：归属由服务层从上下文填充） ----------
 
 
 async def test_work_item_body_project_id_is_ignored(
@@ -192,7 +172,7 @@ async def test_work_item_body_project_id_is_ignored(
             "title": "带 project_id 的工作项",
             "priority": "medium",
             "assignee_id": str(leader.id),
-            "project_id": str(project_b.id),  # 恶意传入 B 的归属
+            "project_id": str(project_b.id),  # 模拟伪造其他项目归属。
         },
         headers=headers_a,
     )
@@ -201,10 +181,7 @@ async def test_work_item_body_project_id_is_ignored(
 
     async with async_session_factory() as session:
         item = (await session.execute(select(WorkItem).where(WorkItem.id == item_id))).scalar_one()
-    assert item.project_id == project_a.id  # 归属只来自请求上下文，不接受 body 指定
-
-
-# ---------- helpers ----------
+    assert item.project_id == project_a.id
 
 
 async def _login(client, username: str, password: str) -> dict[str, str]:

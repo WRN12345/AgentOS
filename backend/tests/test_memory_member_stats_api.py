@@ -1,4 +1,4 @@
-"""成员统计查询接口测试（M3.3 验收，设计文档第 7 节①）。
+"""成员统计查询接口的访问权限与项目隔离测试。
 
 - 项目内成员可查：返回完成数/按时率/负载/样本量标记；
 - 非项目成员 403；全局 admin 只读可查；项目隔离（只见本项目成员）。
@@ -40,8 +40,7 @@ async def test_non_member_rejected(client: httpx.AsyncClient, project_a: Project
     resp = await client.get("/api/v1/memory/member-stats", headers=headers)
     assert resp.status_code == 400
 
-    # 带上项目头但...erin 是成员；换一个非成员用户
-    outsider = await create_admin_user("outsider", "Out12345!")  # 借用 helper 建号
+    outsider = await create_admin_user("outsider", "Out12345!")
     async with async_session_factory() as session:
         user = await session.get(User, outsider.id)
         assert user is not None

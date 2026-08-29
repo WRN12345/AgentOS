@@ -1,19 +1,15 @@
-"""Agent 运行触发入口（T5.2）与人工重试（T5.6，17.3 节）。
+"""Agent 运行触发、人工重试、建议查询与反馈服务。
 
-request_agent_analysis()：创建 agent_runs 记录（pending）并经 Redis 队列投递
-`agent.run` 任务（复用 T1.6 队列机制），由 worker 消费执行 LangGraph 基础图。
+request_agent_analysis() 创建 pending 的 agent_runs 记录并经 Redis 投递 agent.run，
+由 worker 执行 LangGraph 基础图。
 
-retry_agent_run()：人工重新触发失败的运行——状态重置为 pending、清空错误、
+retry_agent_run() 人工重新触发失败的运行：状态重置为 pending、清空错误、
 retry_count 清零后按原 agent_type/work_item_id/prompt 重新投递（run_id 不变，
 检查点 thread_id 也不变，不会产生重复建议）。
 
-T5.4 已接到正式 API `POST /work-items/{id}/agent-analysis`（12.5 节）；
-T5.5 的 scheduler/event 触发复用 request_agent_analysis。
-
-T5.7（12.5 节）：list_suggestions() 建议查询（join agent_runs 补
-work_item_id/model）；submit_suggestion_feedback() 人工采纳/忽略反馈
-（仅负责人、仅 pending，写 agent. 前缀审计事件，不触碰任何业务状态；
-唯一例外：memory_proposal 被采纳时同事务落入核心记忆，M4.4）。
+scheduler 和 event 触发也复用 request_agent_analysis。人工反馈仅允许负责人处理
+pending 建议，并记录 agent. 前缀审计事件。反馈不修改业务状态，唯一例外是接受
+memory_proposal 时在同一事务写入核心记忆。
 """
 
 import uuid
@@ -37,7 +33,7 @@ from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
 
-#: worker 消费的任务类型（workers/worker.py handle_task 分发）
+#: workers/worker.py 的 handle_task 按此类型分发。
 AGENT_RUN_TASK_TYPE = "agent.run"
 
 
@@ -52,10 +48,10 @@ async def request_agent_analysis(
     prompt: str = "",
     request_id: str | None = None,
 ) -> AgentRun:
-    """创建一条 agent_runs(pending) 并投递 agent.run 队列任务，返回运行记录。
+    """创建 pending 的 agent_runs 记录并投递 agent.run，返回运行记录。
 
-    project_id 显式传参：worker 进程无请求头，项目上下文必须经队列载荷 +
-    agent_runs.project_id 传递，绝不靠 X-Project-Id 推导（ticket 05 硬约束）。
+    worker 没有请求头，project_id 必须经队列载荷和 agent_runs.project_id 显式传递，
+    不能从 X-Project-Id 推导。
     """
     run = AgentRun(
         status="pending",
@@ -85,7 +81,7 @@ async def request_agent_analysis(
             },
         )
     except Exception as exc:
-        # 记录已提交但队列投递失败时立即终结，避免永久 pending 阻塞周期扫描。
+        # 数据库记录已提交后若队列投递失败，必须立即终结，避免永久 pending 阻塞扫描。
         run.status = "failed"
         run.error = f"Queue dispatch failed: {type(exc).__name__}: {exc}"[:2000]
         await session.commit()
@@ -99,12 +95,10 @@ async def retry_agent_run(
     redis_client: redis.Redis,
     run: AgentRun,
 ) -> AgentRun:
-    """人工重新触发失败的运行（17.3 节，T5.6）：重置为 pending 并重新投递。
+    """人工重新触发失败的运行：重置为 pending 并重新投递。
 
-    仅允许 failed 状态（路由层校验）。retry_count 清零：人工重触发即承认此前
-    自动退避已耗尽，给新一轮完整退避预算；累计值当前无消费方，历史错误由
-    日志可查，故不保留。run_id 不变（检查点 thread_id 不变），重跑同一 run
-    不产生重复建议。prompt 取 agent_runs 持久化的原输入。
+    仅允许 failed 状态。retry_count 清零，为新一轮提供完整自动退避预算；run_id 和
+    检查点 thread_id 保持不变，避免重复建议。prompt 使用 agent_runs 中的原始输入。
     """
     run.status = "pending"
     run.error = None
@@ -139,12 +133,10 @@ async def list_suggestions(
     limit: int = 50,
     offset: int = 0,
 ) -> list[tuple[AgentSuggestion, AgentRun]]:
-    """按类型/反馈状态/关联工作项过滤建议（created_at 倒序）。
+    """按类型、反馈状态和关联工作项过滤建议，按 created_at 倒序返回。
 
-    join agent_runs：关联工作项挂在 run 上（项目级建议为 NULL），
-    列表出参同时需要 run 的 model 供前端展示。
-    project_id 必填（路由层传 actor.project_id）：建议经 run 推导归属，
-    agent_suggestions 不冗余 project_id（ticket 05）。
+    关联工作项和 model 来自 agent_runs。建议通过 run 推导项目归属，
+    agent_suggestions 不冗余 project_id。
     """
     stmt = (
         select(AgentSuggestion, AgentRun)
@@ -177,9 +169,8 @@ async def submit_suggestion_feedback(
     的核心记忆副作用、审计事件和状态写入都在该锁覆盖的同一事务中，因此并发
     accepted/ignored 或请求重放只能有一个请求成功；其余请求在获得锁后返回 409。
     """
-    # populate_existing 必须存在：路由层已 session.get 把实例装入 identity map，
-    # 否则 FOR UPDATE 锁等待期间对端提交的新行数据会被 ORM 丢弃，状态检查读到
-    # 陈旧快照，409 保护被绕过（同一提议可被采纳两次）。
+    # 路由层已将实例放入 identity map。FOR UPDATE 等待期间其他事务可能提交新状态，
+    # populate_existing 强制刷新，避免陈旧快照绕过 409 并重复采纳同一建议。
     locked_suggestion = (
         await session.execute(
             select(AgentSuggestion)
@@ -224,8 +215,7 @@ async def submit_suggestion_feedback(
                 for entry_id in proposal_payload.entry_ids or []:
                     await enqueue_core_memory_index_id(run.project_id, entry_id)
 
-    # M5.1：拆解/分配运行的建议反馈落定后，重投历史索引任务（整体重建，
-    # 块内容反映最新采纳状态）；best-effort，投递失败只记日志
+    # 拆解或分配反馈落定后尽力重建历史索引，使索引包含最新采纳状态。
     run = await session.get(AgentRun, locked_suggestion.run_id)
     if run is not None and run.agent_type in HISTORY_RUN_AGENT_TYPES:
         await enqueue_run_history_index(run)
@@ -240,7 +230,7 @@ async def submit_suggestion_feedback(
 
 
 def raise_if_suggestion_reviewed(suggestion: AgentSuggestion) -> None:
-    """状态迁移校验：已终结（accepted/ignored/expired）的建议再次反馈 → 409。"""
+    """拒绝对 accepted、ignored 或 expired 建议重复反馈。"""
     if suggestion.review_status != "pending":
         raise ApiException(
             409,

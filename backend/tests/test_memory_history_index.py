@@ -1,8 +1,8 @@
-"""拆解/分配记录入索引测试（M5.1 验收，设计文档第 9 节）。
+"""已完成拆解与分配记录的历史索引测试。
 
 - 已完成（run succeeded + 反馈落定）的拆解记录可被检索：文本含输入需求、
   摘要、采纳情况、拆解方案要点；
-- 进行中的不索引（15.4）：pending/running run 与 echo 等非拆解类型返回 None；
+- 进行中的运行与非拆解类型不索引；
 - 反馈落定自动投递 memory.index（source_type=history），worker 从 run 现取
   文本整体重建索引块。
 """
@@ -159,7 +159,7 @@ async def test_feedback_dispatches_history_index_task(
 async def test_feedback_on_non_history_run_no_task(
     client: httpx.AsyncClient, project_a: Project, leader: ProjectMember, redis_client
 ) -> None:
-    """非拆解/分配类型（如风险扫描）的反馈不触发历史索引。"""
+    """非拆解或分配类型的反馈不得触发历史索引。"""
     run = await _make_run(project_a.id, agent_type="workflow_risk")
     suggestion = await _add_suggestion(run, suggestion_type="risk", content={"summary": "x"})
 
@@ -176,7 +176,7 @@ async def test_feedback_on_non_history_run_no_task(
 async def test_worker_indexes_history_end_to_end(
     project_a: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """worker 全流程：history 任务从 run 现取文本 → 切块入库，检索源可定位。"""
+    """历史任务应从运行记录读取最新文本并切块入库。"""
     monkeypatch.setattr(
         indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
     )
@@ -205,7 +205,7 @@ async def test_worker_indexes_history_end_to_end(
 async def test_worker_skips_unfinished_run(
     project_a: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """进行中的运行不索引（15.4）：worker 跳过，无块写入。"""
+    """进行中的运行应被索引任务跳过且不写入块。"""
     monkeypatch.setattr(
         indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
     )

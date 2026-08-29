@@ -1,15 +1,7 @@
-"""Dev Doc Review Agent 契约测试（设计文档 2026-07-30 §4.4/§7，mock 模型）。
+"""验证开发文档初审 Agent 的输出契约与业务写入护栏。
 
-风格对齐 tests/test_agent_pipeline.py：脚本化替身 Provider 走真实路径
-（specialist → call_model_json → build_output → validate_output）。
-覆盖：
-- 合法输出 → run 成功、建议入库，suggestion_type=dev_doc_review、
-  prompt_version=dev_doc_review.v1，content 含 checklist/alignment/verdict，
-  fact_refs 引用真实 work_item_id 与 dev_doc_id；
-- 载荷校验：缺 verdict / verdict 非法值 / checklist 为空 →
-  SuggestionValidationError（schema_validate）；
-- 模型非法 JSON → run=failed + json_parse 诊断，不产生建议；
-- 护栏：成功 run 不产生业务审计事件、不触碰 dev_docs 业务状态。
+合法建议应包含检查清单、对齐说明和结论，并引用真实工作项及文档。非法载荷应
+生成诊断；无论成功或失败，Agent 都不得修改开发文档状态或其他业务状态。
 """
 
 import json
@@ -38,7 +30,7 @@ from tests.test_dev_docs_api import LEADER_PW, ALICE_PW
 
 
 class _ScriptedProvider:
-    """模型替身：返回脚本化 JSON 文本，记录每次调用。"""
+    """按顺序返回脚本化 JSON 并记录调用参数的模型替身。"""
 
     name = "scripted"
     model = "scripted-model"
@@ -98,7 +90,7 @@ def _review_script(verdict: str = "sufficient") -> str:
 
 
 async def _make_item_with_doc(leader: ProjectMember, alice: ProjectMember) -> tuple[uuid.UUID, DevDoc]:
-    """直接建库：READY 工作项（主执行人 alice）+ SUBMITTED 开发文档。"""
+    """创建待启动工作项及其已提交开发文档。"""
     from app.domains.work_items.models import WorkItem
 
     async with async_session_factory() as session:
@@ -123,9 +115,6 @@ async def _make_item_with_doc(leader: ProjectMember, alice: ProjectMember) -> tu
         session.add(doc)
         await session.commit()
         return item.id, doc
-
-
-# ---------- 载荷 Schema 单元契约 ----------
 
 
 def _valid_payload() -> dict:
@@ -169,13 +158,10 @@ def test_schema_rejects_invalid_dev_doc_review_payload(mutate) -> None:
     assert exc_info.value.diagnostics["stage"] == "schema_validate"
 
 
-# ---------- 端到端契约 ----------
-
-
 async def test_dev_doc_review_produces_contract_suggestion(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """合法输出 → run 成功、建议入库且符合 §4.4 契约；护栏：无业务写入。"""
+    """合法输出应保存契约完整的建议，且不得产生业务写入。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     item_id, doc = await _make_item_with_doc(leader, alice)
@@ -223,13 +209,13 @@ async def test_dev_doc_review_produces_contract_suggestion(
                 "dev_doc_ids": [str(doc.id)],
             }
 
-            # 护栏：不产生业务审计事件；dev_docs 状态未被 Agent 触碰
+            # 初审 Agent 只能写建议，不能修改文档状态或业务审计流。
             current_audit = set((await session.execute(select(AuditEvent.id))).scalars().all())
             assert current_audit - baseline_audit == set()
             current_doc = await session.get(DevDoc, doc.id)
             assert current_doc is not None and current_doc.status == "SUBMITTED"
 
-        # 模型上下文含文档正文与验收标准（最小上下文）
+        # 模型上下文仅包含初审所需的文档正文和验收标准。
         assert len(provider.calls) == 1
         assert provider.calls[0]["json_output"] is True
         assert "检索 + 生成" in provider.calls[0]["prompt"]
@@ -241,13 +227,13 @@ async def test_dev_doc_review_produces_contract_suggestion(
 async def test_dev_doc_review_invalid_json_fails_run(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """模型返回非法 JSON → run=failed + json_parse 诊断，不产生建议（17.3 节）。"""
+    """非法 JSON 应产生解析诊断，且不得保存建议。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
     _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     item_id, _ = await _make_item_with_doc(leader, alice)
 
     _patch_provider(monkeypatch, _ScriptedProvider(["{not json"]))
-    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 一次定终态（17.3 节）
+    monkeypatch.setattr(settings, "agent_run_max_retries", 0)  # 隔离自动重试对终态的影响。
 
     redis_client = create_redis_client()
     try:

@@ -1,11 +1,8 @@
-"""Embedding 适配层（记忆模块，设计文档第 5 节）：业务代码只依赖 EmbeddingProvider 接口。
+"""Embedding 适配层，业务代码只依赖 `EmbeddingProvider` 接口。
 
-- 与 ModelProvider 同模式：默认 Ollama 实现（复用 OLLAMA_BASE_URL），
-  统一经 get_embedding_provider() 工厂获取，业务代码禁止直接实例化；
-- 错误封装复用 ModelTimeoutError / ModelUnavailableError，
-  上层（Agent 上下文装配，16.5）据此判断降级为"无记忆模式"；
-- dimensions 暴露向量维度，供 memory_chunks 建表（M1.6）与检索使用；
-  更换模型时维度可能变化，须配合模型版本字段全量重建（16.4）。
+具体实现统一由 `get_embedding_provider()` 创建。错误转换为 `ModelTimeoutError` 或
+`ModelUnavailableError`，供上层降级为无记忆模式。更换模型后必须按模型版本全量
+重建索引；若向量维度变化，还需先迁移 `memory_chunks` 的 vector 列。
 """
 
 from abc import ABC, abstractmethod
@@ -18,18 +15,18 @@ class EmbeddingProvider(ABC):
 
     #: Provider 名称（如 "ollama"）
     name: str
-    #: 实际调用的模型名（如 "qwen3-embedding:0.6b"），写入 memory_chunks.model_version（16.4）
+    #: 实际调用的模型名，写入 `memory_chunks.model_version`。
     model: str
     #: 向量维度（qwen3-embedding:0.6b 为 1024）
     dimensions: int
 
     @abstractmethod
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """把一批文本转成向量，返回与输入等长、每条维度为 dimensions 的列表。
+        """把一批文本转换为向量。
 
-        - 空列表输入返回空列表；
-        - 超时抛 ModelTimeoutError，服务不可用/非 2xx 抛 ModelUnavailableError；
-        - 不泄漏 httpx 等底层异常类型。
+        返回列表必须与输入等长，每条向量维度为 `dimensions`。空输入返回空列表；
+        超时抛出 `ModelTimeoutError`，服务不可用或响应异常抛出
+        `ModelUnavailableError`，不泄漏 httpx 等底层异常。
         """
 
 
@@ -37,13 +34,10 @@ _provider: EmbeddingProvider | None = None
 
 
 def get_embedding_provider() -> EmbeddingProvider:
-    """Provider 单例工厂（同 get_model_provider 模式）。
+    """返回配置对应的 Embedding Provider 单例。
 
-    业务/worker 代码一律经此函数获取 embedding 能力。EMBEDDING_PROVIDER：
-    - ollama（默认）：本地 Ollama，复用 OLLAMA_BASE_URL 与
-      LLM_TIMEOUT_SECONDS / LLM_MAX_RETRIES 配置；
-    - openai_compatible：智谱等 OpenAI 兼容云端服务（EMBEDDING_BASE_URL /
-      EMBEDDING_API_KEY），项目文档内容将发送至第三方（16 节）。
+    `ollama` 使用本地 Ollama；`openai_compatible` 使用 OpenAI 兼容云服务，并会将
+    项目文档发送给第三方。
     """
     global _provider
     if _provider is None:

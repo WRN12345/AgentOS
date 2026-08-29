@@ -1,8 +1,7 @@
-"""EmbeddingProvider 适配层测试（M1.3/M1.4 验收，设计文档第 5 节、16.4、16.5）。
+"""`EmbeddingProvider` 适配层测试。
 
-- M1.3：接口契约（fake provider）与配置默认值；
-- M1.4：Ollama 实现用 httpx.MockTransport 验证请求格式与统一错误封装，
-  不依赖真实 Ollama。
+覆盖提供方接口契约、配置默认值，以及 `Ollama` 实现的请求格式和统一错误封装。
+测试使用 `httpx.MockTransport`，不依赖真实的 `Ollama` 服务。
 """
 
 import json
@@ -45,7 +44,7 @@ async def test_fake_provider_contract() -> None:
 
 
 def test_embedding_config_defaults() -> None:
-    """配置字段默认值：qwen3-embedding:0.6b / 1024 维（设计文档 15.1）。
+    """配置字段默认值为 qwen3-embedding:0.6b 和 1024 维。
 
     断字段定义默认值而非当前环境值，与宿主 .env（可能已切智谱等）解耦。
     """
@@ -179,9 +178,6 @@ async def test_factory_returns_ollama_embedding(monkeypatch: pytest.MonkeyPatch)
     assert provider.model == settings.embedding_model
     assert provider.dimensions == settings.embedding_dimensions
     assert get_embedding_provider() is provider
-
-
-# ---------- OpenAI 兼容 EmbeddingProvider（智谱 embedding-3 等） ----------
 
 
 def _make_openai_provider(handler, **kwargs) -> OpenAICompatibleEmbeddingProvider:

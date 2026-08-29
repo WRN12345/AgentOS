@@ -1,4 +1,4 @@
-"""存储抽象与本地实现（第 14 章）。"""
+"""存储抽象与本地实现。"""
 
 from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import (

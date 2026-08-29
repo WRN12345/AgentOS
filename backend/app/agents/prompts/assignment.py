@@ -1,8 +1,8 @@
-"""Assignment Advisor 提示词模板（10.1、6.2 节，T5.4）。
+"""Assignment Advisor 提示词模板。
 
-模型只接收最小上下文（16 节）：需求/工作项背景、成员能力（标签/熟练度/确认
-状态）与当前负载。推荐的 member_id 必须来自输入数据；
-capability_adjustments 仅为建议（6.2 节），不会被自动执行。
+仅向模型提供完成分配建议所需的需求或工作项背景、成员能力标签与熟练度、
+确认状态和当前负载，不提供无关资料或敏感信息。推荐的 member_id 必须来自
+输入数据；capability_adjustments 仅为建议，不会自动执行。
 """
 
 SYSTEM_PROMPT = (
@@ -31,7 +31,7 @@ def render_user_prompt(
     capabilities: list[dict],
     workload: list[dict],
 ) -> str:
-    """组装 user 提示词（最小上下文：需求背景 + 成员能力 + 负载）。"""
+    """使用需求背景、成员能力和负载组装最小 user 提示词。"""
     import json
 
     lines = [f"项目：{project_name or '（未知）'}"]

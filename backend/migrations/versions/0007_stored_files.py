@@ -1,11 +1,11 @@
-"""0007：stored_files（文件存储记录，第 11、14 章）。
+"""0007：创建 stored_files 文件存储记录表。
 
 Revision ID: 0007_stored_files
 Revises: 0006_transfers_deadline_changes
 Create Date: 2026-07-27
 
-数据库仅保存相对 storage_key 与存储后端名，不保存宿主机绝对路径（14 章）；
-work_item_id 可空，为 T4.4 交付物版本化预留关联。
+数据库仅保存相对 storage_key 与存储后端名，不保存宿主机绝对路径；
+work_item_id 可空，用于文件按需关联工作项，未关联文件仍可独立存储。
 """
 
 from collections.abc import Sequence
@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("mime_type", sa.String(128), nullable=False),
         sa.Column("sha256", sa.String(64), nullable=False),
         sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), sa.ForeignKey("project_members.id"), nullable=False),
-        # 关联业务对象：可空，T4.4 交付物接入时使用
+        # 文件可按需关联工作项，未关联文件保持为空
         sa.Column("work_item_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("work_items.id"), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),

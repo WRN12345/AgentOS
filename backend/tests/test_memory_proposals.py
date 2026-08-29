@@ -1,9 +1,9 @@
-"""核心记忆提议测试（M4.4 验收，设计文档第 8 节）。
+"""核心记忆提议的确认、拒绝、并发、回滚与审计测试。
 
 - 提议 → 确认 → 生效全链路：create/update/deprecate 三类负载；
 - 未确认前核心记忆不变（红线：Agent 不直接改数据）；拒绝（ignored）只记录；
 - 确认时校验失败（容量超限/条目已作废/跨项目）整体回滚，建议保持 pending；
-- 提议与确认均入审计域（16.10）。
+- 提议与确认均写入审计记录。
 """
 
 import asyncio
@@ -30,7 +30,7 @@ LEADER_PW = "Leader123!"
 
 
 async def _make_run(project_id) -> AgentRun:
-    """直接建库创建一条 Agent 运行记录（提议须挂 run，FK 约束）。"""
+    """创建满足提议外键约束的 Agent 运行记录。"""
     async with async_session_factory() as session:
         run = AgentRun(agent_type="requirement_analyst", project_id=project_id, prompt="")
         session.add(run)
@@ -55,10 +55,8 @@ async def test_create_proposal_confirm_flow(project_a: Project, leader: ProjectM
         )
         assert proposal.suggestion_type == MEMORY_PROPOSAL_TYPE
         assert proposal.review_status == "pending"
-        # 未确认前核心记忆不变
         assert await list_entries(session, project_id=project_a.id) == []
 
-        # 负责人确认 → 生效
         await submit_suggestion_feedback(session, proposal, action="accepted", member=leader)
         assert proposal.review_status == "accepted"
 
@@ -144,7 +142,6 @@ async def test_confirm_over_budget_rolls_back(project_a: Project, leader: Projec
             await submit_suggestion_feedback(session, proposal, action="accepted", member=leader)
         assert exc_info.value.code == ErrorCodes.CORE_MEMORY_BUDGET_EXCEEDED
 
-    # 回滚：建议保持 pending，核心记忆无新条目
     suggestion = await _get_suggestion(proposal.id)
     assert suggestion is not None
     assert suggestion.review_status == "pending"
@@ -159,7 +156,7 @@ async def test_confirm_stale_entry_conflict(project_a: Project, leader: ProjectM
         proposal = await create_memory_proposal(
             session, run=run, action="deprecate", entry_id=entry.id
         )
-        # 提议后条目被负责人先手工作废
+        # 模拟确认前目标被其他操作抢先作废的竞态。
         await deprecate_entry(session, leader, entry_id=entry.id)
         with pytest.raises(ApiException) as exc_info:
             await submit_suggestion_feedback(session, proposal, action="accepted", member=leader)
@@ -188,7 +185,7 @@ async def test_confirm_cross_project_entry_not_found(
 async def test_concurrent_feedback_only_applies_memory_proposal_once(
     client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
 ) -> None:
-    """并发 accepted 只允许一个请求获得建议处理权，不能重复创建核心记忆。"""
+    """并发确认时只能有一个请求获得处理权且不得重复创建记忆。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         proposal = await create_memory_proposal(
@@ -225,7 +222,7 @@ async def test_concurrent_feedback_only_applies_memory_proposal_once(
 async def test_concurrent_conflicting_feedback_cannot_apply_ignored_proposal(
     client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
 ) -> None:
-    """accepted 与 ignored 并发时，最终状态和核心记忆副作用必须一致。"""
+    """确认与忽略并发时，最终状态必须与核心记忆副作用一致。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         proposal = await create_memory_proposal(
@@ -258,7 +255,7 @@ async def test_concurrent_conflicting_feedback_cannot_apply_ignored_proposal(
 async def test_feedback_endpoint_applies_proposal(
     client: httpx.AsyncClient, project_a: Project, leader: ProjectMember
 ) -> None:
-    """API 全链路：建议中心确认 memory_proposal → 核心记忆生效。"""
+    """通过建议反馈 API 确认提议后核心记忆应生效。"""
     run = await _make_run(project_a.id)
     async with async_session_factory() as session:
         proposal = await create_memory_proposal(

@@ -1,9 +1,8 @@
-"""端到端验收（M8.3，设计文档两条核心路径）。
+"""记忆模块两条核心业务路径的端到端测试。
 
 路径①：上传文档 → 索引 → 问答命中 → 依据可查（下载原文）；
 路径②：完成任务 → 总结提议 → 负责人确认 → 下次拆解时核心记忆在场。
 
-以集成测试形式固化走查结果（可重复执行，即验收记录）。
 模型与 embedding 用替身（FakeEmbeddingProvider / 脚本化 ModelProvider），
 其余全链路（API → 队列 → worker → DB → 检索 → 问答/流水线）真实执行。
 """
@@ -86,11 +85,10 @@ async def _take_tasks(redis_client, task_type: str) -> list[dict]:
 async def test_path1_upload_index_qa_source(
     client: httpx.AsyncClient, project_a: Project, storage, redis_client, monkeypatch
 ) -> None:
-    """路径①：上传文档 → 索引 → 问答命中 → 依据可查。"""
+    """上传文档经索引后应可被问答命中并追溯原文。"""
     _, alice = await add_member(project_a, "alice", "Alice123!", display_name="爱丽丝")
     headers = await auth_headers(client, "alice", "Alice123!", project_id=str(project_a.id))
 
-    # 1. 上传文档（自动投递索引任务）
     resp = await client.post(
         "/api/v1/files",
         headers=headers,
@@ -99,7 +97,7 @@ async def test_path1_upload_index_qa_source(
     assert resp.status_code == 201, resp.text
     file_id = resp.json()["id"]
 
-    # 2. worker 执行索引 → 状态已索引（worker 侧 storage 指向测试临时目录）
+    # worker 使用测试临时目录读取上传文件，保持存储边界与生产路径一致。
     original = memory_index_module.get_storage_provider
     memory_index_module.get_storage_provider = lambda: storage
     try:
@@ -111,7 +109,6 @@ async def test_path1_upload_index_qa_source(
     resp = await client.get("/api/v1/files", headers=headers)
     assert resp.json()[0]["index_status"] == "indexed"
 
-    # 3. 问答命中（模型用脚本替身）
     monkeypatch.setattr(
         qa_module,
         "get_model_provider",
@@ -123,10 +120,9 @@ async def test_path1_upload_index_qa_source(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "answered"
-    assert body["sources"][0]["title"] == "部署指南.md"  # 依据可定位到文件
+    assert body["sources"][0]["title"] == "部署指南.md"
     assert body["sources"][0]["source_id"] == file_id
 
-    # 4. 依据可查：按 source_id 下载原文
     resp = await client.get(f"/api/v1/files/{file_id}/download", headers=headers)
     assert resp.status_code == 200
     assert "发布步骤" in resp.content.decode()
@@ -135,11 +131,10 @@ async def test_path1_upload_index_qa_source(
 async def test_path2_complete_summarize_confirm_inject(
     client: httpx.AsyncClient, project_a: Project, storage, redis_client, monkeypatch
 ) -> None:
-    """路径②：完成任务 → 总结提议 → 确认 → 下次拆解在场。"""
+    """完成任务形成的经验经负责人确认后应注入下一次拆解。"""
     ctx = await _setup(client, project_a)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 
-    # 1. 审核通过（完成）→ 自动投递总结任务
     resp = await _review(
         client,
         ctx["leader_headers"],  # type: ignore[arg-type]
@@ -150,7 +145,6 @@ async def test_path2_complete_summarize_confirm_inject(
     summary_tasks = await _take_tasks(redis_client, "memory.summary")
     assert len(summary_tasks) == 1
 
-    # 2. worker 执行总结（模型替身产出经验）→ 生成待确认提议
     monkeypatch.setattr(
         summary_module,
         "get_model_provider",
@@ -168,7 +162,6 @@ async def test_path2_complete_summarize_confirm_inject(
     assert proposals[0]["review_status"] == "pending"
     assert "验收标准前置" in proposals[0]["content"]["content"]
 
-    # 3. 负责人确认 → 进入核心记忆
     resp = await client.post(
         f"/api/v1/agent-suggestions/{proposals[0]['id']}/feedback",
         headers=leader_headers,  # type: ignore[arg-type]
@@ -183,7 +176,6 @@ async def test_path2_complete_summarize_confirm_inject(
     assert entries[0]["status"] == "active"
     assert "验收标准前置" in entries[0]["content"]
 
-    # 4. 下次拆解：核心记忆全量注入流水线提示词（在场）
     _, zhangsan = await add_member(project_a, "zhangsan", "Zhang123!", display_name="张三")
     provider = _ScriptedProvider(
         [
@@ -199,8 +191,7 @@ async def test_path2_complete_summarize_confirm_inject(
 
     injected = [c["prompt"] for c in provider.calls if "项目核心记忆" in c["prompt"]]
     assert injected, "下次拆解的提示词中应包含核心记忆注入块"
-    assert any("验收标准前置" in p for p in injected)  # 确认的经验在场
-    # 主建议正常产出
+    assert any("验收标准前置" in p for p in injected)
     async with async_session_factory() as session:
         count = list(
             (

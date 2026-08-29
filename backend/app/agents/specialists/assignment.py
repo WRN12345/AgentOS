@@ -1,10 +1,7 @@
-"""Assignment Advisor：按能力/负载推荐初始负责人及候选人（10.1、6.2 节，T5.4）。
+"""Assignment Advisor：按成员能力和负载推荐初始负责人及候选人。
 
-上下文经工具注册表（app.agents.tools）只读查询加载：list_member_capabilities、
-get_member_workload、get_work_item_overview。content 自有字段（平铺）：
-recommended_assignee / candidates（含理由）/ capability_adjustments
-（能力修正建议，仅以建议形式呈现，不自动修改能力或权限，6.2 节）。
-fact_refs 引用真实成员与关联工作项 ID。
+上下文通过只读工具加载，fact_refs 引用真实成员和工作项 ID。
+capability_adjustments 仅作为建议，不自动修改成员能力或权限。
 """
 
 import uuid
@@ -15,7 +12,7 @@ from app.agents.specialists.common import build_output, call_model_json, context
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "assignment_advisor"

@@ -1,4 +1,4 @@
-"""到期/逾期提醒扫描测试（T3.6 验收，4.2、4.3 节）。
+"""到期和逾期提醒扫描测试。
 
 覆盖：
 - 24h 内到期未终态工作项/协作请求 → reminder.due_soon 通知 + SSE 事件；
@@ -125,7 +125,6 @@ async def test_due_scan_sends_and_deduplicates(project: Project) -> None:
         assert received[channel_for(alice.id)]["type"] == "reminder.due_soon"
         assert received[channel_for(bob.id)]["type"] == "reminder.due_soon"
 
-        # 当日重复扫描：去重键命中，不再通知
         stats = await scan_due_reminders(redis_client)
         assert stats == {"sent": 0, "skipped": 2}
         assert await _count_notifications() == 2

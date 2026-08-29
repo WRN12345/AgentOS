@@ -1,4 +1,4 @@
-"""最终审核 API 集成测试（T4.5 验收，7.5、8.1、12.5、16、17.2 节）。
+"""最终审核 API 集成测试。
 
 覆盖：三种结论驱动正确状态迁移、reviews+审计同事务、权限（仅负责人）、
 反馈可见性（仅负责人与主执行人）、幂等键重放、COMPLETED 拒新交付物。
@@ -63,7 +63,6 @@ async def _item_in_review(
     )
     assert resp.status_code == 201, resp.text
     item_id = resp.json()["id"]
-    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
     resp = await client.post(
         f"/api/v1/work-items/{item_id}/dev-doc/waive", json={}, headers=leader_headers
     )
@@ -108,9 +107,6 @@ async def _work_item_status(client: httpx.AsyncClient, headers: dict[str, str], 
     return resp.json()["status"]
 
 
-# ---------- 三种结论的状态迁移与事务性 ----------
-
-
 async def test_approve_completes_work_item_with_review_and_audit(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -145,7 +141,7 @@ async def test_approve_completes_work_item_with_review_and_audit(
         assert review_events[0].after["status"] == "COMPLETED"
         assert review_events[0].after["deliverable_version"] == 1
 
-        # 主执行人收到通知；反馈正文不进通知（16 节）
+        # 反馈正文属于敏感信息，不写入通知。
         notifications = list((await session.execute(select(Notification))).scalars().all())
         mine = [n for n in notifications if n.recipient_id == alice.id and n.type == "review.approved"]  # type: ignore[union-attr]
         assert len(mine) == 1
@@ -201,7 +197,7 @@ async def test_request_changes_returns_to_in_progress_and_requires_feedback(
 async def test_reject_keeps_work_item_in_review(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """reject → 拒绝当前交付但保持工作项继续执行（状态保持 IN_REVIEW，7.5 节）。"""
+    """reject 拒绝当前交付，但工作项保持 IN_REVIEW。"""
     ctx = await _setup(client, project)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 
@@ -220,11 +216,8 @@ async def test_reject_keeps_work_item_in_review(
         assert any(e.action == "review.rejected" for e in events)
 
 
-# ---------- 权限与可见性 ----------
-
-
 async def test_non_leader_cannot_review(client: httpx.AsyncClient, project: Project) -> None:
-    """普通成员（含主执行人本人）调用审核接口 → 403（6.1 节）。"""
+    """普通成员调用审核接口返回 403，主执行人本人也不例外。"""
     ctx = await _setup(client, project)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 
@@ -270,7 +263,7 @@ async def test_review_requires_in_review_status(
 async def test_review_feedback_visible_only_to_leader_and_assignee(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """反馈正文仅负责人与该工作项主执行人可见（16 节）；协作者与无关成员 403。"""
+    """反馈正文仅负责人与该工作项主执行人可见，协作者与无关成员返回 403。"""
     ctx = await _setup(client, project)
     bob = ctx["bob"]
     item_id, deliverable_id = await _item_in_review(
@@ -295,7 +288,6 @@ async def test_review_feedback_visible_only_to_leader_and_assignee(
         assert visible.status_code == 200, f"{role} 应可见"
         assert visible.json()[0]["feedback"] == "机密反馈正文"
 
-    # 协作者（非主执行人）与无关成员均读不到反馈正文
     for role in ("bob_headers", "dave_headers"):
         denied = await client.get(
             f"/api/v1/work-items/{item_id}/reviews", headers=ctx[role]  # type: ignore[arg-type]
@@ -303,13 +295,10 @@ async def test_review_feedback_visible_only_to_leader_and_assignee(
         assert denied.status_code == 403, f"{role} 不应读到审核反馈"
 
 
-# ---------- 幂等与终态约束 ----------
-
-
 async def test_review_idempotent_replay_applies_once(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """同一 Idempotency-Key 重放：不重复落 reviews、不重复推进状态（17.2 节）。"""
+    """同一 Idempotency-Key 重放时不重复写入 reviews，也不重复推进状态。"""
     ctx = await _setup(client, project)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 
@@ -326,7 +315,6 @@ async def test_review_idempotent_replay_applies_once(
         reviews = list((await session.execute(select(Review))).scalars().all())
         assert len(reviews) == 1  # 只生效一次
 
-    # 无幂等键的重复 approve：工作项已 COMPLETED，状态机拒绝 → 409
     again = await _review(client, ctx["leader_headers"], item_id, payload)  # type: ignore[arg-type]
     assert again.status_code == 409
 
@@ -334,7 +322,7 @@ async def test_review_idempotent_replay_applies_once(
 async def test_completed_work_item_rejects_new_deliverable(
     client: httpx.AsyncClient, project: Project
 ) -> None:
-    """approve 后工作项 COMPLETED，不可再提交新交付物版本（T4.5 验收）。"""
+    """approve 后工作项进入 COMPLETED，不能再提交新交付物版本。"""
     ctx = await _setup(client, project)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 

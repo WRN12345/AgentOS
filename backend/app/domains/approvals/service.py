@@ -1,15 +1,9 @@
-"""负责人审批聚合服务（12.6 节）。
+"""负责人审批聚合服务。
 
-- list_pending_approvals：聚合 PENDING 的转派申请、PENDING_APPROVAL 的
-  DDL 变更申请与 SUBMITTED 的开发文档（kind="dev_doc"），统一形状、
-  按创建时间倒序返回；
-- list_processed_approvals：聚合已处理（转派/DDL：APPROVED/REJECTED/CANCELLED；
-  开发文档：CONFIRMED/RETURNED）的申请与交付审核结论（reviews 终审留痕，
-  kind="delivery_review"），按 updated_at 倒序、最多 50 条，
-  供前端"审批记录"标签页展示谁、什么时候、处理结果。
+`list_pending_approvals` 聚合待处理的转派、DDL 变更和开发文档。
+`list_processed_approvals` 聚合终态申请与交付审核结论，并按更新时间返回最近记录。
 
-权限规则（T3.5 验收）：负责人与管理员（只读）返回数据，
-普通成员返回空列表（不 403）。
+普通成员访问时返回空列表而非 `403`。
 """
 
 import uuid
@@ -31,7 +25,7 @@ from app.domains.transfers.state_machine import TransferStatus
 from app.domains.work_items.models import WorkItem
 from app.domains.work_items.schemas import MemberBrief
 
-#: 已处理（终态）申请状态：两类申请的状态机枚举一致（8.3/8.4 节）
+#: 转派申请的终态。
 PROCESSED_TRANSFER_STATUSES = (
     TransferStatus.APPROVED.value,
     TransferStatus.REJECTED.value,
@@ -42,13 +36,13 @@ PROCESSED_DEADLINE_CHANGE_STATUSES = (
     DeadlineChangeStatus.REJECTED.value,
     DeadlineChangeStatus.CANCELLED.value,
 )
-#: 已处理的开发文档状态：确认通过 / 打回（DRAFT 回到成员手中，不算"已处理"）
+#: 开发文档确认或打回后计入已处理记录；重新编辑的 `DRAFT` 不计入。
 PROCESSED_DEV_DOC_STATUSES = (
     DevDocStatus.CONFIRMED.value,
     DevDocStatus.RETURNED.value,
 )
 
-#: 已处理列表返回的最大条数（审批记录标签页只看最近处理结果）
+#: 已处理列表只保留最近结果。
 PROCESSED_LIMIT = 50
 
 
@@ -68,7 +62,7 @@ async def _aggregate_items(
     if not transfers and not deadline_changes and not dev_docs and not reviews:
         return []
 
-    # 批量加载关联工作项标题与成员显示名
+    # 批量加载关联数据，避免为每条审批项单独查询。
     item_ids = (
         {r.work_item_id for r in transfers}
         | {r.work_item_id for r in deadline_changes}
@@ -92,7 +86,6 @@ async def _aggregate_items(
     for review in reviews:
         member_ids.add(review.reviewed_by)
 
-    # 交付审核：批量加载被审核交付物（提交人 / 版本 / 类型）
     deliverables: dict[uuid.UUID, Deliverable] = {}
     if reviews:
         del_rows = (
@@ -131,7 +124,6 @@ async def _aggregate_items(
     def approver_brief(member_id: uuid.UUID | None) -> MemberBrief | None:
         return brief(member_id) if member_id is not None else None
 
-    # 协作级 DDL 变更的目标标题（协作请求标题）
     collab_target_ids = {
         r.target_id
         for r in deadline_changes
@@ -200,7 +192,7 @@ async def _aggregate_items(
         )
     for d in dev_docs:
         title = item_titles.get(d.work_item_id, "")
-        # 进入审批聚合的文档（SUBMITTED/CONFIRMED/RETURNED）都经过 submit，必有撰写人
+        # 这些状态都必须经过 `submit`，因此撰写人不能为空。
         assert d.author_member_id is not None, "已提交的开发文档必有撰写人"
         items.append(
             ApprovalItemOut(
@@ -224,7 +216,7 @@ async def _aggregate_items(
     for review in reviews:
         title = item_titles.get(review.work_item_id, "")
         deliverable = deliverables.get(review.deliverable_id)
-        # 交付物与审核同事务写入，正常必有；缺失时兜底展示，不阻塞列表
+        # 交付物通常与审核记录同时存在；异常缺失时降级展示，避免阻塞整个列表。
         items.append(
             ApprovalItemOut(
                 kind="delivery_review",
@@ -258,11 +250,11 @@ async def _aggregate_items(
 async def list_pending_approvals(
     session: AsyncSession, actor: ProjectMember
 ) -> list[ApprovalItemOut]:
-    """负责人待审批列表；管理员只读同视图；普通成员返回空列表（T3.5 验收，不 403）。"""
+    """返回负责人待审批列表；普通成员返回空列表而非 `403`。"""
     if actor.role not in (ROLE_LEADER):
         return []
 
-    # 三类申请不冗余 project_id，经所属工作项推导过滤（spec D2）
+    # 申请不冗余 `project_id`，必须通过所属工作项实施项目隔离。
     transfers = list(
         (
             await session.execute(
@@ -314,12 +306,14 @@ async def list_pending_approvals(
 async def list_processed_approvals(
     session: AsyncSession, actor: ProjectMember, *, limit: int = PROCESSED_LIMIT
 ) -> list[ApprovalItemOut]:
-    """已处理审批记录：终态（APPROVED/REJECTED/CANCELLED）申请按 updated_at
-    倒序、最多 limit 条；权限与待审批列表一致（普通成员空列表，不 403）。"""
+    """按 `updated_at` 倒序返回最多 `limit` 条已处理记录。
+
+    权限与待审批列表一致，普通成员返回空列表而非 `403`。
+    """
     if actor.role not in (ROLE_LEADER):
         return []
 
-    # 申请与审核均不冗余 project_id，经所属工作项推导过滤（spec D2）
+    # 申请与审核均通过所属工作项实施项目隔离。
     transfers = list(
         (
             await session.execute(
@@ -368,7 +362,7 @@ async def list_processed_approvals(
         .scalars()
         .all()
     )
-    # 交付审核结论：reviews 即终审留痕（7.5 节），全部视为"已处理"
+    # 每条 `reviews` 记录都是已落定的终审结论。
     reviews = list(
         (
             await session.execute(

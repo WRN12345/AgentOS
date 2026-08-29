@@ -1,21 +1,18 @@
-"""结构感知切块器（设计文档 15.2）：每块约 500 字、相邻块略有重叠、不切断句子段落。
+"""尽量保留段落和句子边界的文本切块器。
 
-切分优先级（尽量保留语义边界）：
-1. 按空行分段落，段落能整块放入就不拆；
-2. 段落超长时按句末标点（。！？；.!?; 与换行）拆句；
-3. 单句仍超长时才在 max_chars 处硬切（无法避免的最后手段）。
+先按空行拆分段落；超长段落再按句末标点或换行拆分；单句仍超长时才在
+`max_chars` 处硬切。
 
-重叠实现：新块以前一块末尾 overlap_chars 个字符开头，保证跨块边界的
-语义在两块中至少完整出现一次。
+新块复用前一块末尾 `overlap_chars` 个字符，减少跨块边界的语义损失。
 """
 
 import re
 
-#: 默认块大小与重叠量（15.2，按实际文档效果可调）
+#: 默认块大小与相邻块重叠量
 DEFAULT_MAX_CHARS = 500
 DEFAULT_OVERLAP_CHARS = 50
 
-# 句末边界：中英文句末标点之后、或单个换行
+# 在中英文句末标点后或换行处切分
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？；.!?;])|\n")
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
 
@@ -61,7 +58,7 @@ def chunk_text(
     max_chars: int = DEFAULT_MAX_CHARS,
     overlap_chars: int = DEFAULT_OVERLAP_CHARS,
 ) -> list[str]:
-    """把文本切成若干块，每块不超过 max_chars，相邻块重叠约 overlap_chars。
+    """切分文本，每块不超过 `max_chars`，相邻块约重叠 `overlap_chars`。
 
     空文本/纯空白返回空列表。
     """
@@ -79,7 +76,7 @@ def chunk_text(
         tail = current[-overlap_chars:] if overlap_chars > 0 else ""
         current = f"{tail}\n{segment}" if tail else segment
         if len(current) > max_chars:
-            # 极端情况：重叠尾部 + 整段仍超长，放弃本次重叠（段落本身已达上限）
+            # 重叠后超限时放弃本次重叠，仍保证块大小上限
             current = segment
     if current:
         chunks.append(current)

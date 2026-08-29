@@ -1,4 +1,4 @@
-"""转派申请状态机单元测试（8.3 节，T3.3 验收）。
+"""转派申请状态机单元测试。
 
 覆盖全部合法迁移与代表性非法迁移；状态机为纯函数，不依赖数据库。
 """
@@ -8,7 +8,6 @@ import pytest
 from app.core.errors import ApiException
 from app.domains.transfers.state_machine import COMMANDS, TransferStatus, transition
 
-# 8.3 节全部合法迁移：(当前状态, 命令, 目标状态)
 LEGAL_TRANSITIONS = [
     ("PENDING", "approve", "APPROVED"),
     ("PENDING", "reject", "REJECTED"),

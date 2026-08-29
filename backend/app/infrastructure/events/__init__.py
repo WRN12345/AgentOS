@@ -1,15 +1,11 @@
-"""实时事件通道层（4.3 节，T3.6）：Redis Pub/Sub 按成员频道分发。
+"""通过 Redis Pub/Sub 按成员频道分发实时事件。
 
-取舍说明：
-- 放在 infrastructure/ 而非 notifications 领域内——Pub/Sub 是与 queue/
-  同级的技术机制（Redis 通道），事件生产方横跨 work_items/collaboration/
-  transfers/deadlines/worker 多个模块，放基础设施层避免领域间互相 import；
-- 按成员分频道（agentos:events:{member_id}）而非单频道+客户端过滤：
-  他人事件根本不下发到本连接，符合 16 节最小暴露原则。
+事件生产方横跨多个领域，因此通道实现位于基础设施层，避免领域间相互导入。每个成员
+使用独立频道 `agentos:events:{member_id}`，使其他成员的事件不会发送到当前连接，
+满足最小暴露原则。
 
-发布时机约束：所有 publish 必须发生在业务 DB commit 成功之后
-（订阅者收到的事件对应已落库事实），各业务 service 在 notify() 处把事件
-追加到 outbox，commit 成功后统一调 publish_events()。
+所有事件必须在业务数据库提交成功后发布，确保订阅者收到的事件对应已落库事实。
+业务 service 先把事件加入 outbox，提交成功后再统一发布。
 """
 
 import json
@@ -30,11 +26,9 @@ CHANNEL_PREFIX = "agentos:events"
 
 @dataclass(frozen=True)
 class OutgoingEvent:
-    """一条待发布事件：与通知同构（type 复用通知 type），按接收人分发。
+    """按接收人分发的待发布事件，`type` 与通知类型一致。
 
-    project_id 为事件归属项目：多项目后 SSE 连接只订阅当前项目的
-    member 频道（channel 按 member_id 分，member 记录本身项目内唯一），
-    载荷携带 project_id 供客户端校验/前端缓存隔离（spec 4.3、ticket 04）。
+    载荷携带 `project_id`，供客户端校验项目归属并隔离前端缓存。
     """
 
     project_id: uuid.UUID
@@ -71,10 +65,10 @@ async def publish_events(client: redis.Redis, events: list[OutgoingEvent]) -> No
 
 
 async def publish_after_commit(events: list[OutgoingEvent]) -> None:
-    """业务 commit 成功后调用：自建短连接发布 outbox 中的事件。
+    """业务提交成功后，通过短连接发布 outbox 中的事件。
 
-    事件发布失败（如 Redis 暂不可用）不影响已提交的业务事实，只记日志——
-    客户端仍可通过 GET /notifications 拉取到对应通知（SSE 是增量优化而非唯一通道）。
+    Redis 暂不可用时仅记录日志，不回滚已提交的业务事实。SSE 不是唯一通道，客户端
+    仍可通过 `GET /notifications` 拉取通知。
     """
     if not events:
         return

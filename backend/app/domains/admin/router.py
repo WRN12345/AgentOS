@@ -1,8 +1,7 @@
-"""管理控制台接口（ticket 10）：项目列表/创建、账号管理。
+"""管理控制台接口：项目与账号管理。
 
-全部 admin-only（get_current_admin）：全局管理员不属于任何项目、
-不参与业务协作，通过本组接口做平台管理（spec：项目创建仅 admin 可做）。
-审计查看沿用既有 GET /audit-events（admin 全量可见），不重复实现。
+所有接口均通过 `get_current_admin` 限制为全局管理员访问。全局管理员不属于项目，
+也不参与业务协作；审计记录统一通过 `GET /audit-events` 查询。
 """
 
 import uuid
@@ -51,7 +50,7 @@ async def create_project_endpoint(
     _: None = Depends(idempotency_guard),
     session: AsyncSession = Depends(get_session),
 ) -> AdminProjectOut:
-    """创建项目并指定负责人（成为 leader 成员）。"""
+    """创建项目并指定一名 `leader` 成员。"""
     return await create_project(session, admin, payload)
 
 

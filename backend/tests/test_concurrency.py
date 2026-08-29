@@ -1,19 +1,13 @@
-"""T6.1 并发测试（17.2 节）：真实并发请求验证"只有一个请求生效"。
+"""真实并发请求下只有一个冲突操作生效的测试。
 
 与 test_idempotency.py（串行重放）不同，这里用 asyncio.gather 让两个请求
 真正并发到达（httpx ASGI transport 在同一事件循环内交错执行，各自持有
 独立 DB 连接与会话）。为让交错窗口确定出现（而非依赖调度时序），
-(a)/(b) 先由测试内的外部事务对目标行持 FOR UPDATE 行锁，再发起两个
+审批和更新测试先由外部事务对目标行持 FOR UPDATE 行锁，再发起两个
 并发请求——它们必然都读到旧版本并阻塞在写路径上，释放锁后才分胜负。
 
-验证点：
-(a) 重复审批：同一转派审批 / DDL 审批被两个请求同时审批时，只有一个生效，
-    另一个得到 409（版本冲突或非法迁移），业务副作用（负责人/DDL 变更、
-    审计事件）只发生一次；
-(b) 乐观锁：两个基于同一旧版本号的 PATCH 并发到达，一个 200 一个 409
-    WORK_ITEM_VERSION_CONFLICT；
-(c) Idempotency-Key：同一 key 的重复创建请求并发到达，只创建一条记录、
-    两个响应指向同一资源（17.2 节"重复请求返回第一次结果"的并发形态）。
+重复审批只能产生一次业务副作用，乐观锁更新必须一成一败，同一
+Idempotency-Key 的并发创建必须返回同一资源。
 """
 
 import asyncio
@@ -72,9 +66,6 @@ async def _get_work_item_row(item_id: str) -> WorkItem:
         return row
 
 
-# ---------- (a) 重复审批：并发双审批只有一个生效 ----------
-
-
 async def test_concurrent_transfer_approve_only_one_takes_effect(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -110,7 +101,7 @@ async def test_concurrent_transfer_approve_only_one_takes_effect(
     # 业务副作用只发生一次：assignee 变为 bob、item.version 只 +1、审计只有一条
     row = await _get_work_item_row(item["id"])
     assert row.assignee_id == bob.id
-    assert row.version == 3  # create v1 → publish v2 → approve v3
+    assert row.version == 3  # 创建为版本 1，发布和批准各推进一次。
     assert await _audit_action_count(transfer["id"], "transfer.approved") == 1
 
 
@@ -148,11 +139,8 @@ async def test_concurrent_deadline_approve_only_one_takes_effect(
     # 业务副作用只发生一次：DDL 更新、item.version 只 +1、审计只有一条
     row = await _get_work_item_row(item["id"])
     assert row.due_at is not None and row.due_at.isoformat().startswith("2026-08-15")
-    assert row.version == 3  # create v1 → publish v2 → approve v3
+    assert row.version == 3  # 创建为版本 1，发布和批准各推进一次。
     assert await _audit_action_count(change["id"], "deadline_change.approved") == 1
-
-
-# ---------- (b) 乐观锁：并发 PATCH 基于同一旧版本号 ----------
 
 
 async def test_concurrent_patch_same_version_one_conflict(
@@ -184,12 +172,8 @@ async def test_concurrent_patch_same_version_one_conflict(
     loser = r1 if r1.status_code == 409 else r2
     assert loser.json()["code"] == "WORK_ITEM_VERSION_CONFLICT"
 
-    # 版本号只推进一次
     row = await _get_work_item_row(item["id"])
     assert row.version == 3
-
-
-# ---------- (c) Idempotency-Key：并发重复创建只生效一次 ----------
 
 
 async def test_concurrent_same_idempotency_key_creates_one_record(
@@ -213,10 +197,8 @@ async def test_concurrent_same_idempotency_key_creates_one_record(
 
     assert r1.status_code == 201, r1.text
     assert r2.status_code == 201, r2.text
-    # 两个响应指向同一资源（后到请求重放首次结果）
     assert r2.json()["id"] == r1.json()["id"]
 
-    # 业务表与幂等表都只有一条记录
     async with async_session_factory() as session:
         item_count = (
             await session.execute(select(func.count()).select_from(WorkItem))

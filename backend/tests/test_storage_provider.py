@@ -1,4 +1,4 @@
-"""StorageProvider 单元测试（T4.1 验收，第 14 章）。
+"""StorageProvider 单元测试。
 
 通过 StorageProvider 接口注入 LocalStorageProvider，验证写入/读取/删除/存在性；
 以及 storage_key 路径穿越防护与 stage/commit/discard 流程。
@@ -44,7 +44,6 @@ async def test_iter_chunks_streams_content(provider: StorageProvider) -> None:
 
 
 async def test_stage_commit_atomic_and_discard(provider: StorageProvider, tmp_path: Path) -> None:
-    # commit：暂存内容原子落位，暂存目录无残留
     staged = await provider.stage()
     await staged.write(b"part-1")
     await staged.write(b"part-2")
@@ -52,7 +51,6 @@ async def test_stage_commit_atomic_and_discard(provider: StorageProvider, tmp_pa
     assert await provider.load("ef/final.txt") == b"part-1part-2"
     assert list((tmp_path / ".tmp").iterdir()) == []
 
-    # discard：校验失败场景清理暂存
     staged2 = await provider.stage()
     await staged2.write(b"junk")
     await provider.discard(staged2)

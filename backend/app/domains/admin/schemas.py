@@ -1,8 +1,8 @@
-"""管理控制台接口模型（ticket 10）。
+"""管理控制台接口模型。
 
 管理接口只暴露平台管理所需的最小字段：
-- 项目摘要含负责人（leader 成员）摘要，不含任何业务明细；
-- 账号只含用户名、启用/管理员标记，绝不包含密码哈希、令牌（16 节）。
+- 项目摘要仅含 `leader` 成员摘要，不含业务明细；
+- 账号信息不包含密码哈希或令牌。
 """
 
 import uuid
@@ -14,7 +14,7 @@ from app.domains.identity.schemas import UserOut
 
 
 class LeaderBrief(BaseModel):
-    """项目负责人（leader 成员）摘要：供管理控制台展示项目归属人。"""
+    """项目负责人摘要。"""
 
     id: uuid.UUID
     user_id: uuid.UUID
@@ -23,11 +23,9 @@ class LeaderBrief(BaseModel):
 
 
 class AdminProjectOut(BaseModel):
-    """项目摘要（管理控制台项目列表）。
+    """项目摘要。
 
-    leader = 首个负责人成员（按加入时间）；项目尚无负责人时为 null。
-    创建项目即指定唯一负责人，故用单数字段；历史/后续若新增负责人，
-    前端仍以首个展示（管理控制台"负责人"列）。
+    `leader` 为按加入时间排序的首位负责人成员；项目没有负责人时为 `None`。
     """
 
     id: uuid.UUID
@@ -39,9 +37,9 @@ class AdminProjectOut(BaseModel):
 
 
 class ProjectCreateIn(BaseModel):
-    """admin 创建项目：必须指定负责人（成为项目的 leader 成员）。
+    """全局管理员创建项目时必须指定 `leader` 成员。
 
-    负责人只能是普通用户（全局管理员不参与项目业务，16 节）。
+    负责人只能是参与项目业务的普通用户。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -52,7 +50,7 @@ class ProjectCreateIn(BaseModel):
 
 
 class AdminProjectLeaderIn(BaseModel):
-    """admin 变更项目负责人：目标账号（每项目仅一名负责人）。"""
+    """全局管理员变更项目唯一负责人。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -60,7 +58,7 @@ class AdminProjectLeaderIn(BaseModel):
 
 
 class AdminUserCreateIn(BaseModel):
-    """admin 创建账号（建号收敛到 admin；16 节不开放公开注册）。"""
+    """由全局管理员创建账号，系统不开放公开注册。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -75,7 +73,7 @@ class AdminUserCreatedOut(UserOut):
 
 
 class AdminUserUpdateIn(BaseModel):
-    """账号管理：启用/禁用（is_active 联动登录与项目业务访问）。"""
+    """账号启停状态 `is_active` 同时控制登录和项目业务访问。"""
 
     model_config = ConfigDict(extra="forbid")
 

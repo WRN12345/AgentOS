@@ -1,8 +1,8 @@
-"""管理控制台应用服务（ticket 10）。
+"""管理控制台应用服务。
 
 管理动作是全局平台操作：创建项目时同步建立负责人成员身份，
-账号启停联动 users.is_active（禁用即无法登录与访问业务，16 节）。
-审计事件与业务写入同事务（原则 5）。
+账号启停联动 `users.is_active`，禁用后无法登录或访问业务。
+审计事件与对应业务变更在同一事务内提交。
 """
 
 import uuid
@@ -29,10 +29,7 @@ logger = setup_logging("backend")
 async def _require_eligible_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> User:
-    """校验目标账号可作为项目负责人：存在、非全局管理员、启用中。
-
-    全局管理员不参与项目业务（16 节），负责人必须是普通启用用户。
-    """
+    """要求目标账号存在、已启用且不是全局管理员。"""
     user = await session.get(User, user_id)
     if user is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "账号不存在")
@@ -48,10 +45,7 @@ async def _require_eligible_user(
 
 
 async def list_projects(session: AsyncSession) -> list[AdminProjectOut]:
-    """全部项目及各自负责人摘要（按创建时间升序）。
-
-    leader = 每个项目下加入最早的 role=leader 成员（管理控制台"负责人"列）。
-    """
+    """按创建时间升序返回项目及其最早加入的 `leader` 成员。"""
     projects = (
         await session.execute(select(Project).order_by(Project.created_at))
     ).scalars().all()
@@ -59,7 +53,7 @@ async def list_projects(session: AsyncSession) -> list[AdminProjectOut]:
     if not projects:
         return []
 
-    # 一次取全部 leader 成员，取每个项目加入最早的作为负责人
+    # 批量加载后按既定顺序保留每个项目最早加入的 `leader`，避免逐项目查询。
     leaders_stmt = (
         select(ProjectMember)
         .where(ProjectMember.role == ROLE_LEADER)
@@ -108,10 +102,9 @@ async def list_projects(session: AsyncSession) -> list[AdminProjectOut]:
 async def create_project(
     session: AsyncSession, admin: User, payload: ProjectCreateIn
 ) -> AdminProjectOut:
-    """admin 创建项目并指定负责人：同一事务内建项目 + 负责人成员 + 审计。
+    """在同一事务内创建项目、`leader` 成员和审计记录。
 
-    负责人只能是普通用户（全局管理员不参与项目业务，16 节）；
-    指定已禁用账号 → 400。
+    负责人必须是已启用的普通用户。
     """
     owner = await _require_eligible_user(session, payload.owner_user_id)
 
@@ -200,7 +193,7 @@ async def update_user(
 async def create_account(
     session: AsyncSession, admin: User, payload: AdminUserCreateIn
 ) -> tuple[User, str]:
-    """admin 创建全局账号（建号收敛到 admin，16 节不开放公开注册）。
+    """由全局管理员创建账号，系统不开放公开注册。
 
     用户名全局唯一：重名 → 409（跨项目同名也在此拦截）。初始密码仅响应返回一次。
     """
@@ -229,18 +222,17 @@ async def create_account(
 async def update_project_leader(
     session: AsyncSession, admin: User, project_id: uuid.UUID, user_id: uuid.UUID
 ) -> AdminProjectOut:
-    """admin 变更项目负责人（每项目仅一名负责人）。
+    """由全局管理员变更项目唯一负责人。
 
-    - 目标账号须存在、非全局管理员、处于启用状态；
-    - 目标若已为本项目成员则提升为 leader，否则直接建为 leader 成员；
-    - 现任负责人降为「成员」（保留成员资格）。
+    目标账号必须存在、已启用且不是全局管理员。已有项目成员会提升为 `leader`，
+    否则创建对应成员；原负责人降为普通成员并保留成员资格。
     """
     project = await session.get(Project, project_id)
     if project is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
     target = await _require_eligible_user(session, user_id)
 
-    # 现任负责人全部降为成员（数据库级仅保留一条 leader，此处收敛历史多负责人）
+    # 将历史遗留的多个 `leader` 一并降级，确保最终只有目标账号担任负责人。
     leaders = (
         await session.execute(
             select(ProjectMember).where(
@@ -253,7 +245,6 @@ async def update_project_leader(
         if lm.user_id != target.id:
             lm.role = ROLE_MEMBER
 
-    # 目标升/建为负责人
     target_member = (
         await session.execute(
             select(ProjectMember).where(

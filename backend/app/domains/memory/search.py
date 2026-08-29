@@ -1,11 +1,7 @@
-"""记忆检索权限层（设计文档第 12 节）：Agent 与问答页面共用的唯一检索入口。
+"""`Agent` 与问答接口共用的记忆检索权限层。
 
-规则：
-- 项目在职成员可检索本项目；跨项目访问返回 404（不暴露存在性，多项目规约）；
-- 全局 admin 只读可查任意项目（监督审计），不依赖项目成员身份；
-- 调用方标识 caller（leader_query / agent_assignment / member_qa）贯穿到检索层，
-  成员档案的跨项目放行规则（16.12，M3.9）依此判定——普通成员问答不命中
-  他项目无关人员档案。
+有效成员只能检索本项目，跨项目访问按不存在处理；全局管理员可以只读检索任意项目。
+`caller` 决定是否允许跨项目读取成员档案，普通成员问答不会命中档案。
 """
 
 import uuid
@@ -16,7 +12,7 @@ from app.core.errors import ApiException, ErrorCodes
 from app.domains.memory.retriever import MemoryRetriever, RetrievalResult
 from app.domains.project.models import ProjectMember
 
-#: 检索调用方标识（16.12）：档案跨项目放行依此判定
+#: 调用方标识是成员档案跨项目放行的安全边界
 CALLER_LEADER_QUERY = "leader_query"
 CALLER_AGENT_ASSIGNMENT = "agent_assignment"
 CALLER_MEMBER_QA = "member_qa"
@@ -35,18 +31,17 @@ async def search_memory(
     limit: int | None = None,
     max_distance: float | None = None,
 ) -> list[RetrievalResult]:
-    """带权限校验的检索：项目成员限本项目，全局 admin 只读任意项目。
+    """执行带权限校验的记忆检索。
 
-    - member 为 None 且非 admin → 404；member 与 project_id 不匹配/已停用 → 404；
-    - caller 必须是 CALLER_TYPES 之一（档案放行规则的判定依据，M3.9）；
-    - 例外：caller=agent_assignment 是 Agent 运行时的内部调用（M6.1），无成员身份，
-      项目上下文由 run.project_id 服务端确立——HTTP 路径已在路由层拒绝该标识（M2.10）。
+    `member` 缺失、停用或项目不匹配时按项目不存在处理，全局管理员除外。
+    `agent_assignment` 仅用于内部运行，其项目上下文必须由服务端运行记录建立，
+    `HTTP` 路径不得接受该调用方标识。
     """
     if caller not in CALLER_TYPES:
         raise ValueError(f"未知检索调用方: {caller}")
 
     if caller == CALLER_AGENT_ASSIGNMENT:
-        # Agent 内部调用：信任锚是 run 的项目归属，不做成员/admin 校验
+        # 内部 `Agent` 调用信任服务端运行记录中的项目归属
         pass
     elif member is not None:
         if not member.is_active or member.project_id != project_id:
@@ -54,9 +49,7 @@ async def search_memory(
     elif not is_admin:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "项目不存在")
 
-    # 档案跨项目放行（16.12，M3.9）：仅 leader_query / agent_assignment 两个场景
-    # 可命中 project_id 为 NULL 的 profile 块；member_qa 不命中任何档案
-    # （普通成员问答不命中他项目无关人员档案）。
+    # 只有负责人查询和内部分配可以读取不绑定项目的成员档案
     allow_profiles = caller in (CALLER_LEADER_QUERY, CALLER_AGENT_ASSIGNMENT)
     if not allow_profiles and source_types and "profile" in source_types:
         source_types = [t for t in source_types if t != "profile"]

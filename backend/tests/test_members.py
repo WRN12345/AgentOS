@@ -1,4 +1,4 @@
-"""成员与能力管理集成测试（T2.3 验收，6.1、6.2、12.2、16 节）。
+"""成员与能力管理集成测试。
 
 2026-08-17 规则调整：建号收敛到 admin（admin 控制台建号），
 POST /members 仅「添加已有账号」，固定为成员角色；角色由 admin 指定/变更。
@@ -135,7 +135,6 @@ async def test_capability_submit_and_confirm_flow(
     member_id = alice.id
     member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
 
-    # 成员填报自己的能力 → confirmed 全部 False
     caps = {"capabilities": [{"tag": "RAG", "proficiency": 4}, {"tag": "FastAPI", "proficiency": 3}]}
     resp = await client.put(f"/api/v1/members/{member_id}/capabilities", json=caps, headers=member_headers)
     assert resp.status_code == 200
@@ -143,7 +142,6 @@ async def test_capability_submit_and_confirm_flow(
     assert {c["tag"] for c in body["capabilities"]} == {"RAG", "FastAPI"}
     assert all(c["confirmed"] is False for c in body["capabilities"])
 
-    # 成员不能确认（confirm=true → 403），也不能改别人的能力
     forbidden = await client.put(
         f"/api/v1/members/{member_id}/capabilities",
         json={**caps, "confirm": True},
@@ -155,7 +153,6 @@ async def test_capability_submit_and_confirm_flow(
     )
     assert other.status_code == 403
 
-    # 负责人确认 → confirmed 翻转 + 记录确认人
     confirmed = await client.put(
         f"/api/v1/members/{member_id}/capabilities",
         json={**caps, "confirm": True},
@@ -167,7 +164,6 @@ async def test_capability_submit_and_confirm_flow(
         assert c["confirmed_by_member_id"] == str(leader.id)
         assert c["confirmed_at"] is not None
 
-    # 成员再次修改 → confirmed 复位为未确认（6.2 节）
     caps2 = {"capabilities": [{"tag": "RAG", "proficiency": 5}]}
     resub = await client.put(
         f"/api/v1/members/{member_id}/capabilities", json=caps2, headers=member_headers
@@ -175,7 +171,6 @@ async def test_capability_submit_and_confirm_flow(
     assert resub.status_code == 200
     assert resub.json()["capabilities"][0]["confirmed"] is False
 
-    # 审计留痕：提交与确认事件均可查
     async with async_session_factory() as session:
         events = (
             (
@@ -214,14 +209,12 @@ async def test_leader_updates_and_disables_member_project_local(
     assert patch.json()["display_name"] == "爱丽丝"
     assert patch.json()["weekly_available_hours"] == 20
 
-    # 普通成员不能 PATCH（先验，此时 alice 仍启用）
     member_headers = await auth_headers(client, "alice", MEMBER_PW, project_id=str(project.id))
     resp = await client.patch(
         f"/api/v1/members/{member_id}", json={"display_name": "x"}, headers=member_headers
     )
     assert resp.status_code == 403
 
-    # 项目内禁用 → 仅停本项目：账号可登录（不联动 users.is_active），本项目业务 403
     disabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": False}, headers=leader_headers
     )
@@ -235,7 +228,6 @@ async def test_leader_updates_and_disables_member_project_local(
     assert blocked.status_code == 403
     assert blocked.json()["code"] == "NOT_PROJECT_MEMBER"
 
-    # 启用 → 本项目访问恢复
     enabled = await client.patch(
         f"/api/v1/members/{member_id}", json={"is_active": True}, headers=leader_headers
     )
@@ -244,7 +236,6 @@ async def test_leader_updates_and_disables_member_project_local(
     restored = await client.get("/api/v1/members", headers=restored_headers)
     assert restored.status_code == 200
 
-    # 审计：member.updated 事件含前后摘要
     async with async_session_factory() as session:
         events = (
             (await session.execute(select(AuditEvent).where(AuditEvent.action == "member.updated")))

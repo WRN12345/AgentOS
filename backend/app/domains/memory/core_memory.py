@@ -1,12 +1,8 @@
-"""核心记忆条目服务（设计文档第 8 节，M4.2）。
+"""项目核心记忆条目服务。
 
-- 负责人手写条目（含新项目"种子记忆"，16.11）立即生效：proposed_by = confirmed_by = 负责人；
-- 项目成员可读全部条目（含已作废，供追溯），可见提议者/确认者/生效时间；
-- 容量预算：单项目生效条目合计约 4000 字符，超限拒绝并提示走整合精简（第 8 节）；
-  预算逼大家只留真正重要的，而不是什么都往里堆；
-- scope 本期固定 project，organization 为组织级预留（表结构已就位，接口层不接受）。
-
-写操作（手写/作废）纳入审计域（16.10）。
+负责人手写条目会立即生效，项目成员可读取包含已作废条目在内的完整历史。
+每个项目的生效内容受字符预算约束，并发写入通过锁定项目行串行校验。
+接口只接受 `project` 范围，`organization` 仅为数据模型预留。写操作均记录审计事件。
 """
 
 import uuid
@@ -37,7 +33,7 @@ logger = setup_logging("backend")
 async def list_entries(
     session: AsyncSession, *, project_id: uuid.UUID
 ) -> list[CoreMemoryEntry]:
-    """项目全部核心记忆条目，生效在前（status 字典序 active < deprecated），按生效时间倒序。"""
+    """返回项目全部条目，生效条目优先，同状态按生效时间倒序。"""
     stmt = (
         select(CoreMemoryEntry)
         .where(CoreMemoryEntry.project_id == project_id)
@@ -49,7 +45,7 @@ async def list_entries(
 async def budget_usage(
     session: AsyncSession, *, project_id: uuid.UUID
 ) -> tuple[int, int]:
-    """核心记忆容量占用：返回（生效条目合计字符数，预算上限）。供 M4.6 容量快满判断复用。"""
+    """返回生效条目的字符数总和及预算上限。"""
     stmt = select(CoreMemoryEntry.content).where(
         CoreMemoryEntry.project_id == project_id,
         CoreMemoryEntry.status == "active",
@@ -61,11 +57,10 @@ async def budget_usage(
 async def ensure_budget(
     session: AsyncSession, *, project_id: uuid.UUID, additional: int
 ) -> None:
-    """容量预算闸门：生效条目合计 + additional 超预算则 400，提示走整合精简（第 8 节）。
+    """校验加入 `additional` 字符后的核心记忆容量。
 
-    手写创建与 Agent 提议确认（M4.4，update 时 additional 可为负）共用本闸门。
-    锁定项目行而非当前条目集合：空集合也必须受锁保护，才能防止并发插入都
-    基于同一旧使用量通过校验。
+    手写创建和 `Agent` 提议确认共用此闸门，替换内容时 `additional` 可以为负。
+    锁定项目行而不是条目集合，确保空集合下的并发插入也不能基于同一旧用量同时通过。
     """
     locked_project_id = await session.scalar(
         select(Project.id).where(Project.id == project_id).with_for_update()
@@ -85,7 +80,7 @@ async def ensure_budget(
 async def budget_nearly_full(
     session: AsyncSession, *, project_id: uuid.UUID
 ) -> tuple[bool, int, int]:
-    """容量快满判断（M4.6，供 M6.7 触发整合精简提议）：返回（是否快满, 已用, 预算）。"""
+    """返回容量是否接近上限、已用字符数和预算。"""
     used, budget = await budget_usage(session, project_id=project_id)
     return used >= budget * CORE_MEMORY_NEAR_FULL_RATIO, used, budget
 
@@ -93,7 +88,7 @@ async def budget_nearly_full(
 async def entries_to_out(
     session: AsyncSession, entries: list[CoreMemoryEntry]
 ) -> list[CoreMemoryEntryOut]:
-    """条目序列化：批量加载成员显示名；proposed_by 为 None 表示 Agent 提议（第 8 节）。"""
+    """批量加载成员显示名并序列化条目；提议者为空表示由 `Agent` 提议。"""
     member_ids = {
         mid
         for e in entries
@@ -132,7 +127,7 @@ async def entries_to_out(
 async def enqueue_core_memory_index_id(
     project_id: uuid.UUID, entry_id: uuid.UUID
 ) -> None:
-    """投递核心记忆重建/失效任务；worker 执行时读取条目当前状态。"""
+    """投递核心记忆索引任务；`worker` 执行时读取条目的当前状态。"""
     redis_client: redis.Redis = create_redis_client()
     try:
         await enqueue(
@@ -166,9 +161,9 @@ async def invalidate_core_memory_index(
 async def create_entry(
     session: AsyncSession, actor: ProjectMember, *, content: str
 ) -> CoreMemoryEntry:
-    """负责人手写条目（种子记忆，16.11），立即生效。
+    """由负责人手写并立即生效一条核心记忆。
 
-    scope 固定 project（组织级预留，本期接口层不接受）；超容量预算拒绝并提示走整合。
+    `scope` 固定为 `project`；超出容量预算时拒绝写入。
     """
     require_leader(actor)
     content = content.strip()
@@ -204,7 +199,10 @@ async def create_entry(
 async def deprecate_entry(
     session: AsyncSession, actor: ProjectMember, *, entry_id: uuid.UUID
 ) -> CoreMemoryEntry:
-    """负责人作废条目：保留供追溯，不再注入 Agent 上下文；跨项目访问按 404 处理。"""
+    """作废条目并保留追溯记录，不再注入 `Agent` 上下文。
+
+    跨项目访问按条目不存在处理。
+    """
     require_leader(actor)
     entry = await session.get(CoreMemoryEntry, entry_id)
     if entry is None or entry.project_id != actor.project_id:

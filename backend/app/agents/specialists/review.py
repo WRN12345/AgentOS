@@ -1,12 +1,8 @@
-"""Deliverable Review Agent：交付物初审，生成负责人审核清单（10.1 节，T5.5）。
+"""Deliverable Review Agent：初审交付物并生成负责人审核清单。
 
-触发方式：工作项提交审核（submit → IN_REVIEW）后由 work_items 服务以
-trigger_source="event" 投递（尽力而为，失败不影响主流程，17.3 节）；
-也支持人工触发（POST /work-items/{id}/agent-analysis）。
-最小上下文（16 节）：验收标准 + 最新交付物版本信息——文本正文 / 文件元数据
-（不读文件原文）/ Git 链接文本，经 list_deliverable_metadata 只读加载。
-content 平铺 checklist（checkpoint/verdict/evidence）；只生成建议，
-不触碰 reviews 等正式业务状态（10.3 节）。
+工作项进入 IN_REVIEW 后以 event 方式尽力投递，失败不影响提交主流程；也支持人工触发。
+仅加载验收标准和最新交付物的必要信息：文本或 Git 链接可读取正文，文件只读取元数据。
+输出 checklist 建议，不修改 reviews 等正式业务状态。
 """
 
 import uuid
@@ -17,7 +13,7 @@ from app.agents.specialists.common import build_output, call_model_json, context
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "deliverable_review"

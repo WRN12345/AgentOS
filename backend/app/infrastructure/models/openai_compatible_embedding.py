@@ -1,16 +1,12 @@
 """OpenAI 兼容 EmbeddingProvider（EMBEDDING_PROVIDER=openai_compatible）。
 
-用于智谱 bigmodel（embedding-3）等 OpenAI 兼容的云端 embedding 服务：
-POST {EMBEDDING_BASE_URL}/embeddings，Bearer Key 鉴权，OpenAI 响应格式
-（data[].embedding/index）。请求携带固定的 1024 维 dimensions，与
-memory_chunks 的 PostgreSQL vector 列保持一致。
+用于智谱 bigmodel 等 OpenAI 兼容云端 embedding 服务，通过 Bearer Key 鉴权并按
+OpenAI 格式读取 `data[].embedding/index`。请求维度必须与 `memory_chunks` 的
+PostgreSQL vector 列一致。
 
-- 数据外发提示（16 节）：项目文档/档案/历史内容将发送至该第三方服务，
-  部署方需自行评估；降级语义与 Ollama 实现一致（16.5，上层据此转无记忆模式）；
-- 统一错误封装：超时 → ModelTimeoutError，连接失败、非 2xx 或非法响应 →
-  ModelUnavailableError；
-- 返回维度与 settings.embedding_dimensions 不一致时视为服务异常
-  （多半是 EMBEDDING_DIMENSIONS 配错）。
+项目文档、档案和历史内容会发送给第三方，部署方必须评估数据外发风险。超时转换为
+`ModelTimeoutError`，连接失败、非 2xx 或非法响应转换为 `ModelUnavailableError`。
+返回维度不一致视为服务或配置异常。
 """
 
 import asyncio
@@ -20,7 +16,7 @@ import httpx
 from app.infrastructure.models.embedding import EmbeddingProvider
 from app.infrastructure.models.errors import ModelTimeoutError, ModelUnavailableError
 
-# 与 Ollama 实现相同的线性退避基数（秒）
+# 与 Ollama 实现保持一致的线性退避基数，单位为秒。
 _RETRY_BACKOFF_SECONDS = 0.5
 
 
@@ -50,7 +46,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         self.dimensions = dimensions
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
-        # transport 仅供测试注入 MockTransport；生产为 None（httpx 默认网络传输）
+        # `transport` 仅供测试注入 MockTransport；生产环境使用 httpx 默认传输。
         self._transport = transport
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -74,7 +70,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                     )
                 try:
                     data = resp.json()["data"]
-                    # OpenAI 格式：按 index 排序保证与输入顺序一致
+                    # 按 OpenAI 响应中的 `index` 排序，保持与输入顺序一致。
                     embeddings = [
                         item["embedding"]
                         for item in sorted(data, key=lambda item: item["index"])
@@ -99,7 +95,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             except httpx.TransportError as exc:
                 last_error = ModelUnavailableError(f"embedding 服务不可达: {exc}")
                 last_error.__cause__ = exc
-            # 超时/连接失败按 max_retries 重试；非 2xx 与维度不符（主动抛出）不重试
+            # 仅超时和连接失败会进入此重试路径；响应或维度错误直接向上抛出。
             if attempt < self.max_retries:
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
         assert last_error is not None

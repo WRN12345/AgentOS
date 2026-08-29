@@ -1,8 +1,8 @@
 """基于 Redis 的任务队列：List（LPUSH 入队、BRPOP 出队）+ ZSET 延迟投递。
 
 供 API 进程投递后台任务（如 Agent 运行、到期提醒），Worker 进程消费。
-延迟任务（T5.6 Agent 失败指数退避重试）进 ZSET（score=到点时间戳），
-worker 每轮循环先把到点任务搬回即时 List 再 BRPOP。
+延迟任务进入 ZSET，以到点时间戳为 score；Worker 每轮先把到期任务搬回即时 List，
+再通过 BRPOP 消费。
 """
 
 import json
@@ -53,7 +53,7 @@ async def enqueue_delayed(
     *,
     delay_seconds: float,
 ) -> dict[str, Any]:
-    """延迟投递：任务进 ZSET，到点后由 worker 的 promote_due_delayed 搬入即时队列。"""
+    """把任务写入 ZSET，到期后由 Worker 搬入即时队列。"""
     task = make_task(task_type, payload)
     await cast(
         Awaitable[int],
@@ -63,7 +63,7 @@ async def enqueue_delayed(
 
 
 async def promote_due_delayed(client: redis.Redis, *, now: float | None = None) -> int:
-    """把到点的延迟任务从 ZSET 搬入即时 List，返回搬移数量（worker 每轮循环调用）。
+    """把到期的延迟任务从 ZSET 搬入即时 List，并返回搬移数量。
 
     BRPOP 阻塞期间到点的任务最多晚一个 dequeue 超时周期被消费，对秒级退避
     间隔无实际影响。单 worker 部署下 ZSET→List 搬移无竞争。

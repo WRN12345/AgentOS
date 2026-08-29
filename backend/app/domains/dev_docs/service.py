@@ -1,19 +1,17 @@
-"""开发文档应用服务与权限策略（设计文档 2026-07-30 §3/§4.2，16 节）。
+"""开发文档应用服务与权限策略。
 
-权限规则（每个用例显式校验）：
-- 撰写/编辑（PUT）、提交审核（submit）：仅工作项当前主执行人；
-- 确认（confirm）/ 打回（return）/ 豁免（waive）：仅项目负责人（路由层
-  get_current_leader）；
-- 查询：任何项目成员（原则 6 透明）。
+每个用例显式校验权限：
+- 撰写、编辑和 `submit` 仅工作项当前主执行人可执行；
+- `confirm`、`return` 和 `waive` 仅通过 `get_current_leader` 校验的负责人可执行；
+- 项目成员可查询文档。
 
 核心约束：
-- 每个工作项一份文档（work_item_id 唯一）；DRAFT/RETURNED 可编辑，
-  SUBMITTED/CONFIRMED 只读（状态机裁决，与转派/DDL 同一模式）；
-- submit 要求内容非空，doc_version +1，并在业务事务 commit 后触发
-  dev_doc_review Agent 初审（trigger_source="event"，尽力而为，失败不影响
-  已完成的提交，17.3 节）；
-- 豁免（waive）为独立标记：负责人对纯管理类任务免除文档要求，写审计；
-- 每次状态/内容变更与同事务写审计事件（原则 5）。
+- 每个工作项一份文档，由 `work_item_id` 唯一约束保证；`DRAFT` 和 `RETURNED`
+  可编辑，`SUBMITTED` 和 `CONFIRMED` 只读；
+- `submit` 要求内容非空并递增 `doc_version`，业务事务 `commit` 后尽力触发
+  `dev_doc_review` Agent 初审，投递失败不影响已完成的提交；
+- `waive` 是独立标记：负责人可免除文档要求，但不改变状态机；
+- 每次状态或内容变更与审计事件在同一事务内写入。
 """
 
 import uuid
@@ -43,13 +41,12 @@ from app.infrastructure.cache.redis import create_redis_client
 logger = setup_logging("backend")
 
 
-# ---------- 查询与序列化 ----------
 
 
 async def get_doc(
     session: AsyncSession, work_item_id: uuid.UUID, *, for_update: bool = False
 ) -> DevDoc | None:
-    """按工作项取开发文档（无文档返回 None；写路径 for_update 持行锁，17.2 节）。"""
+    """按工作项获取文档；写路径通过 `for_update` 持有行锁。"""
     stmt = select(DevDoc).where(DevDoc.work_item_id == work_item_id)
     if for_update:
         stmt = stmt.with_for_update()
@@ -57,7 +54,7 @@ async def get_doc(
 
 
 def _check_version(doc: DevDoc, version: int) -> None:
-    """乐观锁校验：版本不匹配返回 409（17.2 节）。"""
+    """校验乐观锁版本，不匹配时返回 `409`。"""
     if doc.version != version:
         raise ApiException(
             409,
@@ -75,7 +72,7 @@ def _require_assignee(actor: ProjectMember, item: WorkItem) -> None:
 async def _latest_review_suggestion_id(
     session: AsyncSession, work_item_id: uuid.UUID
 ) -> uuid.UUID | None:
-    """最近一次 dev_doc_review 初审建议 ID（LLM 不可用时为 None，降级不阻塞）。"""
+    """返回最近一次 `dev_doc_review` 建议 ID；LLM 不可用时返回 `None`。"""
     return (
         await session.execute(
             select(AgentSuggestion.id)
@@ -133,7 +130,7 @@ async def _to_out(session: AsyncSession, doc: DevDoc) -> DevDocOut:
 async def get_dev_doc_for_work_item(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID
 ) -> DevDocOut:
-    """任务相关成员可读（含最近一次 AI 初审建议关联）；无文档 404。"""
+    """向任务相关成员返回文档及最近一次 AI 初审建议；无文档时返回 `404`。"""
     await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id)
     if doc is None:
@@ -141,13 +138,12 @@ async def get_dev_doc_for_work_item(
     return await _to_out(session, doc)
 
 
-# ---------- 写命令 ----------
 
 
 async def upsert_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, payload: DevDocUpdateIn
 ) -> DevDocOut:
-    """撰写/编辑草稿（upsert）：仅主执行人；DRAFT/RETURNED 可编辑（乐观锁）。"""
+    """由主执行人以 `upsert` 方式编辑 `DRAFT` 或 `RETURNED` 文档。"""
     item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     _require_assignee(actor, item)
     doc = await get_doc(session, item_id, for_update=True)
@@ -199,9 +195,9 @@ async def upsert_dev_doc(
 async def submit_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int
 ) -> DevDocOut:
-    """提交审核：仅主执行人；内容非空；DRAFT/RETURNED → SUBMITTED，doc_version +1。
+    """由主执行人提交非空文档，并递增 `doc_version`。
 
-    业务事务 commit 后触发 dev_doc_review Agent 初审（event 触发，尽力而为）。
+    业务事务 `commit` 后尽力触发 `dev_doc_review` Agent 初审。
     """
     item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     _require_assignee(actor, item)
@@ -243,7 +239,7 @@ async def submit_dev_doc(
 async def confirm_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int
 ) -> DevDocOut:
-    """确认通过：仅负责人；SUBMITTED → CONFIRMED（记录确认人/时间，写审计）。"""
+    """由负责人确认文档，并记录确认人、时间和审计事件。"""
     await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
@@ -278,7 +274,7 @@ async def return_dev_doc(
     version: int,
     review_note: str,
 ) -> DevDocOut:
-    """打回：仅负责人；SUBMITTED → RETURNED，附理由（写审计），成员修改后可重交。"""
+    """由负责人附理由打回并写审计，允许成员修改后重新提交。"""
     await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
@@ -308,11 +304,11 @@ async def return_dev_doc(
 async def waive_dev_doc(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, version: int | None
 ) -> DevDocOut:
-    """豁免文档要求：仅负责人；独立标记不改变状态机（写审计）。"""
+    """由负责人豁免文档要求；独立标记不改变状态机，并写入审计。"""
     item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
     doc = await get_doc(session, item_id, for_update=True)
     if doc is None:
-        # 无文档任务直接豁免：创建占位行（尚无撰写人）
+        # 无文档时创建没有撰写人的占位记录，以持久化豁免状态。
         doc = DevDoc(work_item_id=item.id)
         session.add(doc)
         await session.flush()
@@ -341,7 +337,7 @@ async def waive_dev_doc(
 
 
 async def _dispatch_dev_doc_review(session: AsyncSession, item: WorkItem) -> None:
-    """投递 dev_doc_review 的 agent.run（trigger_source="event"），失败只记日志。"""
+    """投递事件触发的 `dev_doc_review` Agent 运行；失败时仅记录日志。"""
     redis_client = create_redis_client()
     try:
         run = await request_agent_analysis(
@@ -353,7 +349,7 @@ async def _dispatch_dev_doc_review(session: AsyncSession, item: WorkItem) -> Non
             work_item_id=item.id,
         )
         logger.info("dev doc review dispatched: run_id=%s work_item_id=%s", run.id, item.id)
-    except Exception:  # noqa: BLE001 - Agent 投递失败不拖垮已完成的提交（17.3 节）
+    except Exception:  # noqa: BLE001 - Agent 投递失败不能影响已完成的提交
         logger.warning(
             "dev doc review dispatch failed, submit unaffected: work_item_id=%s", item.id
         )

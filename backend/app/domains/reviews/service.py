@@ -1,13 +1,11 @@
-"""最终审核应用服务与权限策略（7.5、8.1、12.5、16 节）。
+"""最终审核应用服务与权限策略。
 
-- 仅项目负责人可审核（6.1 节）；工作项须处于 IN_REVIEW；
-- 三种结论（7.5 节）：
-  approve → IN_REVIEW → COMPLETED；request_changes → IN_REVIEW → IN_PROGRESS
-  （必须填反馈）；reject → 拒绝当前交付但保持工作项继续执行（状态保持 IN_REVIEW）；
-- 同一事务写入：reviews 记录 + work_items 状态/version 更新 + 审计事件 +
-  通知主执行人（16 节：反馈正文不进通知）；commit 成功后发布 SSE；
-- approve 完成后异步投递工作项结论索引任务（M5.2，best-effort 不在事务内）；
-- 审核反馈可见性（16 节）：查询仅负责人与该工作项主执行人，其余 403。
+- 仅项目负责人可审核，且工作项必须处于 IN_REVIEW；
+- approve 将状态改为 COMPLETED，request_changes 将状态改为 IN_PROGRESS 且必须填写反馈，
+  reject 拒绝当前交付但保持 IN_REVIEW；
+- 审核记录、状态与 version、审计事件和通知在同一事务写入，commit 后发布 SSE；
+- 通知不含反馈正文，反馈仅对项目负责人与工作项主执行人可见；
+- 工作项完成后以 best-effort 方式异步投递结论索引和经验总结，不影响审核事务。
 """
 
 import uuid
@@ -33,14 +31,13 @@ from app.infrastructure.events import OutgoingEvent, publish_after_commit
 
 logger = setup_logging("backend")
 
-# 结论 → 工作项状态机命令；None 表示不改变状态（reject：保持继续执行，7.5 节）
+# None 表示 reject 不改变工作项状态
 _DECISION_COMMAND = {
     "approve": "complete",
     "request_changes": "request_changes",
     "reject": None,
 }
 
-# 结论 → 审计动作名 / 通知 type（复用同一命名）
 _DECISION_ACTION = {
     "approve": "review.approved",
     "request_changes": "review.changes_requested",
@@ -77,7 +74,7 @@ async def _to_out(session: AsyncSession, review: Review, work_item_status: str) 
 
 
 def _check_feedback_visible(actor: ProjectMember, item_assignee_id: uuid.UUID) -> None:
-    """反馈正文可见性（16 节）：仅负责人与该工作项主执行人。"""
+    """仅允许项目负责人与工作项主执行人查看反馈正文。"""
     if actor.role != ROLE_LEADER and actor.id != item_assignee_id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "审核反馈仅负责人与该工作项主执行人可见")
 
@@ -85,8 +82,8 @@ def _check_feedback_visible(actor: ProjectMember, item_assignee_id: uuid.UUID) -
 async def list_reviews(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID
 ) -> list[ReviewOut]:
-    """某工作项的审核记录（含反馈正文）：仅负责人与主执行人可见（16 节）。"""
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
+    """返回工作项审核记录；反馈正文仅对负责人与主执行人可见。"""
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权按不存在处理
     _check_feedback_visible(actor, item.assignee_id)
     reviews = list(
         (
@@ -108,10 +105,10 @@ async def list_reviews(
 async def create_review(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, payload: ReviewCreateIn
 ) -> ReviewOut:
-    """负责人最终审核（7.5 节）：状态推进 + reviews + 审计 + 通知，同一事务。"""
+    """由项目负责人审核，并在同一事务中记录状态、审核、审计和通知。"""
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可审核")
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
+    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权按不存在处理
     if item.status != WorkItemStatus.IN_REVIEW.value:
         raise ApiException(
             409,
@@ -129,7 +126,7 @@ async def create_review(
             {"deliverable_id": str(payload.deliverable_id)},
         )
 
-    # 状态推进（8.1 节）：approve/request_changes 走状态机；reject 保持 IN_REVIEW
+    # reject 不触发状态迁移，工作项保持 IN_REVIEW
     events: list[OutgoingEvent] = []
     before_status = item.status
     command = _DECISION_COMMAND[payload.decision]
@@ -155,7 +152,7 @@ async def create_review(
         "deliverable_version": deliverable.version,
     }
     if payload.feedback:
-        after["feedback"] = payload.feedback  # 反馈只进审计留痕，不进通知正文（16 节）
+        after["feedback"] = payload.feedback  # 反馈仅写入审计，不进入通知正文
     await record_event(
         session,
         actor_id=actor.user_id,
@@ -166,7 +163,7 @@ async def create_review(
         after=after,
     )
 
-    # 通知主执行人（同事务）：正文只含结论摘要，不含反馈（16 节）
+    # 通知与审核同事务写入，正文不含受限的反馈信息
     await notify(
         session,
         project_id=actor.project_id,
@@ -183,8 +180,7 @@ async def create_review(
     await session.commit()
     await publish_after_commit(events)
 
-    # M5.2/M5.3：审核通过（工作项完成）后异步投递结论索引与经验总结任务，
-    # 均为 best-effort、不在事务内，不拖慢主流程
+    # 派生任务采用 best-effort，不扩大审核事务，也不阻塞审核结果
     if item.status == WorkItemStatus.COMPLETED.value:
         await enqueue_work_item_conclusion_index(item)
         await enqueue_work_item_summary(item)

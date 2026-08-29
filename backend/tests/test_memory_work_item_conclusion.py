@@ -1,8 +1,8 @@
-"""工作项结论入索引测试（M5.2 验收，设计文档第 9 节）。
+"""已完成工作项结论的索引投递、文本生成与写入测试。
 
 - 审核通过（approve → COMPLETED）自动投递结论索引任务，不阻塞主流程；
 - 结论文本含做了什么（标题/描述/验收标准）、验收结果与评审意见（含反馈正文）；
-- 未完成的工作项不索引（15.4）；worker 端到端写块可检索。
+- 未完成的工作项不索引；worker 端到端写块可检索。
 """
 
 import json
@@ -63,7 +63,7 @@ async def test_approve_dispatches_conclusion_index_task(
 async def test_non_completing_decision_no_task(
     client: httpx.AsyncClient, project: Project, redis_client
 ) -> None:
-    """request_changes 回到执行中（未完成），不投递结论索引。"""
+    """要求修改使工作项回到执行中时不得投递结论索引。"""
     ctx = await _setup(client, project)
     item_id, deliverable_id = await _item_in_review(client, ctx)
 
@@ -74,7 +74,7 @@ async def test_non_completing_decision_no_task(
         {"deliverable_id": deliverable_id, "decision": "request_changes", "feedback": "要改"},
     )
     assert resp.status_code == 201, resp.text
-    # 队列里可能有 submit 触发的 deliverable_review 任务；断言无结论索引任务
+    # 队列可能包含交付评审任务，因此只排除工作项结论索引任务。
     queued = await redis_client.lrange(QUEUE_KEY, 0, -1)
     assert not [
         t

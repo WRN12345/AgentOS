@@ -1,13 +1,7 @@
-"""项目成员依赖项：把当前登录用户解析为项目成员，供权限策略使用。
+"""解析项目上下文，并提供项目成员与全局管理员的鉴权依赖。
 
-- get_current_member：从 X-Project-Id 请求头取出项目上下文，校验成员身份；
-- get_member_or_readonly_admin：在职成员，或全局 admin 只读查看（记忆只读接口）；
-- get_current_admin：校验 users.is_admin（全局角色，不绑定项目）；
-- get_current_leader：仅项目负责人；
-- get_current_leader_or_admin：负责人或全局管理员（只读管理视图，如审计查询）。
-
-多项目后，admin 升级为全局角色（users.is_admin），不再有项目成员记录。
-权限策略的其余部分集中在 domains/project/service.py（4.1 节）。
+项目上下文来自 `X-Project-Id`。全局管理员由 `users.is_admin` 标识，不要求存在
+`project_members` 记录；管理员绕过成员身份的依赖仅用于明确的只读或管理接口。
 """
 
 import uuid
@@ -24,10 +18,9 @@ from app.infrastructure.database.engine import get_session
 
 
 def project_id_from_request(request: Request) -> uuid.UUID:
-    """从 X-Project-Id 请求头解析项目上下文。
+    """从 `X-Project-Id` 请求头解析项目上下文。
 
-    - 缺失或空白 → 400（MISSING_PROJECT_ID）
-    - UUID 格式无效 → 400
+    请求头缺失、空白或不是合法 `UUID` 时返回 400。
     """
     project_id_str = request.headers.get("X-Project-Id", "").strip()
     if not project_id_str:
@@ -45,10 +38,9 @@ async def get_current_member(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProjectMember:
-    """解析当前用户在当前项目下的成员身份。
+    """解析当前用户在当前项目中的有效成员身份。
 
-    从 X-Project-Id 请求头读取项目上下文（缺失/无效 → 400）；
-    用户不是该项目成员或成员已禁用 → 403（NOT_PROJECT_MEMBER）。
+    项目上下文缺失或无效时返回 400；用户不是该项目成员或成员已停用时返回 403。
     """
     member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
     if member is None or not member.is_active:
@@ -61,11 +53,10 @@ async def get_member_or_readonly_admin(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> tuple[ProjectMember | None, bool]:
-    """在职成员或只读管理员：记忆只读接口的统一鉴权（成员可见 + admin 监督查看）。
+    """鉴权有效成员或具有监督读取权限的全局管理员。
 
-    返回 (member, is_admin)：在职成员原样返回；非成员/已禁用且非 admin → 403
-    （header 越权，多项目规约）；全局 admin 无成员身份，member 为 None、
-    is_admin 为 True，仅只读查看。
+    返回 `(member, is_admin)`。非成员或已停用用户若不是全局管理员则返回 403；
+    无成员身份的全局管理员返回 `(None, True)`，调用方只能将其用于只读查看。
     """
     member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
     if member is not None and member.is_active:
@@ -78,7 +69,7 @@ async def get_member_or_readonly_admin(
 async def get_current_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """校验当前用户是否为全局管理员（users.is_admin）。"""
+    """校验当前用户是否为全局管理员。"""
     if not current_user.is_admin:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅全局管理员可执行该操作")
     return current_user
@@ -87,7 +78,7 @@ async def get_current_admin(
 async def get_current_leader(
     member: ProjectMember = Depends(get_current_member),
 ) -> ProjectMember:
-    """仅项目负责人。"""
+    """校验当前成员是否为项目负责人。"""
     if member.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可执行该操作")
     return member
@@ -98,16 +89,13 @@ async def get_current_leader_or_admin(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """负责人或全局管理员（管理员可读管理视图，但不参与业务操作）。
+    """校验当前用户是否为项目负责人或全局管理员。
 
-    全局管理员直接放行（不依赖项目成员身份）；
-    非管理员须在当前项目下持有 leader 角色。
+    全局管理员无需项目成员身份；其他用户必须是当前项目的有效 `leader`。
     """
-    # 全局管理员：直接放行
     if current_user.is_admin:
         return current_user
 
-    # 非管理员：从 X-Project-Id 解析项目成员身份并校验 leader 角色
     member = await get_member_by_user(session, project_id_from_request(request), current_user.id)
     if member is None or not member.is_active or member.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或管理员可执行该操作")

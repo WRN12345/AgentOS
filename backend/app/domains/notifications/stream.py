@@ -1,19 +1,11 @@
-"""SSE 实时事件流（4.3、12.6 节，T3.6）。
+"""基于 `SSE` 的项目实时事件流。
 
-- `GET /events/stream`：`text/event-stream`，按成员专属 Redis 频道
-  （infrastructure/events）向客户端下发实时事件；
-- 认证：浏览器 EventSource 不能自定义请求头，支持 `?token=<access_token>`
-  查询参数（同时兼容 `Authorization: Bearer` 头，便于 curl 调试）；
-- 项目上下文：同样走 query `?project_id=<uuid>`（EventSource 不能带 header），
-  并以 `X-Project-Id` 头兜底（便于 curl 调试）；连接只收当前项目事件（4.3 节）；
-  校验规则与 get_current_member 一致（JWT 解析 → 用户有效且令牌版本匹配 →
-  项目成员有效）；
-- 帧格式：`id:` / `event:` / `data:` 三段；15s 无事件发 `: ping` 注释帧，
-  防反向代理空闲超时；
-- `Last-Event-ID`：仅接受、不补发（最小实现）——Redis Pub/Sub 无历史，
-  重连期间漏发由前端"收到任意事件即失效相关查询缓存"兜底；
-- 只读通道：所有写操作仍走可鉴权、可审计的 REST（4.3 节），
-  本端点不含任何写路径，也不引入 WebSocket。
+浏览器 `EventSource` 不能自定义请求头，因此令牌和项目 ID 优先从查询参数读取，
+并分别兼容 `Authorization` 与 `X-Project-Id` 请求头。连接只订阅当前成员的
+`Redis Pub/Sub` 频道，并在流运行期间持续复验账号和成员状态。
+
+`Last-Event-ID` 仅被接收而不会触发补发，因为 `Redis Pub/Sub` 不保存历史事件。
+此通道只读，所有写操作仍通过可鉴权、可审计的 `REST` 接口完成。
 """
 
 import json
@@ -47,8 +39,10 @@ AUTH_RECHECK_SECONDS = 5.0
 async def _resolve_member(
     request: Request, session: AsyncSession, token: str | None
 ) -> ProjectMember:
-    """解析 SSE 连接的成员身份：`?token=` 优先，Authorization 头兜底。
-    多项目后同时从 X-Project-Id 请求头读取项目上下文。
+    """解析 `SSE` 连接的用户和项目成员身份。
+
+    `token` 查询参数优先，`Authorization` 请求头作为回退；项目上下文优先取
+    `project_id` 查询参数，再回退到 `X-Project-Id` 请求头。
     """
     raw = token
     if not raw:
@@ -70,8 +64,7 @@ async def _resolve_member(
     if not user.is_active:
         raise ApiException(403, ErrorCodes.USER_DISABLED, "账号已被禁用")
 
-    # 多项目：优先 query 参数 project_id（浏览器 EventSource 不能自定义 header，
-    # spec 4.3 要求走 query，与 token 同传法）；header X-Project-Id 兜底（便于 curl 调试）
+    # `EventSource` 不能自定义请求头，因此优先使用查询参数
     project_id_str = request.query_params.get("project_id") or request.headers.get(
         "X-Project-Id", ""
     )
@@ -91,7 +84,7 @@ async def _resolve_member(
 
 
 def _format_sse(payload: dict) -> str:
-    """SSE 帧：id:/event:/data: 三段，data 为完整事件载荷 JSON。"""
+    """将事件编码为含 `id`、`event` 和 `data` 的 `SSE` 帧。"""
     data = json.dumps(payload, ensure_ascii=False)
     return (
         f"id: {payload.get('id', '')}\n"
@@ -101,7 +94,7 @@ def _format_sse(payload: dict) -> str:
 
 
 async def _stream_identity_is_active(member_id: uuid.UUID) -> bool:
-    """流运行期间复验账号与成员状态，禁用/移除后不再继续推送。"""
+    """复验账号与成员状态，使禁用或移除在已有连接上及时生效。"""
     async with async_session_factory() as session:
         member = await session.get(ProjectMember, member_id)
         if member is None or not member.is_active:
@@ -129,7 +122,7 @@ async def _event_generator(request: Request, member_id: uuid.UUID) -> AsyncGener
             )
             if message is None:
                 if time.monotonic() - last_ping >= HEARTBEAT_SECONDS:
-                    yield ": ping\n\n"  # 心跳注释帧：防反代空闲超时
+                    yield ": ping\n\n"  # 心跳注释帧用于防止反向代理空闲超时
                     last_ping = time.monotonic()
                 continue
             try:
@@ -150,12 +143,12 @@ async def events_stream(
     request: Request,
     token: str | None = Query(default=None),
 ) -> StreamingResponse:
-    """订阅当前成员的实时事件流（只读）。"""
-    # 认证只用一段短会话，流式期间不持有 DB 连接
+    """订阅当前成员的只读实时事件流。"""
+    # 认证使用短会话，流式响应期间不占用数据库连接
     async with async_session_factory() as session:
         member = await _resolve_member(request, session, token)
 
-    # Last-Event-ID 最小实现：接受头部但不补发（Pub/Sub 无历史），见模块 docstring
+    # `Redis Pub/Sub` 无历史事件，因此接受 `Last-Event-ID` 但不补发
     _last_event_id = request.headers.get("Last-Event-ID")
 
     return StreamingResponse(
@@ -163,6 +156,6 @@ async def events_stream(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # 告知 nginx 等反代不要缓冲该响应
+            "X-Accel-Buffering": "no",  # 禁止 `nginx` 等反向代理缓冲流式响应
         },
     )

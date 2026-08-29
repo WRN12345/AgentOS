@@ -1,8 +1,8 @@
-"""转派申请接口请求/响应模型（12.4 节）。
+"""转派申请接口请求与响应模型。
 
-命令接口（approve/reject/cancel）均要求携带 version 做乐观锁（17.2 节）：
+命令接口（approve/reject/cancel）均要求携带 version 进行乐观锁校验：
 不匹配返回 409 TRANSFER_VERSION_CONFLICT，成功后 version + 1。
-approve/reject 可携带审批意见（decision_note），只进审计留痕，不进通知正文（16 节）。
+approve/reject 可携带 decision_note，审批意见仅写入审计，不进入通知正文。
 """
 
 import uuid
@@ -14,7 +14,7 @@ from app.domains.work_items.schemas import MemberBrief
 
 
 class TransferRequestCreateIn(BaseModel):
-    """发起转派申请：仅工作项当前主执行人；原因与影响说明必填（7.3 节）。"""
+    """转派申请仅由当前主执行人发起，原因与影响说明必填。"""
 
     to_member_id: uuid.UUID
     reason: str = Field(min_length=1)
@@ -28,7 +28,7 @@ class TransferCommandIn(BaseModel):
 
 
 class TransferDecisionIn(BaseModel):
-    """审批命令（approve/reject）：可带审批意见，意见只入审计不进通知（16 节）。"""
+    """approve/reject 可带审批意见，意见仅写入审计。"""
 
     version: int = Field(ge=1)
     decision_note: str | None = None

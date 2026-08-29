@@ -1,8 +1,8 @@
-"""问答历史测试（2026-08-24 决策修订：按人落库，仅本人可见）。
+"""问答历史的按人存储、本人可见与失败降级测试。
 
 - 问答后历史落库（answered/refused 均记录，依据/线索做快照）；
 - 本人可查（时间倒序）；他人（含负责人）查不到；
-- 历史写入失败不影响问答本身（best-effort）。
+- 历史写入采用尽力而为策略，失败不影响问答本身。
 """
 
 import uuid
@@ -75,7 +75,7 @@ async def test_qa_answer_recorded_and_visible_to_self(
 async def test_qa_history_only_visible_to_self(
     client: httpx.AsyncClient, project_a: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """负责人也看不到成员的提问历史（仅本人可见）。"""
+    """问答历史应仅本人可见，负责人也不得读取。"""
     _, leader = await add_member(project_a, "leader", LEADER_PW, role="leader")
     _, alice = await add_member(project_a, "alice", ALICE_PW)
     await _seed_chunk(project_a.id, "发布步骤")
@@ -88,11 +88,11 @@ async def test_qa_history_only_visible_to_self(
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project_a.id))
     resp = await client.get("/api/v1/memory/qa/history", headers=leader_headers)
     assert resp.status_code == 200, resp.text
-    assert resp.json() == []  # 负责人看不到 alice 的历史
+    assert resp.json() == []
 
     async with async_session_factory() as session:
         count = len((await session.execute(select(QaHistory))).scalars().all())
-    assert count == 1  # 库里有且仅有 alice 自己那条
+    assert count == 1
 
 
 async def test_qa_refusal_also_recorded(

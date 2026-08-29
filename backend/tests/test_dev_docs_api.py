@@ -1,4 +1,4 @@
-"""开发文档前置（先文档后开发）接口集成测试（设计文档 2026-07-30 §3/§7）。
+"""开发文档前置接口集成测试。
 
 覆盖：
 - CRUD 与状态机：GET 404 → PUT 创建草稿 → 编辑 → submit（doc_version+1，
@@ -74,9 +74,6 @@ async def _start(client, headers, item_id: str, version: int = 2):
     )
 
 
-# ---------- 开工拦截（§7 验收 1） ----------
-
-
 async def test_start_blocked_until_dev_doc_confirmed(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -108,7 +105,6 @@ async def test_start_blocked_until_dev_doc_confirmed(
     resp = await _start(client, alice_headers, item_id)  # type: ignore[arg-type]
     assert resp.status_code == 409
 
-    # 负责人确认后放行
     confirmed = await client.post(
         f"/api/v1/work-items/{item_id}/dev-doc/confirm",
         json={"version": submitted.json()["version"]},
@@ -162,9 +158,6 @@ async def test_waive_allows_start_without_doc(
         assert event is not None
 
 
-# ---------- CRUD 与状态机 ----------
-
-
 async def test_dev_doc_crud_and_submit_triggers_agent_review(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -215,7 +208,6 @@ async def test_dev_doc_crud_and_submit_triggers_agent_review(
         assert run is not None
         assert str(run.work_item_id) == item_id
 
-    # SUBMITTED 只读：编辑与重复提交均 409
     locked = await _put_doc(client, alice_headers, item_id, "改动", version=3)  # type: ignore[arg-type]
     assert locked.status_code == 409
     assert locked.json()["code"] == "DEV_DOC_INVALID_TRANSITION"
@@ -269,7 +261,6 @@ async def test_return_flow_allows_edit_and_resubmit(
     assert resubmitted.json()["doc_version"] == 2
     assert resubmitted.json()["review_note"] is None
 
-    # 审计留痕：提交/打回均有事件
     async with async_session_factory() as session:
         actions = set(
             (await session.execute(select(AuditEvent.action).where(AuditEvent.target_type == "dev_doc")))
@@ -277,9 +268,6 @@ async def test_return_flow_allows_edit_and_resubmit(
             .all()
         )
     assert {"dev_doc.created", "dev_doc.submitted", "dev_doc.returned"} <= actions
-
-
-# ---------- 权限 ----------
 
 
 async def test_dev_doc_permissions(client: httpx.AsyncClient, project: Project) -> None:
@@ -319,9 +307,6 @@ async def test_dev_doc_permissions(client: httpx.AsyncClient, project: Project) 
 
     resp = await client.get(f"/api/v1/work-items/{item_id}/dev-doc")
     assert resp.status_code == 401
-
-
-# ---------- 审批中心聚合（§4.5） ----------
 
 
 async def test_dev_doc_in_approvals_pending_and_processed(

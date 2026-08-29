@@ -1,4 +1,4 @@
-"""0023：memory_chunks 表——记忆模块的统一向量块存储（设计文档第 5、13 节）。
+"""0023：创建 memory_chunks，统一存储记忆模块的向量块。
 
 Revision ID: 0023_memory_chunks
 Revises: 0022_pgvector_extension
@@ -6,12 +6,12 @@ Create Date: 2026-08-21
 
 四类记忆（文档/成员档案/历史/核心记忆）共用同一套索引管道与存储，按 source_type 区分：
 
-- project_id 可空：仅成员档案（profile）随人走、不挂项目（16.12 跨项目放行的例外），
+- project_id 可空：仅成员档案（profile）随人跨项目、不挂项目，
   其余类型一律带 project_id 并按项目隔离；
 - embedding 维度固定 1024，与 EMBEDDING_DIMENSIONS（qwen3-embedding:0.6b）一致；
-  更换模型/维度时按 16.4 全量重建后切换；
+  更换模型或维度时需要全量重建后再切换；
 - model_version 记录生成向量的模型版本，检索只命中当前版本；
-- is_current 标记旧版本文档块的失效（检索只命中最新版本，设计文档第 3 节），
+- is_current 标记旧版本文档块失效，检索只命中最新版本，
   失效块保留供人工追溯。
 
 向量上暂不建近似索引：MVP 数据量下顺序扫描足够，待数据量增长后再评估 HNSW。

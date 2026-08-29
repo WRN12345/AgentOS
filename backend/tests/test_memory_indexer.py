@@ -1,9 +1,9 @@
-"""索引写入服务测试（M1.7 验收）。
+"""记忆索引写入、整体重建与来源约束测试。
 
 - rebuild_chunks：文本 → 切块 → fake embedding → memory_chunks 落库，
-  model_version 记录当前 EMBEDDING_MODEL（16.4）；
+  model_version 记录当前嵌入模型；
 - 重复重建先删旧块（内容变更后索引一致）；
-- profile 类型 project_id 为空（16.12 例外）；其余类型缺 project_id 报错；
+- 档案类型允许 project_id 为空；其余类型缺 project_id 报错；
 - 空文本只删旧块不写新块。
 """
 

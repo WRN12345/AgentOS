@@ -1,4 +1,4 @@
-"""切块器测试（M1.7 验收，设计文档 15.2）。
+"""文本切块器的长度、边界和重叠行为测试。
 
 - 每块不超过 max_chars；空文本返回空；
 - 段落能整块放入时不拆；段落超长按句末标点拆；单句超长才硬切；
@@ -19,7 +19,7 @@ def test_short_text_single_chunk() -> None:
 
 
 def test_paragraphs_kept_intact_when_possible() -> None:
-    """多个短段落： greedy 合并进同一块，不拆段落。"""
+    """多个短段落应贪心合并且保持段落完整。"""
     paragraphs = [f"第{i}段内容。" * 5 for i in range(6)]  # 每段 30 字
     text = "\n\n".join(paragraphs)
     chunks = chunk_text(text, max_chars=100, overlap_chars=0)

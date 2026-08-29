@@ -1,19 +1,14 @@
-"""文件上传/下载应用服务与权限策略（12.5、14、16、17.2 节）。
+"""文件上传、下载应用服务与权限策略。
 
-上传流程（14 章，严格按序）：
-1) 流式写入暂存文件（Provider.stage），边写边计大小；
-2) 校验大小上限、扩展名与 MIME 白名单（配置项，T1.2 配置模块）；
-3) 流式过程中计算 SHA-256；
-4) Provider.commit 原子移动到正式目录；
-5) 同一事务写入 stored_files 与审计事件。
-落库失败时补偿删除已落盘文件（17.2 节）。
+上传流程严格按序执行：流式写入 `StorageProvider.stage` 返回的暂存区，同时统计大小
+并计算 SHA-256；通过大小、扩展名和 MIME 白名单校验后，由 `StorageProvider.commit`
+原子移入正式存储，最后在同一事务内写入 `stored_files` 和审计事件。落库失败时
+补偿删除已落盘文件。
 
-下载权限（16 节 + 第 12 节）：项目负责人可下载全部文件；未关联工作项的
-知识库文档项目内在职成员均可下载——与文件列表可见性（第 12 节全员可见）
-和问答检索可见性（M7：成员可检索全部项目文档）一致，保证问答"查看原文"
-链路可用；关联工作项的交付文件保持收紧，仅上传人或与工作项有关的成员
-可下（16 节：无关成员不能查看交付文件正文）。
-业务层只依赖 StorageProvider 接口，不感知文件系统路径（14 章）。
+项目负责人可下载全部文件；未关联工作项的知识库文档对项目内在职成员开放，
+以保证检索结果可以查看原文。关联工作项的交付文件仅上传人或相关成员
+可下载，避免无关成员读取交付文件正文。业务层只依赖 `StorageProvider` 接口，
+不感知文件系统路径。
 """
 
 import hashlib
@@ -45,7 +40,7 @@ logger = setup_logging("backend")
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
-# 索引状态机（设计文档第 6 节，迁移 0025）
+# 索引状态迁移表。
 INDEX_PENDING = "pending"
 INDEX_INDEXING = "indexing"
 INDEX_INDEXED = "indexed"
@@ -54,16 +49,16 @@ INDEX_UNINDEXED = "unindexed"
 
 _INDEX_TRANSITIONS: dict[str, frozenset[str]] = {
     INDEX_PENDING: frozenset({INDEX_INDEXING, INDEX_UNINDEXED}),
-    # indexing → unindexed：提取时才发现是扫描件 PDF（扩展名支持但无文字层）
+    # 扫描版 PDF 的扩展名受支持，但提取时没有文字层，因此可从 `indexing` 转为 `unindexed`。
     INDEX_INDEXING: frozenset({INDEX_INDEXED, INDEX_FAILED, INDEX_UNINDEXED}),
-    INDEX_FAILED: frozenset({INDEX_PENDING}),  # 手动重试
+    INDEX_FAILED: frozenset({INDEX_PENDING}),  # 失败任务允许手动重试。
     INDEX_INDEXED: frozenset(),
     INDEX_UNINDEXED: frozenset(),
 }
 
 
 def transition_index_status(stored: StoredFile, new_status: str) -> None:
-    """索引状态机校验（设计文档第 6 节）：非法迁移抛 409。"""
+    """校验索引状态迁移；非法迁移抛出 `ApiException`，由接口映射为 `409`。"""
     if new_status not in _INDEX_TRANSITIONS.get(stored.index_status, frozenset()):
         raise ApiException(
             409,
@@ -98,13 +93,13 @@ async def get_stored_file(
 ) -> StoredFile:
     stored = await session.get(StoredFile, file_id)
     if stored is None or (project_id is not None and stored.project_id != project_id):
-        # 越权访问他项目文件与文件不存在等价，不暴露存在性（spec D5 越权 404）
+        # 将跨项目访问视为文件不存在，避免泄露资源存在性。
         raise ApiException(404, ErrorCodes.NOT_FOUND, "文件不存在")
     return stored
 
 
 def _validate_type(filename: str, content_type: str | None) -> str:
-    """校验扩展名与声明的 MIME 类型均在白名单内，返回规范化的文件名（去掉路径成分）。"""
+    """校验扩展名和声明的 MIME 类型，并移除文件名中的路径成分。"""
     safe_name = PurePosixPath(filename).name
     extension = PurePosixPath(safe_name).suffix.lower()
     if extension not in settings.allowed_upload_extensions:
@@ -131,13 +126,13 @@ async def upload_file(
     work_item_id: uuid.UUID | None,
     provider: StorageProvider,
 ) -> StoredFileOut:
-    """上传文件（14 章）：要求登录态；可选关联工作项（须存在且同项目，T4.4 复用）。"""
+    """上传文件并可选关联同项目工作项。"""
     if work_item_id is not None:
-        # 跨实体引用同项目校验：不存在或他项目工作项 → 404（spec D5）
+        # 不存在或跨项目的工作项统一按 `404` 处理，避免泄露存在性。
         await get_work_item(session, work_item_id, project_id=actor.project_id)
     filename = _validate_type(upload.filename or "", upload.content_type)
 
-    # 1-3) 流式写暂存文件，边写边计大小与 SHA-256；超限即中止并清理暂存
+    # 流式写入暂存区并同步计算大小和 SHA-256；超限立即中止并清理。
     staged = await provider.stage()
     hasher = hashlib.sha256()
     size = 0
@@ -157,13 +152,12 @@ async def upload_file(
         await provider.discard(staged)
         raise
 
-    # 4) 原子移动到正式目录；键含随机后缀，不同上传永不互相覆盖
+    # 原子移入正式存储；随机后缀确保不同上传不会相互覆盖。
     sha256 = hasher.hexdigest()
     storage_key = f"{sha256[:2]}/{sha256}_{uuid.uuid4().hex[:12]}"
     await provider.commit(staged, storage_key)
 
-    # 5) 版本链（设计文档第 3 节）：同项目同名文件 = 新版本；
-    # 旧版本保留并将 superseded_by 指向新版本，检索只命中最新版本（M2.7）
+    # 同项目同名文件形成新版本；旧版本保留并通过 `superseded_by` 指向新版本。
     current = (
         await session.execute(
             select(StoredFile).where(
@@ -175,9 +169,8 @@ async def upload_file(
     ).scalar_one_or_none()
     version = (current.version + 1) if current is not None else 1
 
-    # 6) 同事务写 stored_files 与审计事件；失败则补偿删除已落盘文件（17.2 节）
-    # 注意顺序：部分唯一索引要求"同名至多一个当前版本"，必须先把旧版本标记为
-    # 被取代并 flush，再插入新版本行，否则 INSERT 瞬间存在两个当前版本
+    # 文件记录与审计同事务写入；数据库失败时补偿删除已落盘文件。部分唯一索引要求
+    # 同名文件至多一个当前版本，因此先标记旧版本并 `flush`，再插入新版本。
     new_id = uuid.uuid4()
     stored = StoredFile(
         id=new_id,
@@ -196,8 +189,7 @@ async def upload_file(
         if current is not None:
             current.superseded_by = new_id
             await session.flush()
-            # 旧版本的记忆块同步失效（设计文档第 3 节）：检索只命中最新版本，
-            # 旧块保留供人工追溯。同事务标记，覆盖旧版本已索引完成的情况
+            # 同事务将旧版本的记忆块标记为失效，使检索只命中最新版本并保留历史追溯。
             await MemoryIndexService(session).mark_source_stale(
                 source_type="document", source_id=current.id, commit=False
             )
@@ -226,7 +218,7 @@ async def upload_file(
         await session.rollback()
         await provider.delete(storage_key)  # 补偿清理
         if "ux_stored_files_current_name" in str(exc):
-            # 并发同名上传撞唯一索引（设计文档第 3 节）：提示重试，不产生两个"最新版"
+            # 唯一索引阻止并发同名上传产生两个当前版本。
             raise ApiException(
                 409,
                 ErrorCodes.FILE_VERSION_CONFLICT,
@@ -241,8 +233,7 @@ async def upload_file(
         raise
 
     await session.refresh(stored)  # created_at/updated_at 由数据库生成，刷新取回
-    # 上传即入库（设计文档第 3、6 节）：支持读取内容的格式自动进入索引队列；
-    # 其余格式（zip/图片等）直接标 unindexed，不影响上传与其他文件
+    # 可读取内容的格式自动进入索引队列；其他格式标记为 `unindexed`，不影响上传。
     suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
     if suffix in SUPPORTED_EXTENSIONS:
         await dispatch_index_task(stored)
@@ -257,11 +248,10 @@ async def upload_file(
     return _to_out(stored)
 
 
-# ---------- 索引（设计文档第 6 节） ----------
 
 
 async def list_current_files(session: AsyncSession, actor: ProjectMember) -> list[StoredFileOut]:
-    """项目内当前版本文件列表（设计文档第 12 节：项目内全员可见）。"""
+    """返回项目成员可见的当前文件版本。"""
     rows = (
         await session.execute(
             select(StoredFile)
@@ -278,7 +268,7 @@ async def list_current_files(session: AsyncSession, actor: ProjectMember) -> lis
 async def list_file_versions(
     session: AsyncSession, actor: ProjectMember, file_id: uuid.UUID
 ) -> list[StoredFileOut]:
-    """同名文档的全部版本（新→旧），供版本历史查看（设计文档第 3 节）。"""
+    """按新到旧返回同名文件的全部版本。"""
     stored = await get_stored_file(session, file_id, project_id=actor.project_id)
     rows = (
         await session.execute(
@@ -294,7 +284,7 @@ async def list_file_versions(
 
 
 async def dispatch_index_task(stored: StoredFile) -> None:
-    """投递 memory.index 索引任务（上传即入库 / 失败重试共用）；投递失败只记日志。"""
+    """投递 `memory.index` 任务；投递失败时仅记录日志。"""
     redis_client = create_redis_client()
     try:
         await enqueue(
@@ -316,7 +306,7 @@ async def dispatch_index_task(stored: StoredFile) -> None:
 async def retry_file_index(
     session: AsyncSession, actor: ProjectMember, file_id: uuid.UUID
 ) -> StoredFileOut:
-    """索引失败手动重试（设计文档第 6 节）：failed → pending 并重投索引任务。"""
+    """将 `failed` 重置为 `pending` 并重新投递索引任务。"""
     stored = await get_stored_file(session, file_id, project_id=actor.project_id)
     transition_index_status(stored, INDEX_PENDING)
     await session.commit()
@@ -326,16 +316,12 @@ async def retry_file_index(
     return _to_out(stored)
 
 
-# ---------- 下载权限（16 节） ----------
 
 
 async def is_work_item_related(
     session: AsyncSession, work_item_id: uuid.UUID, member_id: uuid.UUID
 ) -> bool:
-    """用户是否与工作项有关：主执行人、协作者、协作请求任一方（16 节）。
-
-    T4.4（交付物提交权限）与 T4.5（审核意见可见性）复用本辅助函数。
-    """
+    """判断成员是否为主执行人、协作者或协作请求任一方。"""
     item = await session.get(WorkItem, work_item_id)
     if item is None:
         return False
@@ -372,8 +358,7 @@ async def is_work_item_related(
 async def can_download_file(
     session: AsyncSession, actor: ProjectMember, stored: StoredFile
 ) -> bool:
-    """下载权限（16 节 + 第 12 节）：负责人、管理员（只读）全部可下；上传人本人可下；
-    未关联工作项的知识库文档项目内全员可下（与检索/问答可见性一致，M7.5 原文链路）；
+    """负责人和上传人可下载；未关联工作项的知识库文档对项目成员开放；
     关联工作项的交付文件仅上传人或与工作项有关的成员可下。"""
     if actor.role in (ROLE_LEADER):
         return True
@@ -390,9 +375,10 @@ async def authorize_download(
     file_id: uuid.UUID,
     provider: StorageProvider,
 ) -> StoredFile:
-    """下载前鉴权：404（记录或物理文件不存在/已清理）→ 403（无关成员）→ 写审计。
+    """下载前依次校验文件存在性、成员权限并写审计。
 
-    审计事件含操作者与目标文件；request_id 与来源 IP 由请求上下文自动带（16 节）。
+    记录或物理文件不存在时返回 `404`，无关成员返回 `403`。审计事件包含操作者、
+    目标文件、请求 ID 和来源 IP。
     """
     stored = await get_stored_file(session, file_id, project_id=actor.project_id)
     if not await can_download_file(session, actor, stored):

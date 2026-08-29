@@ -1,16 +1,11 @@
-"""Requirement Analyst：自然语言需求 → 目标/约束/交付物/验收标准（10.1 节，T5.4）。
-
-能力函数挂入基础图 CAPABILITIES（app.agents.graphs.base），输出走 T5.3 统一
-Schema 校验。content 自有字段（平铺）：goals / constraints / deliverables /
-acceptance_criteria（均为字符串数组）。
-"""
+"""Requirement Analyst：将自然语言需求整理为目标、约束、交付物和验收标准。"""
 
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import requirement as requirement_prompts
 from app.agents.specialists.common import build_output, call_model_json
 
-if TYPE_CHECKING:  # 避免与 graphs.base 循环导入（base 注册本能力）
+if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
     from app.agents.graphs.base import AgentGraphState
 
 AGENT_TYPE = "requirement_analyst"
@@ -19,7 +14,7 @@ PROMPT_VERSION = "requirement_analyst.v1"
 
 
 async def requirement_analyst_capability(state: "AgentGraphState") -> Any:
-    """整理需求原文为结构化建议（模型不可用错误直接冒泡，run 标 failed）。"""
+    """将需求原文整理为结构化建议；模型错误直接交由 worker 标记 run failed。"""
     context = state.get("context", {})
     work_item = context.get("work_item") or {}
     user_prompt = requirement_prompts.render_user_prompt(

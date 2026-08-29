@@ -1,13 +1,12 @@
-"""Workflow Risk Agent 周期风险扫描（4.2 节逾期风险扫描，T5.5）。
+"""Workflow Risk Agent 周期风险扫描。
 
 由 scheduler 周期 enqueue `agent.risk_scan`、worker 消费执行：
 按项目遍历，每项目检查无 pending/running 的同类型运行后，调用
 request_agent_analysis（trigger_source="scheduler"）投递一次项目级
 workflow_risk 分析；真正的图运行仍走 `agent.run` 队列，由 worker 统一承载。
 
-去重（ticket 05 项目维度化）：以「项目 × 存在 pending/running 的
-workflow_risk run」为去重键——A 项目有活跃 run 不再跳过 B 项目，
-避免周期触发跨项目互相 skip；同一项目内仍避免重复堆积。
+去重以项目及其 `pending` 或 `running` 的 `workflow_risk` 运行为范围，使不同项目
+互不影响，同时避免同一项目内重复堆积。
 """
 
 from datetime import UTC, datetime, timedelta

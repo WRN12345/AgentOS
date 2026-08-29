@@ -1,6 +1,6 @@
-"""工作项接口请求/响应模型（12.3 节）。
+"""工作项接口请求与响应模型。
 
-更新与命令接口均要求携带 version 做乐观锁（17.2 节）：
+更新与命令接口均要求携带 version 进行乐观锁校验：
 不匹配返回 409 WORK_ITEM_VERSION_CONFLICT，成功后 version + 1。
 """
 
@@ -31,7 +31,7 @@ class WorkItemCreateIn(BaseModel):
 
 
 class WorkItemUpdateIn(BaseModel):
-    """负责人修改内容/负责人/DDL/协作者。version 必带；未提供字段保持不变。"""
+    """负责人修改内容、主执行人、DDL 或协作者；未提供的字段保持不变。"""
 
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=255)
@@ -65,7 +65,7 @@ class WorkItemOut(BaseModel):
 
 
 class WorkItemSummaryOut(BaseModel):
-    """列表摘要（13.1 节）：标题、状态、负责人、优先级、DDL、version。"""
+    """包含标题、状态、负责人、优先级、DDL 和 version 的列表摘要。"""
 
     id: uuid.UUID
     title: str

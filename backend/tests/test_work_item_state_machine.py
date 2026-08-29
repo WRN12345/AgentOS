@@ -1,4 +1,4 @@
-"""工作项状态机单元测试（T2.5 验收，8.1 节）：全部合法迁移 + 非法迁移分支。
+"""工作项状态机的全部合法迁移与非法迁移测试。
 
 纯函数测试，不依赖数据库。
 """
@@ -13,7 +13,6 @@ from app.domains.work_items.state_machine import transition
 @pytest.mark.parametrize(
     ("current", "command", "target"),
     [
-        # 8.1 节全部合法迁移
         (S.DRAFT, "publish", S.READY),
         (S.READY, "start", S.IN_PROGRESS),
         (S.IN_PROGRESS, "block", S.BLOCKED),
@@ -53,7 +52,7 @@ def test_legal_transitions(current: S, command: str, target: S) -> None:
         (S.BLOCKED, "block"),
         (S.BLOCKED, "submit"),
         (S.BLOCKED, "cancel"),
-        # IN_REVIEW 不允许 start/block/cancel（审核动作在阶段 4）
+        # IN_REVIEW 的状态变化只能由审核动作触发。
         (S.IN_REVIEW, "start"),
         (S.IN_REVIEW, "block"),
         (S.IN_REVIEW, "cancel"),

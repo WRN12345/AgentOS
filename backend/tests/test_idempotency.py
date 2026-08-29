@@ -1,8 +1,4 @@
-"""Idempotency-Key 集成测试（T2.1 验收，17.2 节）。
-
-含 ticket 06（幂等键并入项目维度）的跨项目验收：同一键在 A/B 项目下
-视为不同请求，各自独立执行、各自复用；同项目内同键仍复用。
-"""
+"""Idempotency-Key 集成测试，覆盖串行重放、错误恢复和项目隔离。"""
 
 import httpx
 from sqlalchemy import select
@@ -29,11 +25,11 @@ async def test_example_task_replayed_only_written_once(client: httpx.AsyncClient
         await redis_client.aclose()
 
     assert r1.status_code == 200
-    assert after_first == before + 1  # 第一次真实执行了一次写入
-    assert after_second == after_first  # 第二次没有重复写入
+    assert after_first == before + 1
+    assert after_second == after_first
 
     assert r2.status_code == 200
-    assert r2.json() == r1.json()  # 第二次返回首次结果
+    assert r2.json() == r1.json()
     assert r2.headers.get("Idempotency-Replayed") == "true"
 
 
@@ -58,7 +54,7 @@ async def test_logout_idempotent_replay(client: httpx.AsyncClient) -> None:
     assert r2.json() == r1.json()
     assert r2.headers.get("Idempotency-Replayed") is None
 
-    # 不带幂等键重复调用也保持 200，不泄漏 refresh token 是否曾存在。
+    # 固定返回 200，避免泄漏 refresh token 是否曾存在。
     r3 = await client.post("/api/v1/auth/logout", json=payload)
     assert r3.status_code == 200
 
@@ -88,11 +84,7 @@ async def test_validation_error_is_not_cached(client: httpx.AsyncClient, project
 async def test_idempotency_key_scoped_per_project(
     client: httpx.AsyncClient, project_a, project_b
 ) -> None:
-    """ticket 06 验收：同一键在 A/B 不同项目下视为不同请求，各自独立执行与复用。
-
-    用工作项创建接口（项目域幂等写接口）做载体：leader 在 A/B 双项目均为负责人。
-    """
-    # leader 账号建一次，再复用同一账号分别挂到 A/B 两项目（避免重复建 User）
+    """同一幂等键在不同项目中独立执行和复用，在同一项目中重放首次结果。"""
     async with async_session_factory() as session:
         leader = await create_user(session, "leader", "Leader123!")
         await session.commit()
@@ -112,21 +104,18 @@ async def test_idempotency_key_scoped_per_project(
     payload_a = {"title": "项目A幂等", "assignee_id": str(alice.id)}
     payload_b = {"title": "项目B幂等", "assignee_id": str(bob.id)}
 
-    # 项目 A 首次：真实执行
     r_a1 = await client.post(
         "/api/v1/work-items", json=payload_a, headers={**headers_a, "Idempotency-Key": key}
     )
     assert r_a1.status_code == 201
     assert r_a1.headers.get("Idempotency-Replayed") is None
 
-    # 项目 B 同键：不复用 A 的响应，独立执行出独立工作项
     r_b1 = await client.post(
         "/api/v1/work-items", json=payload_b, headers={**headers_b, "Idempotency-Key": key}
     )
     assert r_b1.status_code == 201
     assert r_b1.json()["id"] != r_a1.json()["id"]
 
-    # 同项目内同键仍复用（A、B 各自独立重放）
     r_a2 = await client.post(
         "/api/v1/work-items", json=payload_a, headers={**headers_a, "Idempotency-Key": key}
     )
@@ -141,7 +130,6 @@ async def test_idempotency_key_scoped_per_project(
     assert r_b2.json()["id"] == r_b1.json()["id"]
     assert r_b2.headers.get("Idempotency-Replayed") == "true"
 
-    # 数据库层：同一键只落两条记录，各属一个项目（唯一索引按项目维度生效）
     async with async_session_factory() as session:
         records = (
             await session.execute(

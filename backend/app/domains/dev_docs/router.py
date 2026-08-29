@@ -1,13 +1,7 @@
-"""开发文档接口（设计文档 2026-07-30 §4.2）。
+"""开发文档接口。
 
-- GET  /work-items/{id}/dev-doc          任何项目成员：查看文档（含最近 AI 初审建议关联）
-- PUT  /work-items/{id}/dev-doc          仅主执行人：撰写/编辑草稿（upsert，乐观锁）
-- POST /work-items/{id}/dev-doc/submit   仅主执行人：提交审核（触发 Agent 初审）
-- POST /work-items/{id}/dev-doc/confirm  仅负责人：确认通过
-- POST /work-items/{id}/dev-doc/return   仅负责人：打回（附理由）
-- POST /work-items/{id}/dev-doc/waive    仅负责人：豁免该任务文档要求（写审计）
-
-所有写接口支持 Idempotency-Key，命令接口携带 version 做乐观锁（17.2 节）。
+主执行人负责撰写和提交，负责人负责确认、打回或豁免，项目成员可查看文档。
+所有写接口支持 `Idempotency-Key`，状态命令通过 `version` 实施乐观锁。
 """
 
 import uuid

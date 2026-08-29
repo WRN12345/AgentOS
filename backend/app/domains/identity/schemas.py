@@ -1,4 +1,4 @@
-"""身份接口请求/响应模型（12.1 节）。"""
+"""身份接口的请求和响应模型。"""
 
 import uuid
 from datetime import datetime
@@ -23,11 +23,11 @@ class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-    expires_in: int  # Access Token 有效期（秒）
+    expires_in: int  # `Access Token` 有效期，单位为秒
 
 
 class UserOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)  # 兼容 ORM 直接校验（如 admin 建号响应构造）
+    model_config = ConfigDict(from_attributes=True)  # 支持直接从 `ORM` 对象构造响应
 
     id: uuid.UUID
     username: str
@@ -37,8 +37,8 @@ class UserOut(BaseModel):
 
 
 class MyProjectOut(BaseModel):
-    """用户参与的项目摘要（GET /me/projects）。"""
+    """用户参与的项目摘要。"""
     id: uuid.UUID
     name: str
     description: str | None
-    role: str  # "leader" | "member"
+    role: str

@@ -1,12 +1,7 @@
-"""交付物接口（12.5 节）。
+"""交付物接口。
 
-- POST /work-items/{id}/deliverables             仅当前主执行人：提交新版本（三类）
-- GET  /work-items/{id}/deliverables             负责人/工作项相关成员：版本历史
-- GET  /work-items/{id}/deliverables/{version}   负责人/工作项相关成员：按版本查询
-- GET  /deliverables                            聚合页：负责人/管理员见全部，成员见相关工作项
-- GET  /deliverables?role=mine                  本人：我提交的交付物及审核结论
-
-提交接口支持 Idempotency-Key；版本号由服务端递增，并发冲突返回 409（17.2 节）。
+仅当前主执行人可提交新版本；负责人和工作项相关成员可查询版本。
+提交接口支持 `Idempotency-Key`；版本号由服务端递增，并发冲突返回 `409`。
 """
 
 import uuid

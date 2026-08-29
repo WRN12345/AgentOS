@@ -1,9 +1,7 @@
-"""负责人审批聚合接口（12.6 节）。
+"""负责人审批聚合接口。
 
-GET /approvals：负责人返回 PENDING 转派申请 + PENDING_APPROVAL DDL 变更申请
-的统一列表；普通成员返回空列表（不 403，T3.5 验收）。
-GET /approvals/processed：已处理（APPROVED/REJECTED/CANCELLED）申请记录，
-按 updated_at 倒序、最多 50 条，权限与待审批列表一致。
+`GET /approvals` 返回待审批事项，`GET /approvals/processed` 返回最近处理记录。
+普通成员访问时返回空列表而非 `403`。
 """
 
 from fastapi import APIRouter, Depends
@@ -31,5 +29,5 @@ async def list_processed_approvals_endpoint(
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[ApprovalItemOut]:
-    """已处理审批记录（审批记录标签页）：含处理人 approved_by 与处理时间 approved_at。"""
+    """返回包含 `approved_by` 和 `approved_at` 的已处理记录。"""
     return await list_processed_approvals(session, actor)

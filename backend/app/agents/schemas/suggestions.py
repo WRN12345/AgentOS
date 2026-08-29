@@ -1,4 +1,4 @@
-"""Agent 建议查询与反馈接口的 Schema（12.5 节，T5.7）。
+"""Agent 建议查询与反馈接口的 Schema。
 
 AgentSuggestionOut 在 agent_suggestions 行之上补充关联运行信息
 （work_item_id / model 取自 agent_runs），便于建议中心直接渲染关联链接
@@ -26,24 +26,23 @@ class AgentSuggestionOut(BaseModel):
     reviewed_by: uuid.UUID | None
     reviewed_at: datetime | None
     prompt_version: str | None
-    # 取自关联 agent_runs（项目级建议为 None，前端据此不渲染工作项链接）
+    # 取自关联 agent_runs；项目级建议为 None，前端不渲染工作项链接。
     work_item_id: uuid.UUID | None
     model: str | None
     created_at: datetime
 
 
 class AgentSuggestionFeedbackIn(BaseModel):
-    """人工反馈入参（POST /agent-suggestions/{id}/feedback）。
+    """POST /agent-suggestions/{id}/feedback 的人工反馈入参。
 
-    AgentSuggestion 表无 comment 字段（models.py），首版反馈只记录
-    采纳/忽略结论与操作人/时间。
+    AgentSuggestion 没有 comment 字段，只记录采纳或忽略、操作人和时间。
     """
 
     action: Literal["accepted", "ignored"]
 
 
 class AgentConfigOut(BaseModel):
-    """GET /config 返回的前端可用配置（T5.7：外部数据提示，16 节）。"""
+    """GET /config 返回的前端可用配置。"""
 
     llm_provider: str
     llm_is_external: bool = Field(description="当前模型 Provider 是否为外部（云端）服务")

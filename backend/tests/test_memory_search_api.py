@@ -1,4 +1,4 @@
-"""检索 API 契约测试（M2.10 验收，设计文档第 11、12 节）。
+"""检索 API 的访问权限与调用方契约测试。
 
 - 项目成员检索本项目 → 命中；非项目成员 → 403；
 - 全局 admin 只读可查任意项目；
@@ -75,7 +75,6 @@ async def test_member_search_hits(client: httpx.AsyncClient, project: Project) -
 
 async def test_non_member_403(client: httpx.AsyncClient, project_a: Project, project_b: Project) -> None:
     _, alice = await add_member(project_a, "alice", ALICE_PW)
-    # alice 用 A 项目身份、带 B 项目上下文检索（不是 B 成员）
     resp = await client.post(
         "/api/v1/memory/search",
         json=_search_payload(),
@@ -127,7 +126,6 @@ async def test_agent_assignment_caller_rejected_over_http(
         json=_search_payload(caller="agent_assignment"),
         headers=headers,
     )
-    # agent_assignment 仅供 Agent 内部调用（16.12），HTTP 路径 403
     assert resp.status_code == 403
 
 

@@ -1,4 +1,4 @@
-"""档案跨项目放行规则测试（M3.9 验收，设计文档 16.12）。
+"""成员档案跨项目检索的有限放行规则测试。
 
 - leader_query / agent_assignment：命中 project_id=NULL 的 profile 块
   （A 项目负责人在分配场景可检索到 B 项目成员档案）；
@@ -23,7 +23,7 @@ from tests.test_memory_search import _FakeProvider, _seed_chunk
 
 
 async def _seed_profile_chunk() -> uuid.UUID:
-    """造一条 profile 块（project_id=NULL，随人走）。"""
+    """创建不挂项目且随成员流转的档案索引块。"""
     source_id = uuid.uuid4()
     vec = [0.0] * settings.embedding_dimensions
     vec[0] = 1.0
@@ -63,7 +63,7 @@ async def _search(project_id, caller, member, monkeypatch, source_types=None):
 async def test_leader_query_hits_cross_project_profile(
     project_a, project_b, monkeypatch
 ) -> None:
-    """A 项目负责人在分配场景（leader_query）检索到 B 项目成员档案。"""
+    """项目负责人在分配查询中应能检索其他项目成员的档案。"""
     await _seed_profile_chunk()
     _, leader = await add_member(project_a, "leader", "Leader123!", role="leader")
 
@@ -72,7 +72,7 @@ async def test_leader_query_hits_cross_project_profile(
 
 
 async def test_agent_assignment_hits_profile(project_a, monkeypatch) -> None:
-    """Agent 分配环节（agent_assignment）命中档案。"""
+    """Agent 分配调用应能命中成员档案。"""
     await _seed_profile_chunk()
 
     results = await _search(project_a.id, CALLER_AGENT_ASSIGNMENT, None, monkeypatch)
@@ -80,7 +80,7 @@ async def test_agent_assignment_hits_profile(project_a, monkeypatch) -> None:
 
 
 async def test_member_qa_never_hits_profile(project_a, project_b, monkeypatch) -> None:
-    """普通成员问答不命中档案——即使是本项目成员的档案（放行仅限两场景）。"""
+    """普通成员问答不得命中任何成员档案。"""
     await _seed_profile_chunk()
     await _seed_chunk(project_a.id)  # 项目内文档对照
     _, member = await add_member(project_a, "alice", "Alice123!")
@@ -88,7 +88,6 @@ async def test_member_qa_never_hits_profile(project_a, project_b, monkeypatch) -
     results = await _search(project_a.id, CALLER_MEMBER_QA, member, monkeypatch)
     assert [r.content for r in results] == ["项目内文档"]
 
-    # 显式指定 profile 类型也只返回空
     results = await _search(
         project_a.id, CALLER_MEMBER_QA, member, monkeypatch, source_types=["profile"]
     )
@@ -98,7 +97,7 @@ async def test_member_qa_never_hits_profile(project_a, project_b, monkeypatch) -
 async def test_profile_release_does_not_leak_other_project_docs(
     project_a, project_b, monkeypatch
 ) -> None:
-    """放行只针对 profile：leader_query 依然检索不到他项目的文档/历史块。"""
+    """跨项目放行仅适用于档案，不得泄露其他项目的文档或历史。"""
     await _seed_chunk(project_b.id)  # B 项目文档
     _, leader = await add_member(project_a, "leader", "Leader123!", role="leader")
 

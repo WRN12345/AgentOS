@@ -1,4 +1,4 @@
-"""协作请求状态机单元测试（8.2 节，T3.1 验收）。
+"""协作请求状态机单元测试。
 
 覆盖全部合法迁移与代表性非法迁移；状态机为纯函数，不依赖数据库。
 """
@@ -8,7 +8,6 @@ import pytest
 from app.core.errors import ApiException
 from app.domains.collaboration.state_machine import COMMANDS, CollaborationStatus, transition
 
-# 8.2 节全部合法迁移：(当前状态, 命令, 目标状态)
 LEGAL_TRANSITIONS = [
     ("REQUESTED", "accept", "ACCEPTED"),
     ("REQUESTED", "decline", "DECLINED"),

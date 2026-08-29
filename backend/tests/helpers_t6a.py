@@ -1,8 +1,4 @@
-"""T6.1 新增测试（test_unit_* / test_audit_coverage）共用辅助。
-
-只新增、不复用既有测试文件的私有 helper，避免与既有文件耦合；
-conftest.py 提供的 fixtures（client/project/add_member/auth_headers）直接继续使用。
-"""
+"""单元测试与审计覆盖测试的共用辅助函数。"""
 
 import uuid
 from pathlib import Path

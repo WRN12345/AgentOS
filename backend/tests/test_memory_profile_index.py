@@ -1,8 +1,8 @@
-"""档案入索引测试（M3.7 验收，设计文档第 7 节②）。
+"""成员档案创建、编辑与延迟任务的索引一致性测试。
 
 - 档案创建/变更自动投递 memory.index（source_type=profile，project_id=NULL）；
 - worker 纯文本路径切块入库；编辑后整体重建（旧块被替换）；
-- profile 块 project_id 为 NULL（随人走，16.12）。
+- 档案索引块不挂项目并随成员流转。
 """
 
 import json
@@ -48,9 +48,10 @@ async def test_upsert_dispatches_profile_index_task(
     ]
     assert len(tasks) == 1
     payload = tasks[0]["payload"]
-    assert payload["project_id"] is None  # 随人走，不挂项目
+    assert payload["project_id"] is None
     assert payload["source_id"]
-    assert "text" not in payload  # worker 执行时读取最新档案，避免旧任务覆盖新编辑
+    # 任务不携带文本快照，执行时读取最新档案以避免旧任务覆盖新编辑。
+    assert "text" not in payload
 
 
 async def test_worker_indexes_profile_and_rebuild_on_edit(
@@ -89,10 +90,9 @@ async def test_worker_indexes_profile_and_rebuild_on_edit(
             )
         ).scalars().all()
         assert len(chunks) > 0
-        assert all(c.project_id is None for c in chunks)  # profile 不挂项目
+        assert all(c.project_id is None for c in chunks)
         assert any("支付模块" in c.content for c in chunks)
 
-    # 编辑后整体重建：旧内容块被替换
     await put_and_index("擅长带新人")
     async with async_session_factory() as session:
         chunks = (
@@ -113,7 +113,7 @@ async def test_old_profile_index_task_uses_latest_content(
     redis_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """延迟重试的旧任务不能把已编辑档案的 chunks 覆盖回旧内容。"""
+    """延迟重试的旧任务不得用过期文本覆盖已编辑档案。"""
     monkeypatch.setattr(
         indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider()
     )
@@ -127,7 +127,7 @@ async def test_old_profile_index_task_uses_latest_content(
     )
     assert first.status_code == 200, first.text
     old_task = json.loads((await redis_client.lrange(QUEUE_KEY, 0, -1))[0])
-    # 模拟部署前已有的延迟重试任务：payload 仍携带过期文本快照。
+    # 兼容旧任务携带文本快照的回归场景，处理器仍必须读取数据库最新内容。
     old_task["payload"]["text"] = "旧档案：熟悉支付模块"
 
     second = await client.put(

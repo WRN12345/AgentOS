@@ -1,4 +1,4 @@
-"""审计覆盖测试（18.1 节，T6.1）：关键动作必留痕 + 审计只读。
+"""关键动作留痕与审计只读测试。
 
 断言每个关键动作都生成对应 audit_events 记录（动作类型、actor、对象 id 正确）：
 - 分配/创建工作项        work_item.created
@@ -9,7 +9,7 @@
 - DDL 变更申请与审批     deadline_change.requested / deadline_change.approved
 - 文件上传与下载         file.uploaded / file.downloaded
 
-另断言审计事件不可通过任何 API 修改或删除（16、18.1 节）。
+另断言审计事件不可通过任何 API 修改或删除。
 """
 
 import httpx
@@ -39,7 +39,6 @@ async def _item_in_progress(
     alice: ProjectMember = ctx["alice"]  # type: ignore[assignment]
     item = await create_work_item(client, ctx["leader_headers"], alice.id)  # type: ignore[arg-type]
     await publish_work_item(client, ctx["leader_headers"], item)  # type: ignore[arg-type]
-    # 开发文档前置（设计 2026-07-30 §4.3）：负责人豁免后放行 start
     waived = await client.post(
         f"/api/v1/work-items/{item['id']}/dev-doc/waive", json={}, headers=ctx["leader_headers"]  # type: ignore[arg-type]
     )
@@ -47,9 +46,6 @@ async def _item_in_progress(
     started = await command_work_item(client, ctx["alice_headers"], item["id"], "start", 2)  # type: ignore[arg-type]
     assert started.status_code == 200
     return item
-
-
-# ---------- 分配/创建工作项 ----------
 
 
 async def test_work_item_creation_audited(client: httpx.AsyncClient, project: Project) -> None:
@@ -67,9 +63,6 @@ async def test_work_item_creation_audited(client: httpx.AsyncClient, project: Pr
     assert event.target_type == "work_item"
     assert event.after["assignee_id"] == str(alice.id)
     assert event.after["status"] == "DRAFT"
-
-
-# ---------- 转派申请与审批 ----------
 
 
 async def test_transfer_request_and_approval_audited(
@@ -127,9 +120,6 @@ async def test_transfer_rejection_audited(client: httpx.AsyncClient, project: Pr
     assert events[1].after["status"] == "REJECTED"
 
 
-# ---------- 协作请求发起与回传 ----------
-
-
 async def test_collaboration_request_and_submit_audited(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -166,9 +156,6 @@ async def test_collaboration_request_and_submit_audited(
     assert submit.after["status"] == "SUBMITTED"
 
 
-# ---------- 交付物提交 ----------
-
-
 async def test_deliverable_submission_audited(client: httpx.AsyncClient, project: Project) -> None:
     """主执行人提交交付物 → deliverable.submitted，target 为交付物 id。"""
     ctx = await make_ctx(client, project)
@@ -184,9 +171,6 @@ async def test_deliverable_submission_audited(client: httpx.AsyncClient, project
     assert event.target_type == "deliverable"
     assert event.after["work_item_id"] == item["id"]
     assert event.after["version"] == 1
-
-
-# ---------- 审核通过与打回 ----------
 
 
 async def _item_in_review(
@@ -208,7 +192,6 @@ async def test_review_approve_and_request_changes_audited(
     leader: ProjectMember = ctx["leader"]  # type: ignore[assignment]
     leader_headers = ctx["leader_headers"]
 
-    # 打回：IN_REVIEW → IN_PROGRESS
     item, deliverable = await _item_in_review(client, ctx)
     resp = await client.post(
         f"/api/v1/work-items/{item['id']}/reviews",
@@ -225,7 +208,6 @@ async def test_review_approve_and_request_changes_audited(
     assert changes[0].before == {"status": "IN_REVIEW"}
     assert changes[0].after["status"] == "IN_PROGRESS"
 
-    # 重新交付并提交审核（IN_PROGRESS v5 → IN_REVIEW v6），负责人通过
     deliverable2 = await create_deliverable(client, ctx["alice_headers"], item["id"])  # type: ignore[arg-type]
     submitted = await command_work_item(client, ctx["alice_headers"], item["id"], "submit", 5)  # type: ignore[arg-type]
     assert submitted.status_code == 200
@@ -242,9 +224,6 @@ async def test_review_approve_and_request_changes_audited(
     assert approved[0].actor_id == leader.user_id
     assert approved[0].before == {"status": "IN_REVIEW"}
     assert approved[0].after["status"] == "COMPLETED"
-
-
-# ---------- DDL 变更申请与审批 ----------
 
 
 async def test_deadline_change_request_and_approval_audited(
@@ -282,9 +261,6 @@ async def test_deadline_change_request_and_approval_audited(
     assert events[1].after["status"] == "APPROVED"
 
 
-# ---------- 文件上传与下载 ----------
-
-
 async def test_file_upload_and_download_audited(
     client: httpx.AsyncClient, project: Project, storage
 ) -> None:
@@ -312,9 +288,6 @@ async def test_file_upload_and_download_audited(
     assert events[1].target_type == "stored_file"
 
 
-# ---------- 审计事件不可修改/删除（18.1 节） ----------
-
-
 async def test_audit_events_are_immutable_via_api(
     client: httpx.AsyncClient, project: Project
 ) -> None:
@@ -329,7 +302,6 @@ async def test_audit_events_are_immutable_via_api(
     assert len(events) == 1
     event_id = str(events[0].id)
 
-    # 集合资源：只允许 GET；写方法一律 405
     for method in ("post", "put", "patch", "delete"):
         resp = await client.request(
             method.upper(),
@@ -339,7 +311,6 @@ async def test_audit_events_are_immutable_via_api(
         )
         assert resp.status_code == 405, f"{method} /audit-events 应 405，实际 {resp.status_code}"
 
-    # 单条资源：不存在任何路由（含 GET），任何方法一律 404/405
     for method in ("get", "post", "put", "patch", "delete"):
         resp = await client.request(
             method.upper(),

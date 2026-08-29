@@ -1,4 +1,4 @@
-"""0027：agent_suggestions.review_status 增加 expired（设计文档 16.6，M4.5）。
+"""0027：agent_suggestions.review_status 增加 expired 终态。
 
 Revision ID: 0027_suggestion_review_expired
 Revises: 0026_core_memory_entries

@@ -1,11 +1,11 @@
-"""到期/逾期提醒扫描（4.2、4.3 节，T3.6）。
+"""到期和逾期提醒扫描。
 
 由 scheduler 周期 enqueue `due.scan`、worker 消费执行：
 
 - 扫描窗口内（默认未来 24h）到期且未终态的工作项与协作请求 → `reminder.due_soon`；
 - 已逾期且未终态的 → `reminder.overdue`；
 - 接收人：工作项主执行人 / 协作请求接收人；
-- 出口只有 notifications + SSE 事件，绝不触碰任何业务状态（4.2 硬约束）。
+- 只写入 notifications 并发布 SSE 事件，绝不修改业务状态。
 
 去重：同一对象同一类提醒每个自然日只发一次——Redis 键
 `agentos:reminded:{type}:{obj_id}:{date}` SET NX EX 86400，
@@ -123,7 +123,7 @@ async def scan_due_reminders(client: redis.Redis) -> dict[str, int]:
         )
         for collab in collabs:
             assert collab.due_at is not None
-            # 项目归属经关联工作项推导（collab 无 project_id 冗余列，spec D1）
+            # CollaborationRequest 不冗余 `project_id`，项目归属必须由工作项推导。
             work_item = await session.get(WorkItem, collab.work_item_id)
             if work_item is None:
                 stats["skipped"] += 1
@@ -156,7 +156,7 @@ async def scan_due_reminders(client: redis.Redis) -> dict[str, int]:
 
         await session.commit()
 
-    # 通知已落库（commit 成功）后再发 SSE 事件（4.3 节）
+    # 提交成功后再发布 SSE，确保事件对应的通知已落库。
     await publish_events(client, events)
     logger.info("due scan finished: sent=%s skipped=%s", stats["sent"], stats["skipped"])
     return stats

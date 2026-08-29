@@ -1,8 +1,8 @@
-"""Deliverable Review Agent 提示词模板（10.1 节，T5.5）。
+"""Deliverable Review Agent 提示词模板。
 
-最小上下文（16 节）：工作项验收标准 + 最新交付物版本信息——文本交付物正文、
-文件元数据（文件名/大小/类型/哈希，不读文件原文）、Git 链接文本。
-输出负责人审核清单（checklist），只生成建议，不写 reviews 表（10.3 节）。
+仅向模型提供初审所需的工作项验收标准和最新交付物版本信息：文本交付物正文、
+Git 链接文本或文件名、大小、类型、哈希等元数据。文件原文及无关资料不发送；
+输出供负责人参考的 checklist，不写 reviews 表。
 """
 
 SYSTEM_PROMPT = (
@@ -28,7 +28,7 @@ def render_user_prompt(
     acceptance_criteria: str | None,
     latest_deliverable: dict | None,
 ) -> str:
-    """组装 user 提示词（最小上下文：验收标准 + 最新交付物版本信息）。"""
+    """使用验收标准和最新交付物信息组装最小 user 提示词。"""
     import json
 
     item = work_item or {}

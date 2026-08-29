@@ -1,4 +1,4 @@
-"""0009：agent_runs 与 agent_suggestions（Agent 运行追踪与建议存储，10.2、11 章）。
+"""0009：创建 agent_runs 与 agent_suggestions，记录 Agent 运行和结构化建议。
 
 Revision ID: 0009_agent_runs_suggestions
 Revises: 0008_deliverables_reviews
@@ -6,7 +6,7 @@ Create Date: 2026-07-27
 
 - agent_runs：一次 Agent 图运行的业务记录——状态流转（pending/running/
   succeeded/failed）、模型、耗时、错误、触发来源、重试次数、request_id；
-  LangGraph 检查点只做中断恢复，不替代本表（原则 1、17.3 节）。
+  LangGraph 检查点只用于中断恢复，不替代本表的业务记录。
 - agent_suggestions：结构化建议（JSONB 内容、置信度、风险限制、事实引用、
   prompt 版本）+ 人工采纳结果（pending/accepted/ignored + 反馈时间/人）。
 

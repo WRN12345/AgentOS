@@ -1,6 +1,6 @@
-"""记忆模块多项目隔离行为矩阵（M8.1 验收，测试接缝设计 2026-08-11）。
+"""记忆模块在 HTTP API 边界上的多项目隔离测试。
 
-双项目 fixture 下，在 HTTP API 层（主接缝）验证记忆数据的隔离与越权：
+双项目 fixture 下验证记忆数据隔离与越权处理：
 - 检索接口：只命中本项目块（文档/历史），跨项目头 → 403；
 - 核心记忆：列表不含他项目条目；他项目负责人写操作 → 404/403；
 - 成员统计：严格项目内口径，跨项目数据不混入；
@@ -64,7 +64,6 @@ async def test_search_isolation_matrix(
     assert any("A 项目" in c for c in contents)
     assert all("B 项目" not in c for c in contents)
 
-    # B 成员视角：检索不到 A 的任何块
     headers_b = await auth_headers(client, "carol", "Carol123!", project_id=str(project_b.id))
     resp = await client.post(
         "/api/v1/memory/search", headers=headers_b, json={"query": "部署"}
@@ -72,7 +71,6 @@ async def test_search_isolation_matrix(
     assert resp.status_code == 200, resp.text
     assert resp.json()["results"] == []
 
-    # A 成员带 B 项目头（非 B 成员）→ 403
     resp = await client.post(
         "/api/v1/memory/search",
         headers={"Authorization": headers_a["Authorization"], "X-Project-Id": str(project_b.id)},
@@ -96,18 +94,15 @@ async def test_core_memory_isolation_matrix(
     assert resp.status_code == 201, resp.text
     entry_id = resp.json()["id"]
 
-    # B 视角列表为空（不含 A 的条目）
     resp = await client.get("/api/v1/memory/core-entries", headers=headers_b)
     assert resp.status_code == 200, resp.text
     assert resp.json()["entries"] == []
 
-    # B 负责人作废 A 的条目 → 404
     resp = await client.post(
         f"/api/v1/memory/core-entries/{entry_id}/deprecate", headers=headers_b
     )
     assert resp.status_code == 404
 
-    # B 负责人带 A 项目头读列表 → 403（非 A 成员）
     resp = await client.get(
         "/api/v1/memory/core-entries",
         headers={"Authorization": headers_b["Authorization"], "X-Project-Id": str(project_a.id)},
@@ -131,12 +126,12 @@ async def test_member_stats_isolation_matrix(
     resp = await client.get("/api/v1/memory/member-stats", headers=headers_a)
     assert resp.status_code == 200, resp.text
     stats_a = {s["display_name"]: s for s in resp.json()}
-    assert stats_a["戴夫"]["completed_total"] == 1  # 只算 A 项目
+    assert stats_a["戴夫"]["completed_total"] == 1
 
     headers_b = await auth_headers(client, "dave", "Dave12345!", project_id=str(project_b.id))
     resp = await client.get("/api/v1/memory/member-stats", headers=headers_b)
     stats_b = {s["display_name"]: s for s in resp.json()}
-    assert stats_b["戴夫"]["completed_total"] == 2  # 只算 B 项目
+    assert stats_b["戴夫"]["completed_total"] == 2
 
 
 async def test_qa_isolation_matrix(
@@ -153,4 +148,4 @@ async def test_qa_isolation_matrix(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "refused"
-    assert body["clues"] == []  # A 的内容不作为线索泄漏
+    assert body["clues"] == []

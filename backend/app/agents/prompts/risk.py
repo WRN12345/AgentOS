@@ -1,7 +1,8 @@
-"""Workflow Risk Agent 提示词模板（10.1 节，T5.5）。
+"""Workflow Risk Agent 提示词模板。
 
-模型只接收最小上下文（16 节）：逾期/临期/阻塞工作项、近期转派记录、
-等待中协作请求（均为只读工具的系统侧查询结果）。输出平铺的 risks 列表。
+仅向模型提供识别风险所需的逾期、临期或阻塞工作项、近期转派记录和等待中
+协作请求，不提供无关资料或敏感正文。输入均来自系统侧只读查询，输出平铺的
+risks 列表。
 """
 
 SYSTEM_PROMPT = (
@@ -32,7 +33,7 @@ def render_user_prompt(
     transfer_history: list[dict],
     waiting_collaborations: list[dict],
 ) -> str:
-    """组装 user 提示词（最小上下文：风险相关的只读查询结果）。"""
+    """使用风险相关的只读查询结果组装最小 user 提示词。"""
     import json
 
     lines = [

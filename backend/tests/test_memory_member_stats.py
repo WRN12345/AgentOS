@@ -1,8 +1,7 @@
-"""成员完成数与负载统计测试（M3.1 验收，设计文档第 7 节①）。
+"""成员完成数、按时率与当前负载的项目内统计测试。
 
 - 按项目+成员聚合：完成总数（主执行人口径）、当前活跃负载、近 30 天完成数；
-- 跨项目数据不混入；停用成员统计保留（16.7）；
-- 本期不含技能标签维度（work_items 无标签字段，2026-08-22 确认）。
+- 跨项目数据不混入；停用成员统计保留。
 """
 
 import uuid
@@ -70,7 +69,7 @@ async def test_stats_aggregation(project_a: Project) -> None:
 
 
 async def test_stats_project_isolation(project_a: Project, project_b: Project) -> None:
-    """同一用户在两个项目的统计严格分开（按项目分开计算，已确认决策）。"""
+    """同一用户在不同项目的统计应严格隔离。"""
     user_a, member_a = await add_member(project_a, "carol", "Carol123!", display_name="卡罗尔")
     member_b = await add_member_for_existing_user(
         async_session_factory, project_b, user_a, display_name="卡罗尔"
@@ -90,7 +89,7 @@ async def test_stats_project_isolation(project_a: Project, project_b: Project) -
 
 
 async def test_inactive_member_stats_kept(project_a: Project) -> None:
-    """停用成员统计保留、标记停用（16.7），由分配侧排除候选。"""
+    """停用成员的统计应保留并标记为停用。"""
     _, dave = await add_member(project_a, "dave", "Dave12345!", display_name="戴夫")
     await _add_item(project_a, dave, "COMPLETED")
     async with async_session_factory() as session:
@@ -105,20 +104,14 @@ async def test_inactive_member_stats_kept(project_a: Project) -> None:
         assert sd.completed_total == 1
 
 
-# ---------- M3.2 按时完成率（宽口径 + 样本量，16.8） ----------
-
-
 async def test_on_time_rate_wide_scope(project_a: Project) -> None:
     """逾期完成、改期后按时（最终截止时间）、无截止时间三种边界。"""
     _, alice = await add_member(project_a, "alice", "Alice123!", display_name="爱丽丝")
     now = datetime.now(UTC)
-    # 逾期完成：截止早于完成时间
     await _add_item(project_a, alice, "COMPLETED", title="逾期", due_at=now - timedelta(days=1))
-    # 改期后按时：最终截止时间晚于完成时间（DDL 变更批准后 due_at 已就地更新）
+    # 改期后以最终截止时间判断是否按时。
     await _add_item(project_a, alice, "COMPLETED", title="改期后按时", due_at=now + timedelta(days=1))
-    # 无截止时间：无约可逾，视为按时
     await _add_item(project_a, alice, "COMPLETED", title="无截止")
-    # 取消不计入分母
     await _add_item(project_a, alice, "CANCELLED", title="取消", due_at=now - timedelta(days=1))
 
     async with async_session_factory() as session:

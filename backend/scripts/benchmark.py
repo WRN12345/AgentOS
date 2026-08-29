@@ -1,4 +1,4 @@
-"""性能基线测量脚本（T6.7，第 20 章阶段 6）。
+"""AgentOS 后端性能基线测量脚本。
 
 对运行中的 AgentOS 后端测量核心接口的响应时间，输出 Markdown 表格。
 测量前自动造代表性数据量（perf_ 前缀，便于识别与复测）：
@@ -35,7 +35,7 @@ async def login(client: httpx.AsyncClient, username: str, password: str) -> dict
 
 
 async def measure(name: str, samples: int, fn, results: list[dict]) -> None:
-    """对 fn() 采样 samples 次，记录毫秒耗时统计。"""
+    """调用 fn() 采样 samples 次，并记录以毫秒为单位的耗时统计。"""
     times: list[float] = []
     for _ in range(samples):
         start = time.perf_counter()
@@ -67,7 +67,7 @@ async def main() -> None:
     async with httpx.AsyncClient(base_url=args.base_url, timeout=30.0, limits=limits) as client:
         admin_headers = await login(client, args.admin_user, args.admin_password)
 
-        # ---------- 造数：成员（幂等复用） ----------
+        # 准备成员数据，已存在的成员直接复用
         resp = await client.get("/api/v1/members", headers=admin_headers)
         resp.raise_for_status()
         members = resp.json()
@@ -97,7 +97,7 @@ async def main() -> None:
             except httpx.HTTPStatusError:
                 pass
 
-        # ---------- 造数：工作项（perf_ 前缀标题，统计已存在的数量） ----------
+        # 准备工作项数据，通过 perf_ 标题前缀统计并复用已有数据
         resp = await client.get("/api/v1/work-items?limit=500", headers=admin_headers)
         resp.raise_for_status()
         existing = resp.json()
@@ -121,13 +121,13 @@ async def main() -> None:
 
         results: list[dict] = []
 
-        # ---------- 登录 ----------
+        # 登录接口
         async def do_login() -> None:
             await login(client, args.admin_user, args.admin_password)
 
         await measure("POST /auth/login", LOGIN_SAMPLES, do_login, results)
 
-        # ---------- 读接口 ----------
+        # 读取接口
         async def get_items() -> None:
             (await client.get("/api/v1/work-items?limit=100", headers=admin_headers)).raise_for_status()
 
@@ -148,7 +148,7 @@ async def main() -> None:
 
         await measure("GET /notifications", args.samples, get_notifications, results)
 
-        # ---------- 命令接口（协作创建 + 工作项命令，带幂等键/乐观锁） ----------
+        # 命令接口：创建协作和工作项，覆盖幂等键与乐观锁场景
         # 建一个专用工作项做命令测量
         assignee = perf_members[0]
         resp = await client.post(
@@ -194,7 +194,7 @@ async def main() -> None:
 
         await measure("POST /work-items（创建+幂等键）", CMD_SAMPLES, create_item_cmd, results)
 
-        # ---------- 文件上传/下载 ----------
+        # 文件上传与下载接口
         payload = b"perf-benchmark-payload\n" * 40000  # 约 880KB
 
         file_ids: list[str] = []
@@ -219,7 +219,7 @@ async def main() -> None:
 
             await measure("GET /files/{id}/download", FILE_SAMPLES, download, results)
 
-        # ---------- SSE 建立 ----------
+        # SSE 连接建立
         async def sse_connect() -> None:
             async with client.stream("GET", "/api/v1/events/stream", headers=admin_headers) as resp:
                 resp.raise_for_status()
@@ -228,7 +228,7 @@ async def main() -> None:
 
         await measure("GET /events/stream（SSE 建立+首帧）", FILE_SAMPLES, sse_connect, results)
 
-    # ---------- 输出 ----------
+    # 输出 Markdown 统计表
     print("\n| 接口 | 样本 | 平均(ms) | p50(ms) | p95(ms) | 最大(ms) |")
     print("| --- | --- | --- | --- | --- | --- |")
     for r in results:
