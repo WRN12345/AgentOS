@@ -338,7 +338,7 @@ scheduler 是后续定时任务的**调度挂点**——在循环里按"enqueue 
 ### 8.3 备份恢复脚本（19.4 节）
 
 - `deploy/scripts/backup.sh`：pg_dump 自定义格式 → `data/backups/postgres/`；`tar --listed-incremental` 增量 → `data/backups/uploads/`；14 天保留自动清理；日志写 `data/logs/backup.log`。
-- `deploy/scripts/restore.sh`：恢复到**指定目标库**（覆盖主库必须 `--confirm`，已实测拒绝）；恢复后自动校验库可连、核心表存在、`stored_files` 随机抽查 SHA-256 与实际文件比对。定时触发靠宿主机 crontab（`deploy/scripts/README.md` 有配置方法）。恢复演练记录见 `docs/restore-drill-2026-07-28.md`。
+- `deploy/scripts/restore.sh`：恢复到**指定目标库**（覆盖主库必须 `--confirm`，已实测拒绝）；恢复后自动校验库可连、核心表存在、`stored_files` 随机抽查 SHA-256 与实际文件比对。定时触发靠宿主机 crontab（`deploy/scripts/README.md` 有配置方法）。恢复演练记录见 `docs/quality-baseline-2026-07-29.md` 第 3 节。
 - 遗留说明：增量包只含当次变更，精确恢复到某天需按序解包"全量基线 + 增量包"。
 
 ### 8.4 健康检查与编排联动
@@ -354,10 +354,10 @@ scheduler 是后续定时任务的**调度挂点**——在循环里按"enqueue 
 
 ### 8.6 安全检查清单与发布文档（第 16、22 章）
 
-- `docs/security-checklist-2026-07-29.md`：凭据、权限、日志、模型最小上下文、网络面五项检查，**全部通过，无需代码修复**；唯一提醒：宿主机系统级 postgres 监听 0.0.0.0:5432，建议收紧。
-- `backend/scripts/benchmark.py` + `docs/perf-baseline-2026-07-28.md`：101 工作项量级下读接口 p95 < 35ms、命令 p95 < 70ms、登录约 96ms、SSE 建立 < 16ms；未发现慢查询，未新增索引。增长后按基线报告复测，首要关注负载聚合与审计表扫描。
+- 安全检查（`docs/quality-baseline-2026-07-29.md` 第 4 节）：凭据、权限、日志、模型最小上下文、网络面五项检查，**全部通过，无需代码修复**；唯一提醒：宿主机系统级 postgres 监听 0.0.0.0:5432，建议收紧。
+- `backend/scripts/benchmark.py`（性能基线见 `docs/quality-baseline-2026-07-29.md` 第 2 节）：101 工作项量级下读接口 p95 < 35ms、命令 p95 < 70ms、登录约 96ms、SSE 建立 < 16ms；未发现慢查询，未新增索引。增长后按基线报告复测，首要关注负载聚合与审计表扫描。
 - `docs/release-guide.md`：Debian 宿主机准备、开发模式、`.env.example` 逐项说明、备份恢复入口、部署验证记录（标准 11）。
-- `docs/mvp-checklist.md`：第 22 章 13 条标准逐条核对 + 证据指针，**全部满足，MVP 宣告完成**。
+- MVP 核对（`docs/quality-baseline-2026-07-29.md` 第 1 节）：第 22 章 13 条标准逐条核对 + 证据指针，**全部满足，MVP 宣告完成**。
 
 ---
 

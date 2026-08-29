@@ -92,7 +92,7 @@ cd frontend && npm install && npm run dev
 - 恢复：`deploy/scripts/restore.sh --dump <文件> --target-db <库名> [--uploads-archive ...]`，
   覆盖主库需显式 `--confirm`；恢复后自动校验（连通性、核心表、文件 SHA-256 抽查）。
 - 定时任务（宿主机 crontab）与增量恢复细节见 `deploy/scripts/README.md`。
-- 恢复演练记录：`docs/restore-drill-2026-07-28.md`（MVP 标准 12 证据，每月至少一次）。
+- 恢复演练记录：`docs/quality-baseline-2026-07-29.md` 第 3 节（MVP 标准 12 证据，每月至少一次）。
 
 ## 6. 测试入口
 
@@ -100,7 +100,7 @@ cd frontend && npm install && npm run dev
   （独立 `agentos_test` 库 + Redis db15，自动建库迁移，不污染主库）
 - 前端：`cd frontend && npm run test`（Vitest，57 例）
 - 端到端验收场景：`pytest tests/test_e2e_rag_serial.py tests/test_e2e_parallel.py`
-- 性能基线复测：见 `docs/perf-baseline-2026-07-28.md` 第 4 节
+- 性能基线复测：见 `docs/quality-baseline-2026-07-29.md` 第 2 节
 
 ## 7. 角色模型（2026-07-29 起）
 

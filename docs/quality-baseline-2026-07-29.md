@@ -18,8 +18,8 @@
 | 8 | 所有关键操作都有不可覆盖的审计事件 | ✅ | `tests/test_audit.py`、`tests/test_audit_coverage.py`（9 类关键动作逐一断言 + 不可变断言；已实证删除任一审计写入对应测试必失败） |
 | 9 | Ollama 不可用时核心工作流仍可正常使用 | ✅ | `tests/test_agent_retry.py`（worker 韧性）、`tests/test_agent_contract.py`（超时/不可用落 failed 不污染业务状态） |
 | 10 | Agent 不具备改变正式业务状态的工具 | ✅ | `tests/test_agent_guardrails.py`（工具注册表无写业务工具）；两个 e2e 场景的 Agent 运行前后业务状态快照比对 |
-| 11 | Docker Compose 能在 Debian 上启动全部应用服务 | ✅ | `docs/release-guide.md` 第 9 节部署验证记录（build → down/up → 六服务 healthy → 登录实测） |
-| 12 | 数据库和文件备份能完成一次实际恢复 | ✅ | `docs/restore-drill-2026-07-28.md`（恢复到全新库+目录，SHA-256 抽查 2/2 一致） |
+| 11 | Docker Compose 能在 Debian 上启动全部应用服务 | ✅ | `docs/release-guide.md` 第 10 节部署验证记录（build → down/up → 六服务 healthy → 登录实测） |
+| 12 | 数据库和文件备份能完成一次实际恢复 | ✅ | 本文档第 3 节（恢复到全新库+目录，SHA-256 抽查 2/2 一致） |
 | 13 | 成员能看全员工作量/状态/摘要，但不能越权下载无关交付文件 | ✅ | `tests/test_files_api.py`、`tests/test_unit_permissions.py`（下载/文件引用权限）；`GET /members` 负载汇总透明字段 |
 
 **结论：13 条标准全部满足，MVP 宣告完成（2026-07-29）。**
