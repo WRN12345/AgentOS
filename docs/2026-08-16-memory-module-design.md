@@ -1,7 +1,7 @@
 # 记忆模块设计（讨论稿 v3）
 
 日期：2026-08-16（v3 更新：按 feat/multiproject 分支现状和已确认的多项目决策修订；v4 更新：2026-08-21 评审问答后补充 13 条边界决策，见第 16 节）
-状态：已实现（2026-08-24，feat/memory-module；实现计划与逐任务状态见 docs/tasks/memory-module-implementation-plan.md）
+状态：已实现（2026-08-24，feat/memory-module；实现计划与逐任务状态见原 docs/tasks/memory-module-implementation-plan.md，已归档，可通过 git 历史追溯）
 参考：Hermes Agent 的分层记忆设计（四层记忆 + 闭环学习），已按 AgentOS 的团队协作场景改造
 
 ---
@@ -255,4 +255,4 @@ Agent 分配任务时，除了"他会什么"（技能标签），还能看到"�
 
 ---
 
-**本文档已确认并落地：实现计划与 49 个任务的完成状态见 `docs/tasks/memory-module-implementation-plan.md`。**
+**本文档已确认并落地：实现计划与 49 个任务的完成状态见原 `docs/tasks/memory-module-implementation-plan.md`（已归档，可通过 git 历史追溯）。**

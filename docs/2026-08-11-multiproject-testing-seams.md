@@ -104,3 +104,52 @@ UI 行为（登录后去哪、项目选择页渲染、切换项目、角色区�
 4. 最后 **前端**（store/分流/选择页）——副接缝
 
 每步完成即跑主接缝回归，保证接缝随时可执行、不积压到最后一刻。
+
+## 多项目改造设计决策摘要
+
+本节整合自已完成的 `.scratch/multiproject/` spec 与 10 个 ticket（原文件可通过 git 历史追溯），记录多项目改造的关键设计决策，作为测试接缝设计的背景。
+
+### 项目上下文传递
+
+- **请求头机制**：`X-Project-Id` 请求头作为项目上下文入口，由 `backend/app/core/middleware.py` 在每个请求中快照到 contextvars（`backend/app/core/request_context.py`）
+- **缺失语义**：缺失或非法 UUID 不强制返回 4xx，由具体接口决定语义（全局接口如 `/me/projects` 不需要项目上下文，项目内接口缺失则 400）
+- **非成员访问**：返回 403
+
+### 数据层归属
+
+- **独立列表表冗余 project_id**：6 张独立列表入口表（work_items / deliverables / notifications / stored_files / agent_runs / audit_events 等）冗余 `project_id` 字段，便于直接过滤
+- **派生表经父对象推导**：审批、协作请求、转派、改期、开发文档、评审等派生实体通过父对象（work_item → deliverable）推导归属，不冗余 project_id
+- **同项目校验失败 4xx、越权访问 404**：同项目内的业务校验失败（如状态机非法迁移）返回 4xx；跨项目访问已存在资源返回 404（不泄露存在性）
+- **迁移策略**：产品无真实用户，采用重建（重建数据库，无存量兼容义务，不做灰度/双写）
+- **现有唯一约束不动**：`work_item_id`/`member_id` 等现有唯一键已隐含"项目内唯一"，多项目后语义不变
+
+### 全局 admin
+
+- **平台级角色**：`users.is_admin` 升级为全局管理员标识，独立于项目成员体系
+- **职责边界**：全局 admin 负责账号管理、项目创建、指定项目负责人、查看平台审计；不参与项目业务协作
+- **审计查询放行**：审计查询接口对全局 admin 放行，不受项目归属限制
+
+### 幂等键项目化
+
+- **项目维度唯一**：幂等唯一键纳入项目维度，同用户同键在不同项目下视为不同请求，不复用响应（`backend/app/core/idempotency.py`）
+
+### Agent / Worker 路径
+
+- **队列载荷显式携带项目**：worker 进程没有请求头上下文，项目上下文必须显式携带在任务队列载荷里，不能靠 header 推导
+- **工具查询项目化**：agent 全部工具查询限定当前项目，不跨项目泄漏上下文（`agents/tools.py`）
+- **写路径推导 project_id**：due_scan/risk_scan 从 `work_item_id`/`run_id` 推导 project_id 显式传入，不互相 skip；风险扫描去重键项目化
+
+### 前端项目化
+
+- **store 项目化**：全局 store 含 `currentProject`、`projects` 列表、`member`、`projectSelectedAt`（`frontend/src/app/store.ts`）
+- **API 自动注入**：API 客户端在 `request()` 中调用 `projectHeader()`，自动把 `X-Project-Id` 注入请求头（`frontend/src/services/api.ts`）
+- **SSE 带项目上下文**：事件流 URL 形如 `/api/v1/events/stream?token=...&project_id=...`（`frontend/src/services/events.ts`）
+- **登录分流**：登录后按 `user.is_admin` 分流——admin 进 `/console`，普通用户进项目选择页（24h 记忆上次项目）（`frontend/src/features/auth/LoginPage.tsx`、`ProjectPickerPage.tsx`）
+- **登录时序**：登录后先 `GET /me/projects` 判断分流，进项目后再 `loadIdentity` 加载 member 身份（admin 不能调 `/members`，避免循环依赖）
+- **路由守卫**：`/console` 使用 `AdminOnly` 守卫（`frontend/src/app/router.tsx`）
+
+### 测试接缝
+
+- **主接缝（后端）**：跨项目隔离在 HTTP API 层验证（pytest + httpx，双项目 fixture），覆盖隔离/越权 404/幂等项目化/admin 全局化
+- **副接缝（前端）**：Vitest 验证登录分流、项目选择页、store 项目化
+- **不新建测试层**：复用既有 pytest 与 Vitest 接缝，不增加新的测试层级
