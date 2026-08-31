@@ -1,0 +1,38 @@
+README.md
+  s_f347da4fd8d87b::t_a991d796b1c8a4 20
+  s_f347da4fd8d87b::t_4ca31889f24e11 122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "671c9a9904d64a694189738bfc4e77d4c03881c5",
+  "prompts": {},
+  "humans": {
+    "h_f72f44457b4972": {
+      "author": "Kevin <xiaoxingcdd@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f347da4fd8d87b": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a8edfd71bd7a4980dded14c",
+        "model": "glm-5.3__dev"
+      },
+      "human_author": "Kevin <xiaoxingcdd@gmail.com>",
+      "custom_attributes": {
+        "tool_id": "Edit",
+        "edit_kind": "file_edit",
+        "source_scene": "unknown",
+        "dedupe_key": "6a8edfd71bd7a4980dded14c:6a957f342a5e99ba51f15d50:afterEdit:93fa7bfd",
+        "tool_use_id": "6a957f342a5e99ba51f15d50",
+        "session_id": "6a8edfd71bd7a4980dded14c",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "external_session_id": "6a8edfd71bd7a4980dded14c",
+        "runtime_client": "trae-tob-git-ai",
+        "operation_id": "6a957f342a5e99ba51f15d50"
+      }
+    }
+  }
+}
