@@ -17,7 +17,7 @@ AgentOS 的答案是：**流程平台管留痕，AI 管建议**。业务状态�
 
 ## 快速开始
 
-[点击此链接，快速开始你的第一次团队协作](docs\QuicklyStart.md)
+[点击此链接，快速开始你的第一次团队协作](docs/QuicklyStart.md)
 
 ## 功能总览
 
@@ -119,7 +119,7 @@ data/       PostgreSQL、Redis、上传文件、日志和备份等运行时数�
 - [架构指南](docs/architecture-guide.md)
 - [发布、部署与迁移指南](docs/release-guide.md)
 - [备份与恢复脚本说明](deploy/scripts/README.md)
-- [快速开始](docs\QuicklyStart.md)
+- [快速开始](docs/QuicklyStart.md)
 
 ## 当前限制
 
