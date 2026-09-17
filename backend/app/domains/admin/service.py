@@ -6,8 +6,9 @@
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
@@ -15,15 +16,126 @@ from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.identity.models import User
 from app.domains.identity.service import create_user
+from app.domains.memory.member_stats import MIN_SAMPLE_SIZE, RECENT_DAYS
 from app.domains.project.models import ROLE_LEADER, ROLE_MEMBER, Project, ProjectMember
+from app.domains.work_items.models import WorkItem
+from app.domains.work_items.state_machine import ACTIVE_STATUSES, WorkItemStatus
 from app.domains.admin.schemas import (
+    AdminAttentionItemOut,
+    AdminAttentionOut,
+    AdminMemberOverviewOut,
+    AdminOverviewOut,
     AdminProjectOut,
+    AdminProjectOverviewOut,
     AdminUserCreateIn,
     LeaderBrief,
     ProjectCreateIn,
 )
 
 logger = setup_logging("backend")
+
+
+async def get_overview(session: AsyncSession) -> AdminOverviewOut:
+    as_of = datetime.now(UTC)
+    active = WorkItem.status.in_(ACTIVE_STATUSES)
+    completed = WorkItem.status == WorkItemStatus.COMPLETED
+    aggregates = (
+        await session.execute(
+            select(
+                WorkItem.project_id,
+                WorkItem.assignee_id,
+                func.count().label("total"),
+                func.count().filter(completed).label("completed"),
+                func.count().filter(active).label("active"),
+                func.count().filter(active, WorkItem.due_at < as_of).label("overdue"),
+                func.count().filter(WorkItem.status == WorkItemStatus.BLOCKED).label("blocked"),
+                func.count().filter(
+                    completed, WorkItem.updated_at >= as_of - timedelta(days=RECENT_DAYS)
+                ).label("completed_recent"),
+                func.count().filter(
+                    completed,
+                    or_(WorkItem.due_at.is_(None), WorkItem.updated_at <= WorkItem.due_at),
+                ).label("on_time"),
+            )
+            .where(WorkItem.status.not_in((WorkItemStatus.DRAFT, WorkItemStatus.CANCELLED)))
+            .group_by(WorkItem.project_id, WorkItem.assignee_id)
+        )
+    ).mappings().all()
+    by_member = {(row["project_id"], row["assignee_id"]): row for row in aggregates}
+    project_counts: dict[uuid.UUID, dict[str, int]] = {}
+    count_fields = ("total", "completed", "active", "overdue", "blocked")
+    for row in aggregates:
+        counts = project_counts.setdefault(row["project_id"], dict.fromkeys(count_fields, 0))
+        for field in count_fields:
+            counts[field] += row[field]
+
+    projects = [
+        AdminProjectOverviewOut(
+            **project.model_dump(),
+            **project_counts.get(project.id, dict.fromkeys(count_fields, 0)),
+        )
+        for project in await list_projects(session)
+    ]
+    member_rows = (
+        await session.execute(
+            select(
+                ProjectMember.id.label("member_id"), ProjectMember.user_id,
+                ProjectMember.project_id, User.username, ProjectMember.display_name,
+                ProjectMember.role, ProjectMember.is_active,
+                User.is_active.label("user_is_active"),
+            )
+            .join(User, User.id == ProjectMember.user_id)
+            .order_by(ProjectMember.project_id, ProjectMember.display_name, ProjectMember.id)
+        )
+    ).mappings().all()
+    members = []
+    for row in member_rows:
+        stats = by_member.get((row["project_id"], row["member_id"]), {})
+        completed_total = stats.get("completed", 0)
+        members.append(AdminMemberOverviewOut(
+            **row,
+            active=stats.get("active", 0),
+            completed_total=completed_total,
+            completed_recent=stats.get("completed_recent", 0),
+            overdue=stats.get("overdue", 0),
+            blocked=stats.get("blocked", 0),
+            on_time_rate=stats.get("on_time", 0) / completed_total if completed_total else None,
+            sample_sufficient=completed_total >= MIN_SAMPLE_SIZE,
+        ))
+    return AdminOverviewOut(as_of=as_of, projects=projects, members=members)
+
+
+async def get_attention(
+    session: AsyncSession, *, project_id: uuid.UUID | None, limit: int, offset: int
+) -> AdminAttentionOut:
+    as_of = datetime.now(UTC)
+    overdue = and_(WorkItem.due_at.is_not(None), WorkItem.due_at < as_of)
+    conditions = [
+        WorkItem.status.in_(ACTIVE_STATUSES),
+        or_(WorkItem.status == WorkItemStatus.BLOCKED,
+            WorkItem.due_at <= as_of + timedelta(days=7)),
+    ]
+    if project_id is not None:
+        conditions.append(WorkItem.project_id == project_id)
+    total = (await session.execute(
+        select(func.count()).select_from(WorkItem).where(*conditions)
+    )).scalar_one()
+    rows = (await session.execute(
+        select(
+            WorkItem.id, WorkItem.project_id, WorkItem.title, WorkItem.status,
+            WorkItem.priority, WorkItem.assignee_id,
+            ProjectMember.display_name.label("assignee_name"),
+            WorkItem.due_at, WorkItem.updated_at, overdue.label("is_overdue"),
+        )
+        .join(ProjectMember, ProjectMember.id == WorkItem.assignee_id)
+        .where(*conditions)
+        .order_by(overdue.desc(), (WorkItem.status == WorkItemStatus.BLOCKED).desc(),
+                  WorkItem.due_at.asc().nulls_last(), WorkItem.id)
+        .limit(limit).offset(offset)
+    )).mappings().all()
+    return AdminAttentionOut(
+        items=[AdminAttentionItemOut(**row) for row in rows], total=total
+    )
 
 
 async def _require_eligible_user(

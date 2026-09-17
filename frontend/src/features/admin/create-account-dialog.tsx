@@ -65,6 +65,7 @@ export function CreateAccountDialog({
     onSuccess: (account) => {
       toast.success(`账号 ${account.username} 创建成功`);
       queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminOverview() });
       queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
       form.reset();
       setCreated(account);

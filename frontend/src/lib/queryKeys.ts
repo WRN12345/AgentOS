@@ -39,8 +39,10 @@ export const queryKeys = {
   agentRuns: (...suffix: unknown[]) => scoped("agent-runs", ...suffix),
   notifications: (...suffix: unknown[]) => scoped("notifications", ...suffix),
   auditEvents: (...suffix: unknown[]) => scoped("audit-events", ...suffix),
-  /** 管理控制台（ticket 10）：全局管理员无项目上下文，键不含项目前缀。 */
-  adminProjects: (...suffix: unknown[]) => scoped("admin-projects", ...suffix),
-  adminUsers: (...suffix: unknown[]) => scoped("admin-users", ...suffix),
+  /** 管理员查询独立于成员当前项目；范围和分页通过 suffix 显式隔离。 */
+  adminProjects: (...suffix: unknown[]) => ["admin-projects", ...suffix],
+  adminUsers: (...suffix: unknown[]) => ["admin-users", ...suffix],
+  adminOverview: () => ["admin-overview"],
+  adminAttention: (...suffix: unknown[]) => ["admin-attention", ...suffix],
   adminAuditEvents: (...suffix: unknown[]) => ["admin-audit-events", ...suffix],
 };

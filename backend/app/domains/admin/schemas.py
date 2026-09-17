@@ -49,6 +49,56 @@ class ProjectCreateIn(BaseModel):
     owner_user_id: uuid.UUID
 
 
+class AdminProjectOverviewOut(AdminProjectOut):
+    total: int
+    completed: int
+    active: int
+    overdue: int
+    blocked: int
+
+
+class AdminMemberOverviewOut(BaseModel):
+    member_id: uuid.UUID
+    user_id: uuid.UUID
+    project_id: uuid.UUID
+    username: str
+    display_name: str
+    role: str
+    is_active: bool
+    user_is_active: bool
+    active: int
+    completed_total: int
+    completed_recent: int
+    overdue: int
+    blocked: int
+    on_time_rate: float | None
+    sample_sufficient: bool
+
+
+class AdminOverviewOut(BaseModel):
+    as_of: datetime
+    projects: list[AdminProjectOverviewOut]
+    members: list[AdminMemberOverviewOut]
+
+
+class AdminAttentionItemOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    title: str
+    status: str
+    priority: str
+    assignee_id: uuid.UUID
+    assignee_name: str
+    due_at: datetime | None
+    updated_at: datetime
+    is_overdue: bool
+
+
+class AdminAttentionOut(BaseModel):
+    items: list[AdminAttentionItemOut]
+    total: int
+
+
 class AdminProjectLeaderIn(BaseModel):
     """全局管理员变更项目唯一负责人。"""
 

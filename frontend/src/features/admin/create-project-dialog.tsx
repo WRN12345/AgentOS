@@ -50,9 +50,17 @@ export function CreateProjectDialog({
   onOpenChange,
 }: CreateProjectDialogProps) {
   const queryClient = useQueryClient();
-  const { data: users } = useQuery({
+  const {
+    data: users,
+    isPending,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: queryKeys.adminUsers(),
     queryFn: () => api.get<UserMe[]>("/users"),
+    enabled: open,
   });
 
   const form = useForm<CreateValues>({
@@ -75,6 +83,7 @@ export function CreateProjectDialog({
       toast.success(`项目 ${project.name} 创建成功，负责人可进入工作台`);
       // 项目列表 + 平台审计（project.created）一并失效
       queryClient.invalidateQueries({ queryKey: queryKeys.adminProjects() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminOverview() });
       queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
       form.reset();
       onOpenChange(false);
@@ -103,6 +112,25 @@ export function CreateProjectDialog({
             创建项目并指定负责人，负责人将立即获得该项目工作台访问权。
           </DialogDescription>
         </DialogHeader>
+        {isPending && <p role="status">正在加载账号...</p>}
+        {isError && (
+          <div role="alert" className="text-sm text-destructive">
+            {errorMessage(error, "账号加载失败")}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              重试
+            </Button>
+          </div>
+        )}
+        {users?.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            暂无账号，请先创建账号。
+          </p>
+        )}
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
@@ -138,7 +166,10 @@ export function CreateProjectDialog({
               users={users}
             />
             <DialogFooter>
-              <Button type="submit" disabled={mutation.isPending}>
+              <Button
+                type="submit"
+                disabled={mutation.isPending || isPending || isError}
+              >
                 {mutation.isPending ? "创建中…" : "创建项目"}
               </Button>
             </DialogFooter>
