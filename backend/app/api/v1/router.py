@@ -25,6 +25,7 @@ from app.domains.project.dependencies import get_current_member
 from app.domains.project.models import ProjectMember
 from app.domains.project.router import router as members_router
 from app.domains.reviews.router import router as reviews_router
+from app.domains.requirements.router import router as requirements_router
 from app.domains.transfers.router import router as transfers_router
 from app.domains.work_items.router import router as work_items_router
 from app.infrastructure.cache.redis import create_redis_client
@@ -35,6 +36,7 @@ logger = setup_logging("backend")
 router = APIRouter()
 
 router.include_router(admin_router)
+router.include_router(requirements_router)
 router.include_router(auth_router)
 router.include_router(audit_router)
 router.include_router(members_router)

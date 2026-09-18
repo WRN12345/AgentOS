@@ -80,7 +80,8 @@ async def _clean_tables() -> AsyncIterator[None]:
     async with async_session_factory() as session:
         await session.execute(
             text(
-                "TRUNCATE reviews, deliverables, refresh_tokens, users, audit_events, "
+                "TRUNCATE project_requirements, requirement_analyses, project_materials, "
+                "reviews, deliverables, refresh_tokens, users, audit_events, "
                 "idempotency_records, "
                 "member_capabilities, work_item_collaborators, work_items, "
                 "collaboration_requests, notifications, "

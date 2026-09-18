@@ -35,6 +35,7 @@ from app.workers.memory_index import execute_memory_index, recover_stale_file_in
 from app.workers.memory_summary import execute_memory_summary
 from app.workers.proposal_expire import expire_memory_proposals
 from app.workers.risk_scan import run_risk_scan
+from app.workers.requirement_analysis import execute_requirement_analysis, recover_requirement_analyses
 
 logger = setup_logging("worker")
 
@@ -53,6 +54,8 @@ async def handle_task(task: dict, redis_client: redis.Redis) -> None:
     elif task_type == "agent.run":
         # Agent 图只产出建议和通知，失败仅记录在 `agent_runs`，不影响业务状态。
         await execute_agent_run(task.get("payload", {}), redis_client)
+    elif task_type == "requirements.analyze":
+        await execute_requirement_analysis(task.get("payload", {}), redis_client)
     elif task_type == "agent.risk_scan":
         # 风险扫描去重后投递 `agent.run`，不得修改业务状态。
         await run_risk_scan(redis_client)
@@ -99,6 +102,10 @@ async def run() -> None:
                     await recover_stale_file_indexes(redis_client)
                 except Exception:  # noqa: BLE001 - 恢复扫描失败不能停止任务消费
                     logger.exception("stale file index recovery failed")
+                try:
+                    await recover_requirement_analyses(redis_client)
+                except Exception:
+                    logger.exception("requirement analysis recovery failed")
                 last_file_index_recovery = now
             # 先恢复到期的延迟任务，避免即时队列持续繁忙时饿死重试任务。
             await promote_due_delayed(redis_client)

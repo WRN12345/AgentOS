@@ -17,6 +17,7 @@ import AgentAssistantPage from "../features/agent-assistant/AgentAssistantPage";
 import DocumentsPage from "../features/knowledge/DocumentsPage";
 import CoreMemoryPage from "../features/knowledge/CoreMemoryPage";
 import QaPage from "../features/knowledge/QaPage";
+import ProjectRequirementsPage from "../features/project-requirements/ProjectRequirementsPage";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: "team-overview", element: <TeamOverviewPage /> },
       { path: "members", element: <MembersPage /> },
+      { path: "project-requirements", element: <ProjectRequirementsPage /> },
       { path: "work-items", element: <WorkItemsPage /> },
       { path: "work-items/:id", element: <WorkItemDetailPage /> },
       { path: "approvals", element: <ApprovalsPage /> },

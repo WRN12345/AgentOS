@@ -40,6 +40,7 @@ const navItems = [
   { to: "/team-overview", label: "团队概览", icon: BarChart3, end: false },
   { to: "/members", label: "成员与能力", icon: Users, end: false },
   { to: "/work-items", label: "任务", icon: ListTodo, end: false },
+  { to: "/project-requirements", label: "项目需求", icon: ClipboardCheck, end: false },
   { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },
   { to: "/deliverables", label: "交付物", icon: Package, end: false },
   { to: "/agent-assistant", label: "AI 助手", icon: Bot, end: false },
@@ -87,7 +88,7 @@ export default function AppLayout() {
         </div>
         <Separator />
         <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
+          {navItems.filter(item => item.to !== "/project-requirements" || isLeader).map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
