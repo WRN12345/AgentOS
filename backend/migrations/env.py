@@ -21,6 +21,7 @@ from app.domains.memory import models as _memory_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401
 from app.domains.project import models as _project_models  # noqa: F401
 from app.domains.reviews import models as _review_models  # noqa: F401
+from app.domains.requirements import models as _requirement_models  # noqa: F401
 from app.domains.transfers import models as _transfer_models  # noqa: F401
 from app.domains.work_items import models as _work_item_models  # noqa: F401
 from app.infrastructure.models import idempotency as _idempotency_model  # noqa: F401

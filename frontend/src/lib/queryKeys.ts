@@ -41,6 +41,8 @@ export const queryKeys = {
   auditEvents: (...suffix: unknown[]) => scoped("audit-events", ...suffix),
   /** 管理员查询独立于成员当前项目；范围和分页通过 suffix 显式隔离。 */
   adminProjects: (...suffix: unknown[]) => ["admin-projects", ...suffix],
+  adminRequirements: (projectId: string, ...suffix: unknown[]) => ["admin-requirements", projectId, ...suffix],
+  projectRequirements: () => scoped("project-requirements"),
   adminUsers: (...suffix: unknown[]) => ["admin-users", ...suffix],
   adminOverview: () => ["admin-overview"],
   adminAttention: (...suffix: unknown[]) => ["admin-attention", ...suffix],

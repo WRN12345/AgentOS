@@ -66,6 +66,7 @@ import type {
 import { ChangeLeaderDialog } from "./change-leader-dialog";
 import { CreateAccountDialog } from "./create-account-dialog";
 import { CreateProjectDialog } from "./create-project-dialog";
+import ProjectRequirementsPanel from "./ProjectRequirementsPanel";
 
 export default function AdminConsolePage() {
   const navigate = useNavigate();
@@ -765,7 +766,7 @@ export default function AdminConsolePage() {
                 </h1>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {projectId
-                    ? `项目监督 · 只读${selected ? ` · 负责人：${selected.leader?.display_name ?? "未指定"}` : ""}`
+                    ? `${tab === "projects" ? "任务监督 · 只读" : "项目监督 · 只读"}${selected ? ` · 负责人：${selected.leader?.display_name ?? "未指定"}` : ""}`
                     : {
                         overview: "掌握项目进展，关注交付风险与人员工作情况。",
                         projects: "创建项目、指定负责人，跟踪项目任务进展。",
@@ -917,6 +918,7 @@ export default function AdminConsolePage() {
 
             {selected ? (
               <>
+                {tab === "projects" && <ProjectRequirementsPanel key={selected.id} projectId={selected.id} />}
                 <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
                   <Card className="min-w-0">
                     <CardHeader>
