@@ -35,6 +35,8 @@ export const ACTION_LABELS: Record<string, string> = {
   "member.capabilities.submitted": "提交能力标签",
   "member.capabilities.confirmed": "确认能力标签",
   "project.created": "创建项目",
+  "project.leader.updated": "变更项目负责人",
+  "user.created": "创建账号",
   "user.updated": "账号启用/禁用",
 };
 

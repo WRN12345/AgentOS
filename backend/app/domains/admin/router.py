@@ -6,13 +6,15 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import idempotency_guard
 from app.domains.identity.models import User
 from app.domains.project.dependencies import get_current_admin
 from app.domains.admin.schemas import (
+    AdminAttentionOut,
+    AdminOverviewOut,
     AdminProjectLeaderIn,
     AdminProjectOut,
     AdminUserCreatedOut,
@@ -24,6 +26,8 @@ from app.domains.admin.schemas import (
 from app.domains.admin.service import (
     create_account,
     create_project,
+    get_attention,
+    get_overview,
     list_projects,
     list_users,
     update_project_leader,
@@ -32,6 +36,25 @@ from app.domains.admin.service import (
 from app.infrastructure.database.engine import get_session
 
 router = APIRouter(tags=["admin"])
+
+
+@router.get("/admin/overview", response_model=AdminOverviewOut)
+async def overview_endpoint(
+    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminOverviewOut:
+    return await get_overview(session)
+
+
+@router.get("/admin/attention", response_model=AdminAttentionOut)
+async def attention_endpoint(
+    project_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminAttentionOut:
+    return await get_attention(session, project_id=project_id, limit=limit, offset=offset)
 
 
 @router.get("/projects", response_model=list[AdminProjectOut])

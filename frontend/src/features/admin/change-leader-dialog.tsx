@@ -12,9 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Form,
-} from "@/components/ui/form";
+import { Form } from "@/components/ui/form";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import { queryKeys } from "../../lib/queryKeys";
 import { LeaderUsernameField } from "./leader-username-field";
@@ -41,9 +39,17 @@ export function ChangeLeaderDialog({
   onClose,
 }: ChangeLeaderDialogProps) {
   const queryClient = useQueryClient();
-  const { data: users } = useQuery({
+  const {
+    data: users,
+    isPending,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: queryKeys.adminUsers(),
     queryFn: () => api.get<UserMe[]>("/users"),
+    enabled: project !== null,
   });
 
   const form = useForm<ChangeValues>({
@@ -64,6 +70,7 @@ export function ChangeLeaderDialog({
       );
       // 项目列表 + 平台审计（project.leader.updated）一并失效
       queryClient.invalidateQueries({ queryKey: queryKeys.adminProjects() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminOverview() });
       queryClient.invalidateQueries({ queryKey: queryKeys.adminAuditEvents() });
       onClose();
     },
@@ -93,6 +100,23 @@ export function ChangeLeaderDialog({
               : "该项目尚无负责人，请指定一名负责人。"}
           </DialogDescription>
         </DialogHeader>
+        {isPending && <p role="status">正在加载账号...</p>}
+        {isError && (
+          <div role="alert" className="text-sm text-destructive">
+            {errorMessage(error, "账号加载失败")}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              重试
+            </Button>
+          </div>
+        )}
+        {users?.length === 0 && (
+          <p className="text-sm text-muted-foreground">暂无账号。</p>
+        )}
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <LeaderUsernameField
@@ -102,7 +126,10 @@ export function ChangeLeaderDialog({
               users={users}
             />
             <DialogFooter>
-              <Button type="submit" disabled={mutation.isPending}>
+              <Button
+                type="submit"
+                disabled={mutation.isPending || isPending || isError}
+              >
                 {mutation.isPending ? "变更中…" : "变更负责人"}
               </Button>
             </DialogFooter>

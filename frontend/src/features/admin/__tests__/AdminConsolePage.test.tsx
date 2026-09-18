@@ -11,10 +11,31 @@ vi.mock("../../../services/api", async (importOriginal) => {
 
 import { useAuthStore } from "../../../app/store";
 import AdminConsolePage from "../AdminConsolePage";
-import { mockApi, stubGet } from "../../../test/mock-api";
+import { mockApi, stubGet as stubApiGet } from "../../../test/mock-api";
 import { renderWithProviders, signInAs } from "../../../test/render";
 import { makeAdminProject, makeUser } from "../../../test/fixtures";
-import type { AuditEvent } from "../../../types";
+import type { AdminProject, AuditEvent } from "../../../types";
+
+function stubGet(data: Record<string, unknown>) {
+  stubApiGet({
+    "/admin/overview": {
+      as_of: "2026-09-17T00:00:00Z",
+      projects: ((data["/projects"] ?? []) as AdminProject[]).map(
+        (project) => ({
+          ...project,
+          total: 0,
+          completed: 0,
+          active: 0,
+          overdue: 0,
+          blocked: 0,
+        }),
+      ),
+      members: [],
+    },
+    "/admin/attention": { items: [], total: 0 },
+    ...data,
+  });
+}
 
 /** 平台级审计事件夹具（GET /audit-events 形状）。 */
 function makeAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
@@ -34,7 +55,7 @@ function makeAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
 }
 
 /**
- * 管理控制台（ticket 10）：项目列表/新建、账号管理、审计三块。
+ * 管理控制台：侧边导航与项目、账号、审计管理操作。
  * 全部接口为 admin-only，管理员无项目上下文，接口不携带 X-Project-Id。
  */
 describe("AdminConsolePage 管理控制台", () => {
@@ -52,15 +73,22 @@ describe("AdminConsolePage 管理控制台", () => {
     );
   }
 
-  it("渲染项目列表/账号管理/审计三个标签页与管理员用户名", () => {
+  it("渲染五个侧边导航入口与管理员用户名", () => {
     signInAs(null, makeUser({ is_admin: true, username: "root" }));
     stubGet({ "/projects": [], "/users": [], "/audit-events": [] });
 
     renderConsole();
 
-    expect(screen.getByRole("tab", { name: "项目列表" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "账号管理" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "审计" })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "管理员导航" });
+    for (const name of [
+      "管理总览",
+      "项目管理",
+      "人员工作",
+      "账号管理",
+      "系统审计",
+    ]) {
+      expect(within(nav).getByRole("button", { name })).toBeInTheDocument();
+    }
     expect(screen.getByText(/root/)).toBeInTheDocument();
   });
 
@@ -77,18 +105,13 @@ describe("AdminConsolePage 管理控制台", () => {
 
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("李四")).toBeInTheDocument();
-    expect(screen.getByText("leader")).toBeInTheDocument();
     // Beta 无负责人：行内显示占位符，且不含负责人信息
     const betaRow = screen.getByText("Beta").closest("tr");
     expect(betaRow).not.toBeNull();
+    expect(within(betaRow as HTMLElement).queryByText("李四")).toBeNull();
+    expect(within(betaRow as HTMLElement).queryByText("leader")).toBeNull();
     expect(
-      within(betaRow as HTMLElement).queryByText("李四"),
-    ).toBeNull();
-    expect(
-      within(betaRow as HTMLElement).queryByText("leader"),
-    ).toBeNull();
-    expect(
-      within(betaRow as HTMLElement).getAllByText("—").length,
+      within(betaRow as HTMLElement).getAllByText("未指定负责人").length,
     ).toBeGreaterThan(0);
   });
 
@@ -106,6 +129,7 @@ describe("AdminConsolePage 管理控制台", () => {
 
     renderConsole();
 
+    await user.click(screen.getByRole("button", { name: "项目管理" }));
     await user.click(screen.getByRole("button", { name: "新建项目" }));
     await screen.findByRole("dialog");
     await user.type(screen.getByLabelText("项目名称"), "Gamma");
@@ -124,7 +148,7 @@ describe("AdminConsolePage 管理控制台", () => {
     });
   });
 
-  it("账号管理：新建账号提交 POST /admin/users 并展示一次性初始密码", async () => {
+  it("账号管理：新建账号提交 POST /users 并展示一次性初始密码", async () => {
     const user = userEvent.setup();
     signInAs(null, makeUser({ is_admin: true }));
     stubGet({ "/projects": [], "/users": [] });
@@ -139,7 +163,7 @@ describe("AdminConsolePage 管理控制台", () => {
 
     renderConsole();
 
-    await user.click(screen.getByRole("tab", { name: "账号管理" }));
+    await user.click(screen.getByRole("button", { name: "账号管理" }));
     await user.click(screen.getByRole("button", { name: "新建账号" }));
     await screen.findByRole("dialog");
     await user.type(screen.getByLabelText("用户名"), "carol");
@@ -157,7 +181,7 @@ describe("AdminConsolePage 管理控制台", () => {
     expect(await screen.findByText("CarolInitial1")).toBeInTheDocument();
   });
 
-  it("变更负责人：按用户名解析目标账号，提交 PUT /admin/projects/{id}/leader", async () => {
+  it("变更负责人：按用户名解析目标账号，提交 PUT /projects/{id}/leader", async () => {
     const user = userEvent.setup();
     const project = makeAdminProject({ id: "project-1", name: "Alpha" });
     const newLeader = makeUser({
@@ -180,9 +204,8 @@ describe("AdminConsolePage 管理控制台", () => {
 
     renderConsole();
 
-    await user.click(
-      await screen.findByRole("button", { name: "变更负责人" }),
-    );
+    await user.click(screen.getByRole("button", { name: "项目管理" }));
+    await user.click(await screen.findByRole("button", { name: "变更负责人" }));
     const dialog = await screen.findByRole("dialog");
     const leaderInput = within(dialog).getByLabelText("新负责人用户名");
     await user.clear(leaderInput); // 预填了当前负责人用户名，先清空再输入新账号
@@ -215,7 +238,7 @@ describe("AdminConsolePage 管理控制台", () => {
 
     renderConsole();
 
-    await user.click(screen.getByRole("tab", { name: "账号管理" }));
+    await user.click(screen.getByRole("button", { name: "账号管理" }));
     expect(await screen.findByText("bob")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "禁用" }));
@@ -237,24 +260,28 @@ describe("AdminConsolePage 管理控制台", () => {
 
     renderConsole();
 
-    await user.click(screen.getByRole("tab", { name: "账号管理" }));
-    await screen.findByText("root");
+    await user.click(screen.getByRole("button", { name: "账号管理" }));
+    const table = await screen.findByRole("table");
 
-    const selfRow = screen.getByText("root").closest("tr");
+    const selfRow = within(table).getByText("root").closest("tr");
     expect(selfRow).not.toBeNull();
     expect(
       within(selfRow as HTMLElement).queryByRole("button", { name: "禁用" }),
     ).toBeNull();
   });
 
-  it("审计标签页展示平台级审计事件（project.created 映射为中文）", async () => {
+  it("系统审计展示平台级审计事件（project.created 映射为中文）", async () => {
     const user = userEvent.setup();
     signInAs(null, makeUser({ is_admin: true }));
-    stubGet({ "/projects": [], "/users": [], "/audit-events": [makeAuditEvent()] });
+    stubGet({
+      "/projects": [],
+      "/users": [],
+      "/audit-events": [makeAuditEvent()],
+    });
 
     renderConsole();
 
-    await user.click(screen.getByRole("tab", { name: "审计" }));
+    await user.click(screen.getByRole("button", { name: "系统审计" }));
     expect(await screen.findByText("创建项目")).toBeInTheDocument();
   });
 
@@ -265,7 +292,8 @@ describe("AdminConsolePage 管理控制台", () => {
     stubGet({ "/projects": [], "/users": [], "/audit-events": [] });
 
     renderConsole();
-    await user.click(screen.getByRole("button", { name: "登出" }));
+    await user.click(screen.getByRole("button", { name: "账号菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "登出" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("login")).toBeInTheDocument();

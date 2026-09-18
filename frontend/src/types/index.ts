@@ -379,7 +379,8 @@ export interface StoredFile {
 }
 
 /** 索引状态机（设计文档第 6 节）。 */
-export type IndexStatus = "pending" | "indexing" | "indexed" | "failed" | "unindexed";
+export type IndexStatus =
+  "pending" | "indexing" | "indexed" | "failed" | "unindexed";
 
 export type DeliverableType = "git_link" | "text" | "file";
 
@@ -575,7 +576,62 @@ export interface AdminProject {
   updated_at: string;
 }
 
-/** POST /admin/users 响应：全局账号 + 一次性初始密码（仅此一次返回，之后不可再查）。 */
+/** GET /admin/overview 的项目统计；total 排除草稿与取消任务。 */
+export interface AdminProjectOverview extends AdminProject {
+  total: number;
+  completed: number;
+  active: number;
+  overdue: number;
+  blocked: number;
+}
+
+export interface AdminMemberOverview {
+  member_id: string;
+  user_id: string;
+  project_id: string;
+  username: string;
+  display_name: string;
+  role: MemberRole;
+  is_active: boolean;
+  user_is_active: boolean;
+  active: number;
+  completed_total: number;
+  completed_recent: number;
+  overdue: number;
+  blocked: number;
+  on_time_rate: number | null;
+  sample_sufficient: boolean;
+}
+
+export interface AdminOverview {
+  as_of: string;
+  projects: AdminProjectOverview[];
+  members: AdminMemberOverview[];
+}
+
+export interface AdminAttentionItem {
+  id: string;
+  project_id: string;
+  title: string;
+  status: WorkItemStatus;
+  priority: WorkItemPriority;
+  assignee_id: string;
+  assignee_name: string;
+  due_at: string | null;
+  updated_at: string;
+  is_overdue: boolean;
+}
+
+export interface AdminAttentionPage {
+  items: AdminAttentionItem[];
+  total: number;
+}
+
+export interface AdminAuditEvent extends AuditEvent {
+  project_id: string | null;
+}
+
+/** POST /users 响应：全局账号 + 一次性初始密码。 */
 export interface CreatedAccount extends UserMe {
   initial_password: string;
 }
