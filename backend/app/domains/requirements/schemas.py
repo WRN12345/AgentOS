@@ -69,7 +69,14 @@ class Source(BaseModel):
 
 
 class Candidate(Content):
-    sources: list[Source] = Field(min_length=1, max_length=20)
+    source_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("acceptance_criteria", "clarification_questions", mode="before")
+    @classmethod
+    def text_items(cls, value: object) -> object:
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            return "\n".join(value)
+        return value
 
 
 class Candidates(BaseModel):

@@ -50,8 +50,7 @@ class FakeProvider(ModelProvider):
             "title": "CSV export", "description": "Export monthly reports as CSV",
             "acceptance_criteria": "A monthly report can be downloaded as CSV",
             "clarification_questions": "",
-            "sources": [{k: material[k] for k in ("material_id", "filename", "chunk_id")} | {
-                "quote": material["text"]}],
+            "source_ids": [material["source_id"]],
         }]}
         self.mutate(result)
         return json.dumps(result)
@@ -152,6 +151,34 @@ async def test_analysis_failure_reports_stage_without_private_content(
     assert "stage=" in caplog.text
 
 
+async def test_model_selects_evidence_and_returns_text_lists(
+    client, project_a, admin_headers, providers, monkeypatch,
+):
+    fake, _, redis = providers
+
+    async def extract(prompt, **kwargs):
+        evidence = json.loads(prompt)["materials"]
+        assert all("source_id" in item for item in evidence)
+        return json.dumps({"requirements": [{
+            "title": "CSV export", "description": "Export monthly reports as CSV",
+            "acceptance_criteria": ["Download succeeds", "The file is CSV"],
+            "clarification_questions": [], "source_ids": [evidence[0]["source_id"]],
+        }]})
+
+    monkeypatch.setattr(fake, "generate", extract)
+    material = await upload(client, project_a, admin_headers, data=TEXT + "\nOther context.")
+    job = await analyze(client, project_a, admin_headers, material)
+    await worker.execute_requirement_analysis({"analysis_id": job["id"]}, redis)
+    async with async_session_factory() as session:
+        assert (await session.get(Analysis, uuid.UUID(job["id"]))).status == "succeeded"
+        candidate = await session.scalar(select(Requirement))
+        assert candidate.acceptance_criteria == "Download succeeds\nThe file is CSV"
+        assert candidate.clarification_questions == ""
+        assert candidate.sources[0]["quote"] == TEXT
+        assert candidate.sources[0]["material_id"] == material["id"]
+        assert candidate.sources[0]["filename"] == material["original_filename"]
+
+
 async def test_material_isolation(client, project_a, project_b, leader, admin_headers, providers):
     material = await upload(client, project_a, admin_headers)
     base = f"/api/v1/admin/projects/{project_a.id}"
@@ -218,11 +245,17 @@ async def test_full_workflow_and_redaction(client, project_a, leader, admin_head
         assert all(e.before is None and e.after is None for e in events)
 
 
-@pytest.mark.parametrize("field,value", [("quote", "fabricated"), ("quote", " "),
-    ("chunk_id", "unknown"), ("material_id", str(uuid.uuid4())), ("filename", "other.txt")])
-async def test_invalid_citations_retry_without_candidates(client, project_a, admin_headers, providers, field, value):
+@pytest.mark.parametrize("field,value,expected", [
+    ("source_ids", ["unknown"], "source citations"),
+    ("source_ids", [], "not valid requirement JSON"),
+    ("source_ids", ["S1", "S999"], "source citations"),
+    ("sources", [{"quote": "fabricated"}], "not valid requirement JSON"),
+    ("source_ids", [1], "not valid requirement JSON"),
+    ("acceptance_criteria", [{"text": "fabricated"}], "not valid requirement JSON"),
+])
+async def test_invalid_citations_retry_without_candidates(client, project_a, admin_headers, providers, field, value, expected):
     fake, _, redis = providers
-    fake.mutate = lambda result: result["requirements"][0]["sources"][0].update({field: value})
+    fake.mutate = lambda result: result["requirements"][0].update({field: value})
     material = await upload(client, project_a, admin_headers)
     job = await analyze(client, project_a, admin_headers, material)
     for attempt in range(3):
@@ -233,7 +266,7 @@ async def test_invalid_citations_retry_without_candidates(client, project_a, adm
     async with async_session_factory() as session:
         current = await session.get(Analysis, uuid.UUID(job["id"]))
         assert current.status == "failed" and current.attempts == 3
-        assert "source citations" in current.error
+        assert expected in current.error
         assert "fabricated" not in current.error
         assert await session.scalar(select(func.count()).select_from(Requirement)) == 0
     fake.mutate = lambda result: None
