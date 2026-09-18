@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import { requirementStatus, type Requirement } from "./types";
+import { formatDateTime } from "../work-items/constants";
 
 export function RequirementCard({
   requirement,
@@ -27,8 +28,17 @@ export function RequirementCard({
     requirement.clarification_questions,
   );
   const [note, setNote] = useState("");
-  const editable = ["draft", "confirmed", "clarification_requested"].includes(
+  const replyAllowed = !!requirement.assignee_id &&
+    ["draft", "confirmed", "dispatched", "clarification_requested"].includes(requirement.status);
+  const editable = replyAllowed || ["draft", "confirmed", "clarification_requested"].includes(
     requirement.status,
+  );
+  const validContent = editing
+    ? !!title.trim() && !!description.trim() && !!acceptance.trim() && !questions.trim()
+    : !!requirement.title.trim() && !!requirement.description.trim() &&
+      !!requirement.acceptance_criteria.trim() && !requirement.clarification_questions.trim();
+  const discussion = [...requirement.discussion].sort((a, b) =>
+    (a.created_at ?? "").localeCompare(b.created_at ?? ""),
   );
   const startEditing = () => {
     setTitle(requirement.title);
@@ -40,7 +50,7 @@ export function RequirementCard({
   const mutation = useMutation({
     mutationFn: (
       action:
-        "save" | "confirm" | "exclude" | "dispatch" | "accept" | "clarify",
+        "save" | "confirm" | "exclude" | "dispatch" | "accept" | "clarify" | "reply",
     ) => {
       const path = `${adminPath ?? "/project-requirements"}/${requirement.id}`;
       return action === "save"
@@ -58,8 +68,11 @@ export function RequirementCard({
         : api.post<Requirement>(
             `${path}/${action}`,
             {
-              version: requirement.version,
-              ...(action === "clarify" ? { note: note.trim() } : {}),
+              version: action === "reply" && editing ? editingVersion : requirement.version,
+              ...(action === "clarify" || action === "reply" ? { note: note.trim() } : {}),
+              ...(action === "reply" && editing ? {
+                content: { title, description, acceptance_criteria: acceptance, clarification_questions: questions },
+              } : {}),
             },
             newIdempotencyKey(),
           );
@@ -107,7 +120,9 @@ export function RequirementCard({
               />
             </label>
             <p className="text-xs text-muted-foreground">
-              保存后为草稿，需要重新确认。确认前请填写验收标准并清空已解决的澄清问题。
+              {requirement.assignee_id
+                ? "请填写验收标准、清空已解决的澄清问题，并填写回复后发送负责人。"
+                : "保存后为草稿，需要重新确认。确认前请填写验收标准并清空已解决的澄清问题。"}
             </p>
             {editOutdated && (
               <p role="alert" className="text-destructive">
@@ -157,13 +172,36 @@ export function RequirementCard({
             ))}
           </div>
         )}
-        {requirement.leader_note && (
+        {discussion.length > 0 && (
+          <section aria-label="需求讨论" className="space-y-3">
+            <h3 className="font-medium">需求讨论</h3>
+            <ol className="space-y-3">
+              {discussion.map((entry) => (
+                <li key={entry.id} className="border-l-2 pl-3">
+                  <p className="text-xs text-muted-foreground">
+                    {entry.author_role === "admin" ? "管理员" : "项目负责人"}
+                    {" · "}
+                    {entry.created_at ? <time dateTime={entry.created_at}>{formatDateTime(entry.created_at)}</time> : "历史反馈"}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words">{entry.body}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+        {discussion.length === 0 && requirement.leader_note && (
           <div>
             <h3 className="font-medium">负责人反馈</h3>
             <p className="whitespace-pre-wrap break-words">
               {requirement.leader_note}
             </p>
           </div>
+        )}
+        {adminPath && replyAllowed && (
+          <label className="block space-y-1">
+            <span>回复说明</span>
+            <Textarea disabled={mutation.isPending} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
         )}
         {mutation.isError && (
           <p role="alert" className="text-destructive">
@@ -179,13 +217,14 @@ export function RequirementCard({
                   disabled={
                     mutation.isPending ||
                     !title.trim() ||
-                    !description.trim() ||
+                     !description.trim() ||
+                     (!!requirement.assignee_id && (!replyAllowed || !note.trim() || !validContent)) ||
                     editOutdated ||
                     !editable
                   }
-                  onClick={() => mutation.mutate("save")}
+                  onClick={() => mutation.mutate(requirement.assignee_id ? "reply" : "save")}
                 >
-                  保存草稿
+                  {requirement.assignee_id ? "保存并回复负责人" : "保存草稿"}
                 </Button>
                 <Button
                   variant="outline"
@@ -213,7 +252,7 @@ export function RequirementCard({
                 >
                   编辑需求
                 </Button>
-                {requirement.status === "draft" && (
+                {requirement.status === "draft" && !requirement.assignee_id && (
                   <Button
                     disabled={
                       mutation.isPending ||
@@ -225,14 +264,14 @@ export function RequirementCard({
                     确认需求
                   </Button>
                 )}
-                <Button
+                {requirement.status !== "dispatched" && <Button
                   variant="outline"
                   disabled={mutation.isPending}
                   onClick={() => mutation.mutate("exclude")}
                 >
                   排除需求
-                </Button>
-                {requirement.status === "confirmed" && (
+                </Button>}
+                {requirement.status === "confirmed" && !requirement.assignee_id && (
                   <Button
                     disabled={mutation.isPending}
                     onClick={() => mutation.mutate("dispatch")}
@@ -242,6 +281,11 @@ export function RequirementCard({
                 )}
               </>
             ))}
+          {adminPath && replyAllowed && !editing && (
+            <Button disabled={mutation.isPending || !note.trim() || !validContent} onClick={() => mutation.mutate("reply")}>
+              {requirement.status === "draft" ? "确认并回复负责人" : "答复并发送负责人"}
+            </Button>
+          )}
           {!adminPath && requirement.status === "dispatched" && (
             <Button
               disabled={mutation.isPending}
@@ -251,8 +295,9 @@ export function RequirementCard({
             </Button>
           )}
         </div>
-        {!adminPath && requirement.status === "dispatched" && (
+        {!adminPath && ["dispatched", "clarification_requested"].includes(requirement.status) && (
           <div className="space-y-2">
+            {requirement.status === "clarification_requested" && <p role="status">等待管理员回复</p>}
             <label className="block space-y-1">
               <span>澄清说明</span>
               <Textarea
@@ -266,7 +311,7 @@ export function RequirementCard({
               disabled={mutation.isPending || !note.trim()}
               onClick={() => mutation.mutate("clarify")}
             >
-              请求澄清
+              {requirement.status === "clarification_requested" ? "继续追问" : "请求澄清"}
             </Button>
           </div>
         )}

@@ -38,6 +38,7 @@ const requirement: Requirement = {
   version: 2,
   assignee_id: null,
   leader_note: null,
+  discussion: [],
   created_at: "2026-09-18T00:00:00Z",
   updated_at: "2026-09-18T00:00:00Z",
 };
@@ -57,6 +58,124 @@ function deferred<T>() {
 }
 
 describe("项目需求", () => {
+  it.each(["draft", "confirmed", "dispatched", "clarification_requested"] as const)(
+    "admin replies to assigned %s with exact versioned payload", async (status) => {
+      const assigned = { ...requirement, status, assignee_id: "leader-1" };
+      mockApi.post.mockResolvedValue({ ...assigned, status: "dispatched", version: 3 });
+      renderWithProviders(<RequirementCard requirement={assigned} adminPath={`${base}/requirements`} onChanged={vi.fn()} />);
+      const button = screen.getByRole("button", { name: status === "draft" ? "确认并回复负责人" : "答复并发送负责人" });
+      expect(button).toBeDisabled();
+      fireEvent.change(screen.getByLabelText("回复说明"), { target: { value: "  已明确范围  " } });
+      fireEvent.click(button);
+      await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith(
+        `${base}/requirements/req-1/reply`, { version: 2, note: "已明确范围" }, expect.any(String),
+      ));
+      expect(mockApi.patch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("atomically revises and replies, requiring resolved content and explicit reply", async () => {
+    renderWithProviders(<RequirementCard requirement={{ ...requirement, assignee_id: "leader-1", status: "clarification_requested" }} adminPath={`${base}/requirements`} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "编辑需求" }));
+    const save = screen.getByRole("button", { name: "保存并回复负责人" });
+    expect(screen.queryByRole("button", { name: "保存草稿" })).not.toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("回复说明"), { target: { value: "已修订" } });
+    for (const label of ["标题", "描述", "验收标准"]) {
+      const input = screen.getByLabelText(label);
+      const original = (input as HTMLInputElement).value;
+      fireEvent.change(input, { target: { value: " " } });
+      expect(save).toBeDisabled();
+      fireEvent.change(input, { target: { value: original } });
+    }
+    fireEvent.change(screen.getByLabelText("澄清问题"), { target: { value: "未解决" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("澄清问题"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "修订标题" } });
+    mockApi.post.mockRejectedValue(new Error("conflict"));
+    fireEvent.click(save);
+    await screen.findByRole("alert");
+    expect(mockApi.post).toHaveBeenCalledWith(`${base}/requirements/req-1/reply`, {
+      version: 2, note: "已修订", content: { title: "修订标题", description: "需求描述", acceptance_criteria: "验收通过", clarification_questions: "" },
+    }, expect.any(String));
+    expect(mockApi.patch).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("标题")).toHaveValue("修订标题");
+    expect(screen.getByLabelText("回复说明")).toHaveValue("已修订");
+  });
+
+  it.each(["accepted", "excluded", "unassigned"])("does not offer admin replies for %s", (state) => {
+    renderWithProviders(<RequirementCard requirement={{ ...requirement, assignee_id: state === "unassigned" ? null : "leader-1", status: state === "unassigned" ? "draft" : state as "accepted" | "excluded" }} adminPath={`${base}/requirements`} onChanged={vi.fn()} />);
+    expect(screen.queryByLabelText("回复说明")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /回复负责人|答复并发送负责人/ })).not.toBeInTheDocument();
+  });
+
+  it("preserves assigned dirty edits and blocks atomic reply after a newer version arrives", () => {
+    const assigned: Requirement = { ...requirement, assignee_id: "leader-1", status: "clarification_requested" };
+    const view = renderWithProviders(<RequirementCard requirement={assigned} adminPath={`${base}/requirements`} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "编辑需求" }));
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "本地修改" } });
+    fireEvent.change(screen.getByLabelText("回复说明"), { target: { value: "已修订" } });
+    view.rerender(<RequirementCard requirement={{ ...assigned, version: 3 }} adminPath={`${base}/requirements`} onChanged={vi.fn()} />);
+    expect(screen.getByLabelText("标题")).toHaveValue("本地修改");
+    expect(screen.getByLabelText("回复说明")).toHaveValue("已修订");
+    expect(screen.getByRole("button", { name: "保存并回复负责人" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("需求已有新版本");
+  });
+
+  it.each([true, false])("shows chronological discussion for admin=%s with migrated feedback", (admin) => {
+    renderWithProviders(<RequirementCard requirement={{ ...requirement, leader_note: "历史问题", discussion: [
+      { id: "2", author_id: "admin", author_role: "admin", body: "管理员回复", created_at: requirement.created_at, version: 3 },
+      { id: "1", author_id: null, author_role: "leader", body: "历史问题", created_at: null, version: null },
+    ] }} adminPath={admin ? `${base}/requirements` : undefined} onChanged={vi.fn()} />);
+    expect(screen.getAllByText("历史问题")).toHaveLength(1);
+    const entries = screen.getAllByRole("listitem");
+    expect(entries[0]).toHaveTextContent("项目负责人 · 历史反馈历史问题");
+    expect(entries[1]).toHaveTextContent("管理员");
+    expect(entries[1].querySelector("time")).toHaveAttribute("datetime", requirement.created_at);
+  });
+
+  it("allows leader followup while waiting and locks accepted requirements", async () => {
+    const waiting: Requirement = { ...requirement, status: "clarification_requested" };
+    const view = renderWithProviders(<RequirementCard requirement={waiting} onChanged={vi.fn()} />);
+    expect(screen.getByText("等待管理员回复")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "接收需求" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("澄清说明"), { target: { value: "补充问题" } });
+    mockApi.post.mockResolvedValue({ ...waiting, version: 3 });
+    fireEvent.click(screen.getByRole("button", { name: "继续追问" }));
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith("/project-requirements/req-1/clarify", { version: 2, note: "补充问题" }, expect.any(String)));
+    view.rerender(<RequirementCard requirement={{ ...waiting, status: "accepted" }} onChanged={vi.fn()} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it.each(["admin", "leader"])("polls %s requirements visibly every five seconds, pauses on error and retries manually", async (role) => {
+    vi.useFakeTimers();
+    const path = role === "admin" ? `${base}/requirements` : "/project-requirements";
+    if (role === "leader") signInAs(makeMember({ role: "leader" }));
+    stubGet({ [path]: [requirement] });
+    const view = renderWithProviders(role === "admin" ? <ProjectRequirementsPanel projectId="project-a" /> : <ProjectRequirementsPage />);
+    const count = () => mockApi.get.mock.calls.filter(([url]) => url === path).length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(count()).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(count()).toBe(2);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(count()).toBe(2);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    mockApi.get.mockRejectedValue(new Error("offline"));
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    const failedCount = count();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(count()).toBe(failedCount);
+    stubGet({ [path]: [requirement] });
+    fireEvent.click(screen.getByRole("button", { name: "刷新需求" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5010); });
+    expect(count()).toBeGreaterThan(failedCount + 1);
+    view.unmount();
+  });
+
   beforeEach(() => {
     vi.resetAllMocks();
     signInAs(null, makeUser({ is_admin: true }));
@@ -466,11 +585,11 @@ describe("项目需求", () => {
       await vi.advanceTimersByTimeAsync(300_000);
     });
     expect(screen.getByText(/自动刷新已暂停/)).toBeInTheDocument();
-    const count = mockApi.get.mock.calls.length;
+    const count = mockApi.get.mock.calls.filter(([path]) => path.endsWith("requirement-analyses")).length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
-    expect(mockApi.get).toHaveBeenCalledTimes(count);
+    expect(mockApi.get.mock.calls.filter(([path]) => path.endsWith("requirement-analyses"))).toHaveLength(count);
     fireEvent.click(screen.getByRole("button", { name: "刷新需求" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2010);
@@ -511,11 +630,11 @@ describe("项目需求", () => {
       await vi.advanceTimersByTimeAsync(10);
     });
     expect(screen.getByText("合同原始条款")).toBeInTheDocument();
-    const count = mockApi.get.mock.calls.length;
+    const count = mockApi.get.mock.calls.filter(([path]) => path.endsWith("requirement-analyses")).length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
-    expect(mockApi.get).toHaveBeenCalledTimes(count);
+    expect(mockApi.get.mock.calls.filter(([path]) => path.endsWith("requirement-analyses"))).toHaveLength(count);
     view.unmount();
   });
 

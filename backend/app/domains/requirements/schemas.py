@@ -60,6 +60,19 @@ class ClarifyIn(VersionIn):
         return value.strip()
 
 
+class ReplyIn(ClarifyIn):
+    content: Content | None = None
+
+
+class DiscussionEntry(BaseModel):
+    id: uuid.UUID
+    author_id: uuid.UUID | None
+    author_role: Literal["admin", "leader"]
+    body: str
+    created_at: datetime | None
+    version: int | None
+
+
 class Source(BaseModel):
     model_config = ConfigDict(extra="forbid")
     material_id: uuid.UUID
@@ -92,5 +105,6 @@ class RequirementOut(Content):
     version: int
     assignee_id: uuid.UUID | None
     leader_note: str | None
+    discussion: list[DiscussionEntry]
     created_at: datetime
     updated_at: datetime

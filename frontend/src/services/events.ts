@@ -41,6 +41,8 @@ const EVENT_TYPES = [
   "review.rejected",
   // T5.7：Agent 分析完成（4.3 节），触发建议中心自动刷新
   "agent.suggestion_ready",
+  "requirements.dispatched",
+  "requirements.replied",
   // 注：deliverable.submitted / file.uploaded / file.downloaded 仅为审计 action，
   // 后端不发布对应 SSE（以 domains/deliverables、domains/files 代码为准），无需监听。
 ] as const;
@@ -56,6 +58,9 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
 
   const domain = type.split(".")[0];
   switch (domain) {
+    case "requirements":
+      queryClient.invalidateQueries({ queryKey: queryKeys.projectRequirements() });
+      break;
     case "work_item":
       queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
       break;
@@ -122,6 +127,7 @@ export function useEventStream() {
     const source = new EventSource(`/api/v1/events/stream?${params.toString()}`);
 
     const handle = (message: MessageEvent<string>) => {
+      if (useAuthStore.getState().currentProject?.id !== projectId) return;
       let event: RealtimeEvent;
       try {
         event = JSON.parse(message.data) as RealtimeEvent;
@@ -133,6 +139,9 @@ export function useEventStream() {
         toast.warning(event.data.title, { description: event.data.body });
       }
       if (event.type === "agent.suggestion_ready") {
+        toast.info(event.data.title, { description: event.data.body });
+      }
+      if (event.type === "requirements.dispatched" || event.type === "requirements.replied") {
         toast.info(event.data.title, { description: event.data.body });
       }
     };

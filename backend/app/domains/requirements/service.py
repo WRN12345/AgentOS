@@ -11,12 +11,14 @@ from app.core.errors import ApiException, ErrorCodes
 from app.domains.audit.service import record_event
 from app.domains.files.service import _validate_type
 from app.domains.memory.extractors import SUPPORTED_EXTENSIONS
+from app.domains.notifications.service import notify
 from app.domains.requirements.extraction import MAX_TEXT, extract_material_text
 from app.domains.project.models import Project, ProjectMember
 from app.domains.identity.models import User
 from app.domains.requirements.models import Analysis, Material, Requirement
-from app.domains.requirements.schemas import EditIn, RequirementOut
+from app.domains.requirements.schemas import Content, EditIn, RequirementOut
 from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.events import publish_after_commit
 from app.infrastructure.queue.queue import enqueue
 from app.infrastructure.storage.provider import StorageProvider
 
@@ -119,7 +121,8 @@ def requirement_out(item: Requirement, *, leader: bool = False) -> RequirementOu
 
 async def command(session: AsyncSession, project_id: uuid.UUID, requirement_id: uuid.UUID,
                   actor: User | ProjectMember, version: int, action: str,
-                  edit: EditIn | None = None, note: str | None = None) -> RequirementOut:
+                  edit: EditIn | None = None, note: str | None = None,
+                  content: Content | None = None) -> RequirementOut:
     stmt = select(Requirement).where(Requirement.id == requirement_id,
                                      Requirement.project_id == project_id)
     leader = isinstance(actor, ProjectMember)
@@ -141,10 +144,14 @@ async def command(session: AsyncSession, project_id: uuid.UUID, requirement_id: 
     allowed = {
         "edit": {"draft", "confirmed", "clarification_requested"},
         "confirm": {"draft"}, "exclude": {"draft", "confirmed", "clarification_requested"},
-        "dispatch": {"confirmed"}, "accept": {"dispatched"}, "clarify": {"dispatched"},
+        "dispatch": {"confirmed"}, "accept": {"dispatched"},
+        "clarify": {"dispatched", "clarification_requested"},
+        "reply": {"draft", "confirmed", "dispatched", "clarification_requested"},
     }
     if item.status not in allowed[action] or leader != (action in {"accept", "clarify"}):
         raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "Requirement status does not allow this command")
+    if action in {"reply", "clarify"} and (not note or not note.strip() or len(note) > 10000):
+        raise ApiException(422, ErrorCodes.VALIDATION_ERROR, "A nonempty clarification message is required")
     if action == "edit":
         for key, value in edit.model_dump(exclude={"version"}).items():
             setattr(item, key, value)
@@ -164,12 +171,44 @@ async def command(session: AsyncSession, project_id: uuid.UUID, requirement_id: 
         item.leader_note = None
         item.status = "dispatched"
     elif action == "clarify":
-        item.leader_note = note
+        item.leader_note = note.strip()
         item.status = "clarification_requested"
+    elif action == "reply":
+        if item.assignee_id is None:
+            raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "Requirement must be assigned before replying")
+        assignee = await session.scalar(select(ProjectMember).join(User, User.id == ProjectMember.user_id).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.role == "leader", ProjectMember.is_active.is_(True), User.is_active.is_(True))
+            .with_for_update())
+        if assignee is None:
+            raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "Project has no active leader")
+        confirmed_content = content if content is not None else item
+        if not confirmed_content.acceptance_criteria.strip() or confirmed_content.clarification_questions.strip():
+            raise ApiException(422, ErrorCodes.VALIDATION_ERROR,
+                               "Acceptance criteria are required and clarification questions must be resolved")
+        if content is not None:
+            for key, value in content.model_dump().items():
+                setattr(item, key, value)
+        item.assignee_id = assignee.id
+        item.status, item.leader_note = "dispatched", None
     else:
         item.status = "excluded" if action == "exclude" else "accepted"
     item.version += 1
+    if action in {"reply", "clarify"}:
+        item.discussion = [*item.discussion, {
+            "id": str(uuid.uuid4()), "author_id": str(actor.user_id if leader else actor.id),
+            "author_role": "leader" if leader else "admin", "body": note.strip(),
+            "created_at": datetime.now(UTC).isoformat(), "version": item.version,
+        }]
+    outbox = []
+    if action in {"dispatch", "reply"}:
+        await notify(session, project_id=project_id, recipient_id=item.assignee_id,
+                     type="requirements.dispatched" if action == "dispatch" else "requirements.replied",
+                     title="Project requirement needs your response",
+                     body="A requirement has been assigned or clarified. Open project requirements to respond.",
+                     link="/project-requirements", outbox=outbox)
     await audit(session, action, actor.user_id if leader else actor.id, item)
     await session.commit()
     await session.refresh(item)
+    await publish_after_commit(outbox)
     return requirement_out(item, leader=leader)

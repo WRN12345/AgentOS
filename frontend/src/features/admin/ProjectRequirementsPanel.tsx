@@ -71,6 +71,9 @@ export default function ProjectRequirementsPanel({
   const requirements = useQuery({
     queryKey: requirementsKey,
     queryFn: () => api.get<Requirement[]>(`${base}/requirements`),
+    refetchInterval: (query) => query.state.status === "error" ? false : 5000,
+    refetchIntervalInBackground: false,
+    retry: false,
   });
   const completed = analyses.data
     ?.filter((a) => a.status === "succeeded")

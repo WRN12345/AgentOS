@@ -55,3 +55,4 @@ class Requirement(CoreModel, VersionMixin):
     status: Mapped[str] = mapped_column(String(32), default="draft")
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("project_members.id"))
     leader_note: Mapped[str | None] = mapped_column(Text)
+    discussion: Mapped[list[dict]] = mapped_column(JSONB, default=list, server_default="[]")

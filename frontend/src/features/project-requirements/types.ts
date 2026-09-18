@@ -34,6 +34,14 @@ export interface Requirement {
   version: number;
   assignee_id: string | null;
   leader_note: string | null;
+  discussion: {
+    id: string;
+    author_id: string | null;
+    author_role: "admin" | "leader";
+    body: string;
+    created_at: string | null;
+    version: number | null;
+  }[];
   created_at: string;
   updated_at: string;
 }

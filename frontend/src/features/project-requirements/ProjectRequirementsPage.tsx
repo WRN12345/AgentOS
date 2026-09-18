@@ -16,6 +16,9 @@ export default function ProjectRequirementsPage() {
     queryKey: requirementsKey,
     queryFn: () => api.get<Requirement[]>("/project-requirements"),
     enabled: isLeader,
+    refetchInterval: (query) => query.state.status === "error" ? false : 5000,
+    refetchIntervalInBackground: false,
+    retry: false,
   });
   if (!isLeader) return <Navigate to="/" replace />;
   return (

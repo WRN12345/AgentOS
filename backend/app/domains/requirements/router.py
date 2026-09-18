@@ -13,7 +13,7 @@ from app.domains.project.dependencies import get_current_admin, get_current_lead
 from app.domains.project.models import ProjectMember
 from app.domains.requirements.models import Analysis, Material, Requirement
 from app.domains.requirements.schemas import (
-    AnalysisIn, AnalysisOut, ClarifyIn, EditIn, MaterialOut, RequirementOut, VersionIn,
+    AnalysisIn, AnalysisOut, ClarifyIn, EditIn, MaterialOut, ReplyIn, RequirementOut, VersionIn,
 )
 from app.domains.requirements.service import (
     audit, command, project_exists, requirement_out, start_analysis, upload_material,
@@ -81,6 +81,13 @@ async def requirements(project_id: uuid.UUID, actor: User = Depends(get_current_
 async def edit(project_id: uuid.UUID, requirement_id: uuid.UUID, body: EditIn,
                actor: User = Depends(get_current_admin), session: AsyncSession = Depends(get_session)):
     return await command(session, project_id, requirement_id, actor, body.version, "edit", edit=body)
+
+
+@admin.post("/requirements/{requirement_id}/reply", response_model=RequirementOut)
+async def reply(project_id: uuid.UUID, requirement_id: uuid.UUID, body: ReplyIn,
+                actor: User = Depends(get_current_admin), session: AsyncSession = Depends(get_session)):
+    return await command(session, project_id, requirement_id, actor, body.version, "reply",
+                         note=body.note, content=body.content)
 
 
 def admin_command(action: str):
