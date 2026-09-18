@@ -2,12 +2,12 @@
 
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     app_env: str = "development"
     log_dir: str = "/app/data/logs"
@@ -77,8 +77,28 @@ class Settings(BaseSettings):
     bootstrap_admin_display_name: str = "管理员"
 
     # 数据库仅保存相对 `storage_key`，上传目录不得直接暴露。
-    storage_backend: str = "local"
+    storage_backend: Literal["local", "minio"] = "local"
     storage_root: str = "/app/data/uploads"
+    minio_endpoint: str = ""
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = ""
+    minio_secure: bool = True
+
+    def validate_minio(self) -> None:
+        required = ("minio_endpoint", "minio_access_key", "minio_secret_key", "minio_bucket")
+        missing = [name for name in required if not getattr(self, name).strip()]
+        if missing:
+            raise ValueError(f"MinIO requires configuration: {', '.join(missing)}")
+        if "://" in self.minio_endpoint or "/" in self.minio_endpoint:
+            raise ValueError("minio_endpoint must be a host[:port], without scheme or path")
+
+    @model_validator(mode="after")
+    def _validate_storage(self) -> "Settings":
+        if self.storage_backend == "minio":
+            self.validate_minio()
+        return self
+
     upload_max_bytes: int = 20 * 1024 * 1024
     # 上传白名单（逗号分隔）：扩展名（小写、带点）与声明的 MIME 类型
     # `.docx` 用于记忆模块的 Word 知识文档。

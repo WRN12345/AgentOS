@@ -363,13 +363,14 @@ export interface DevDoc {
 export interface StoredFile {
   id: string;
   original_filename: string;
+  directory_path: string;
   size_bytes: number;
   mime_type: string;
   sha256: string;
   storage_backend: string;
   uploaded_by: string;
   work_item_id: string | null;
-  /** 版本链（设计文档第 3 节）：同名上传递增；superseded_by 非空表示已被新版本取代。 */
+  /** 版本链：同目录同名上传递增；superseded_by 非空表示已被新版本取代。 */
   version: number;
   superseded_by: string | null;
   /** 索引状态（设计文档第 6 节）。 */

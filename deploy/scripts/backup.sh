@@ -3,7 +3,7 @@
 #
 # 功能：
 #   1. PostgreSQL 逻辑备份（pg_dump 自定义格式），输出到 data/backups/postgres/<时间戳>.dump
-#   2. 上传目录增量备份（tar --listed-incremental），输出到 data/backups/uploads/<时间戳>-uploads.tar.gz
+#   2. 数据库登记的全部文件（含历史版本、local/MinIO）完整快照
 #   3. 保留 14 天，超期备份自动清理
 #   4. 执行结果追加写入 data/logs/backup.log，成功退出码 0，失败非 0
 #
@@ -33,19 +33,17 @@ POSTGRES_USER="${POSTGRES_USER:-agentos}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-agentos-dev-password}"
 
 # 目录配置（均相对仓库根目录，可用环境变量覆盖）
-UPLOADS_DIR="${UPLOADS_DIR:-${REPO_ROOT}/data/uploads}"
 BACKUP_DIR="${BACKUP_DIR:-${REPO_ROOT}/data/backups}"
 LOG_DIR="${LOG_DIR:-${REPO_ROOT}/data/logs}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 
 PG_BACKUP_DIR="${BACKUP_DIR}/postgres"
-UP_BACKUP_DIR="${BACKUP_DIR}/uploads"
-SNAPSHOT_FILE="${UP_BACKUP_DIR}/.uploads.snar"            # tar 增量备份的快照文件
+UP_BACKUP_DIR="${BACKUP_DIR}/storage"
 LOG_FILE="${LOG_DIR}/backup.log"
 
 TS="$(date +%Y%m%d-%H%M%S)"
 PG_BACKUP_FILE="${PG_BACKUP_DIR}/${TS}.dump"
-UP_BACKUP_FILE="${UP_BACKUP_DIR}/${TS}-uploads.tar.gz"
+UP_BACKUP_FILE="${UP_BACKUP_DIR}/${TS}-storage.tar.gz"
 
 # ---------- 日志 ----------
 log() {
@@ -66,9 +64,11 @@ command -v docker >/dev/null 2>&1 || fail "未找到 docker 命令"
 cd "${REPO_ROOT}"
 docker compose ps --status running --services 2>/dev/null | grep -qx "${POSTGRES_SERVICE}" \
   || fail "postgres 容器未运行，请先 docker compose up -d"
-[[ -d "${UPLOADS_DIR}" ]] || fail "上传目录不存在：${UPLOADS_DIR}"
 
 mkdir -p "${PG_BACKUP_DIR}" "${UP_BACKUP_DIR}" "${LOG_DIR}"
+SNAPSHOT_DIR="$(mktemp -d "${UP_BACKUP_DIR}/.snapshot-XXXXXX")"
+SNAPSHOT_DIR="$(realpath "${SNAPSHOT_DIR}")"
+trap 'rm -rf -- "${SNAPSHOT_DIR}"' EXIT
 
 log "===== 备份开始（批次 ${TS}） ====="
 
@@ -90,22 +90,25 @@ else
   fail "pg_dump 执行失败"
 fi
 
-# ---------- 2. 上传目录增量备份 ----------
-# 使用 tar --listed-incremental：同一快照文件下，每天只打包新增/变更的文件。
-# 恢复演练或全新恢复时，将快照文件删除后的首个备份即为全量基线。
-log "开始上传目录增量备份 -> ${UP_BACKUP_FILE}"
-if tar --listed-incremental="${SNAPSHOT_FILE}" \
-    -czf "${UP_BACKUP_FILE}.tmp" -C "${UPLOADS_DIR}" .; then
+# ---------- 2. 完整文件快照 ----------
+# 迁移和文件删除须在备份窗口暂停；每批快照独立恢复，不依赖增量链。
+log "开始文件快照（local/MinIO，逐文件 SHA-256 校验）"
+if ! docker compose run --rm --no-deps -T \
+    -v "${SNAPSHOT_DIR}:/snapshot" backend \
+    python -m app.scripts.storage_snapshot export --output /snapshot; then
+  fail "文件快照失败，数据库 dump 保留但本批次不完整"
+fi
+if tar -czf "${UP_BACKUP_FILE}.tmp" -C "${SNAPSHOT_DIR}" .; then
   if [[ -s "${UP_BACKUP_FILE}.tmp" ]]; then
     mv "${UP_BACKUP_FILE}.tmp" "${UP_BACKUP_FILE}"
-    log "上传目录备份完成，大小 $(du -h "${UP_BACKUP_FILE}" | cut -f1)"
+    log "文件快照备份完成，大小 $(du -h "${UP_BACKUP_FILE}" | cut -f1)"
   else
     rm -f "${UP_BACKUP_FILE}.tmp"
-    fail "上传目录备份产物为空"
+    fail "文件快照备份产物为空"
   fi
 else
   rm -f "${UP_BACKUP_FILE}.tmp"
-  fail "上传目录 tar 备份失败"
+  fail "文件快照 tar 备份失败"
 fi
 
 # ---------- 3. 保留策略：清理超过 14 天的备份 ----------
@@ -116,7 +119,7 @@ while IFS= read -r old; do
   log "已清理超期备份：${old}"
   deleted=$((deleted + 1))
 done < <(find "${PG_BACKUP_DIR}" "${UP_BACKUP_DIR}" -type f \
-  \( -name '*.dump' -o -name '*-uploads.tar.gz' \) -mtime "+${RETENTION_DAYS}")
+  \( -name '*.dump' -o -name '*-storage.tar.gz' \) -mtime "+${RETENTION_DAYS}")
 log "保留策略执行完毕，共清理 ${deleted} 个超期文件"
 
 log "===== 备份完成（批次 ${TS}） ====="

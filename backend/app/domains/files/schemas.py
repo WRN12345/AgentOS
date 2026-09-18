@@ -6,14 +6,31 @@
 
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import AfterValidator, BaseModel
+
+
+def normalize_directory_path(value: str) -> str:
+    if "\\" in value or "\x00" in value:
+        raise ValueError("Directory paths cannot contain backslashes or NUL")
+    parts = value.split("/")
+    if any(part in (".", "..") for part in parts):
+        raise ValueError("Directory paths cannot contain . or .. segments")
+    canonical = "/" + "/".join(part for part in parts if part)
+    if len(canonical) > 512:
+        raise ValueError("Directory paths cannot exceed 512 characters")
+    return canonical
+
+
+DirectoryPath = Annotated[str, AfterValidator(normalize_directory_path)]
 
 
 class StoredFileOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     original_filename: str
+    directory_path: str
     size_bytes: int
     mime_type: str
     sha256: str

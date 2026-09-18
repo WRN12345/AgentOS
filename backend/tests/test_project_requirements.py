@@ -99,6 +99,65 @@ async def generate(client, project, headers):
     return response.json()[0], material, job
 
 
+async def test_material_download_uses_persisted_backend(
+    client, project_a, project_b, admin_headers, providers, monkeypatch, tmp_path,
+):
+    router_module = importlib.import_module("app.domains.requirements.router")
+    material = await upload(client, project_a, admin_headers)
+    original = providers[1]
+    default = LocalStorageProvider(tmp_path / "new-default")
+    default.backend_name = "minio"
+    app.dependency_overrides[get_storage_provider] = lambda: default
+    resolve = Mock(return_value=original)
+    monkeypatch.setattr(router_module, "storage_for", resolve)
+    path = f"/api/v1/admin/projects/{project_a.id}/materials/{material['id']}/download"
+    response = await client.get(path, headers=admin_headers)
+    assert response.status_code == 200
+    assert response.text == TEXT
+    resolve.assert_called_once_with("local")
+    resolve.reset_mock()
+    response = await client.get(path.replace(str(project_a.id), str(project_b.id)), headers=admin_headers)
+    assert response.status_code == 404
+    resolve.assert_not_called()
+
+
+@pytest.mark.parametrize("failure,retain", [("audit", False), ("commit", True), ("ack", True), ("cleanup", True)])
+async def test_material_upload_compensation(
+    project_a, admin_user, providers, monkeypatch, failure, retain, caplog,
+):
+    from fastapi import UploadFile
+    from starlette.datastructures import Headers
+
+    storage = providers[1]
+    monkeypatch.setattr(service, "extract_material_text", AsyncMock(return_value=TEXT))
+    original_error = "private-token-in-failure"
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError(original_error)
+
+    async with async_session_factory() as session:
+        if failure in ("audit", "cleanup"):
+            monkeypatch.setattr(service, "audit", fail)
+        if failure == "commit":
+            monkeypatch.setattr(session, "commit", fail)
+        if failure == "ack":
+            commit = session.commit
+
+            async def lost_ack():
+                await commit()
+                raise RuntimeError(original_error)
+
+            monkeypatch.setattr(session, "commit", lost_ack)
+        if failure == "cleanup":
+            monkeypatch.setattr(storage, "delete", fail)
+        uploaded = UploadFile(io.BytesIO(TEXT.encode()), filename="material.txt",
+                              headers=Headers({"content-type": "text/plain"}))
+        with pytest.raises(RuntimeError, match=original_error):
+            await service.upload_material(session, project_a.id, admin_user, uploaded, storage)
+    assert any(path.is_file() for path in storage._root.rglob("*")) is retain
+    assert original_error not in caplog.text
+
+
 @pytest.mark.parametrize("prefix,suffix", [
     ("<think>Check the supplied evidence.</think>\n", ""),
     ("```json\n", "\n```"),

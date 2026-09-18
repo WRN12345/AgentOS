@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { FileIcon, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { api, errorMessage, newIdempotencyKey } from "../../services/api";
 import type { StoredFile } from "../../types";
@@ -32,6 +33,8 @@ type UploadState =
  */
 export function FileUploadField({ workItemId, onUploaded, onClear }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const directoryId = useId();
+  const [directoryPath, setDirectoryPath] = useState("/");
   const [state, setState] = useState<UploadState>({ phase: "idle" });
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -40,6 +43,7 @@ export function FileUploadField({ workItemId, onUploaded, onClear }: Props) {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("work_item_id", workItemId);
+    formData.append("directory_path", directoryPath.trim() || "/");
     api
       .upload<StoredFile>(
         "/files",
@@ -87,6 +91,18 @@ export function FileUploadField({ workItemId, onUploaded, onClear }: Props) {
 
   return (
     <div className="space-y-2">
+      <Label htmlFor={directoryId}>上传目录（可选）</Label>
+      <Input
+        id={directoryId}
+        value={directoryPath}
+        onChange={(event) => setDirectoryPath(event.target.value)}
+        disabled={state.phase === "uploading" || state.phase === "done"}
+        placeholder="/"
+        aria-describedby={`${directoryId}-hint`}
+      />
+      <p id={`${directoryId}-hint`} className="text-xs text-muted-foreground">
+        选择文件前设置目录，默认为 /；同目录同名上传生成新版本
+      </p>
       <Input
         ref={inputRef}
         type="file"

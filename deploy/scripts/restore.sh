@@ -4,7 +4,7 @@
 # 功能：
 #   1. 从 pg_dump 自定义格式备份恢复数据库，支持恢复到任意指定库名
 #      （默认要求恢复到非主库；恢复到主库必须显式 --confirm，避免误覆盖）
-#   2. 从上传目录 tar 备份恢复文件到指定目录
+#   2. 从完整存储快照恢复 local/MinIO 文件；保留旧本地归档恢复入口
 #   3. 恢复后校验：库连通、核心表存在、文件 SHA-256 与 stored_files 记录抽查比对
 #
 # 用法示例：
@@ -50,10 +50,13 @@ DUMP_FILE=""
 TARGET_DB=""
 UPLOADS_ARCHIVE=""
 UPLOADS_TARGET=""
+STORAGE_ARCHIVE=""
+MINIO_TARGET_BUCKET=""
 CONFIRM=0
 
 usage() {
   sed -n '2,30p' "${BASH_SOURCE[0]}"
+  echo "完整快照：--storage-archive <文件> --uploads-target <目录> [--minio-target-bucket <私有bucket>]"
   exit 2
 }
 
@@ -63,6 +66,8 @@ while [[ $# -gt 0 ]]; do
     --target-db) TARGET_DB="$2"; shift 2 ;;
     --uploads-archive) UPLOADS_ARCHIVE="$2"; shift 2 ;;
     --uploads-target) UPLOADS_TARGET="$2"; shift 2 ;;
+    --storage-archive) STORAGE_ARCHIVE="$2"; shift 2 ;;
+    --minio-target-bucket) MINIO_TARGET_BUCKET="$2"; shift 2 ;;
     --confirm) CONFIRM=1; shift ;;
     -h|--help) usage ;;
     *) echo "未知参数：$1" >&2; usage ;;
@@ -73,7 +78,10 @@ done
 # 库名合法性校验（会拼进 SQL，必须防注入）
 [[ "${TARGET_DB}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || { echo "非法库名：${TARGET_DB}" >&2; exit 2; }
 # 文件与目录配套校验
-if [[ -n "${UPLOADS_ARCHIVE}" || -n "${UPLOADS_TARGET}" ]]; then
+if [[ -n "${STORAGE_ARCHIVE}" ]]; then
+  [[ -z "${UPLOADS_ARCHIVE}" && -n "${UPLOADS_TARGET}" ]] \
+    || { echo "--storage-archive 需要 --uploads-target，且不能与 --uploads-archive 混用" >&2; exit 2; }
+elif [[ -n "${UPLOADS_ARCHIVE}" || -n "${UPLOADS_TARGET}" ]]; then
   [[ -n "${UPLOADS_ARCHIVE}" && -n "${UPLOADS_TARGET}" ]] \
     || { echo "--uploads-archive 与 --uploads-target 必须同时提供" >&2; exit 2; }
 fi
@@ -109,10 +117,36 @@ docker compose ps --status running --services 2>/dev/null | grep -qx "${POSTGRES
 if [[ -n "${UPLOADS_ARCHIVE}" ]]; then
   [[ -f "${UPLOADS_ARCHIVE}" ]] || fail "上传目录备份文件不存在：${UPLOADS_ARCHIVE}"
 fi
+if [[ -n "${STORAGE_ARCHIVE}" ]]; then
+  [[ -f "${STORAGE_ARCHIVE}" ]] || fail "存储快照不存在：${STORAGE_ARCHIVE}"
+fi
+[[ "${VERIFY_SAMPLE_SIZE}" =~ ^[1-9][0-9]*$ ]] || fail "VERIFY_SAMPLE_SIZE 必须为正整数"
 
 # ---------- 覆盖保护 ----------
 if [[ "${TARGET_DB}" == "${POSTGRES_DB}" && "${CONFIRM}" -ne 1 ]]; then
   fail "目标库是主库 ${POSTGRES_DB}！覆盖主库属于危险操作，如确认无误请追加 --confirm"
+fi
+if [[ -n "${UPLOADS_TARGET}" ]]; then
+  UPLOADS_TARGET="$(realpath -m "${UPLOADS_TARGET}")"
+  if [[ "${UPLOADS_TARGET}" == "$(realpath -m "${REPO_ROOT}/data/uploads")" && "${CONFIRM}" -ne 1 ]]; then
+    fail "目标目录是线上上传目录，需要追加 --confirm"
+  fi
+fi
+if [[ -n "${MINIO_TARGET_BUCKET}" && "${MINIO_TARGET_BUCKET}" == "${MINIO_BUCKET:-agentos-files}" && "${CONFIRM}" -ne 1 ]]; then
+  fail "目标 bucket 是配置中的线上 bucket，需要追加 --confirm"
+fi
+if [[ -n "${STORAGE_ARCHIVE}" ]]; then
+  SNAPSHOT_DIR="$(mktemp -d)"
+  trap 'rm -rf -- "${SNAPSHOT_DIR}"' EXIT
+  STORAGE_ARCHIVE="$(realpath "${STORAGE_ARCHIVE}")"
+  # 在重建数据库之前安全解包、验证清单并检查目标参数。
+  snapshot_uses_minio="$(docker compose run --rm --no-deps -T \
+    -v "${STORAGE_ARCHIVE}:/snapshot.tar.gz:ro" -v "${SNAPSHOT_DIR}:/snapshot" \
+    -e STORAGE_BACKEND=local backend python -c 'import asyncio, tarfile; from pathlib import Path; from app.scripts.storage_snapshot import verify_snapshot; t = tarfile.open("/snapshot.tar.gz"); t.extractall("/snapshot", filter="data"); t.close(); records = asyncio.run(verify_snapshot(Path("/snapshot"))); print(int(any(r.backend == "minio" for r in records.values())))')" \
+    || fail "存储快照解包、清单或文件完整性校验失败"
+  if [[ "${snapshot_uses_minio}" == "1" && -z "${MINIO_TARGET_BUCKET}" ]]; then
+    fail "快照包含 MinIO 文件，必须显式提供 --minio-target-bucket（预先创建私有 bucket）"
+  fi
 fi
 
 log "===== 恢复开始：${DUMP_FILE} -> 库 ${TARGET_DB} ====="
@@ -132,11 +166,22 @@ fi
 log "数据库恢复完成"
 
 # ---------- 2. 恢复上传目录 ----------
-if [[ -n "${UPLOADS_ARCHIVE}" ]]; then
-  if [[ "${UPLOADS_TARGET}" == "${REPO_ROOT}/data/uploads" || "${UPLOADS_TARGET}" == "data/uploads" ]] \
-     && [[ "${CONFIRM}" -ne 1 ]]; then
-    fail "目标目录是线上上传目录 data/uploads！覆盖它需要追加 --confirm"
+if [[ -n "${STORAGE_ARCHIVE}" ]]; then
+  minio_count="$(psql_target -tAc "SELECT count(*) FROM stored_files WHERE storage_backend = 'minio';")"
+  if [[ "${minio_count}" -gt 0 && -z "${MINIO_TARGET_BUCKET}" ]]; then
+    fail "快照包含 MinIO 文件，必须显式提供 --minio-target-bucket（预先创建私有 bucket）"
   fi
+  mkdir -p "${UPLOADS_TARGET}"
+  log "恢复完整文件快照并校验全部文件"
+  docker compose run --rm --no-deps -T \
+    -v "${SNAPSHOT_DIR}:/snapshot:ro" -v "${UPLOADS_TARGET}:/restore-uploads" \
+    -e STORAGE_BACKEND=local -e "MINIO_BUCKET=${MINIO_TARGET_BUCKET:-agentos-files}" \
+    -e "RESTORE_TARGET_DB=${TARGET_DB}" backend \
+    python -c 'import os, runpy; from sqlalchemy.engine import make_url; os.environ["DATABASE_URL"] = make_url(os.environ["DATABASE_URL"]).set(database=os.environ["RESTORE_TARGET_DB"]).render_as_string(hide_password=False); runpy.run_module("app.scripts.storage_snapshot", run_name="__main__")' \
+    import --input /snapshot --local-root /restore-uploads --yes \
+    || fail "文件快照恢复或完整性校验失败"
+fi
+if [[ -n "${UPLOADS_ARCHIVE}" ]]; then
   log "恢复上传目录 -> ${UPLOADS_TARGET}"
   mkdir -p "${UPLOADS_TARGET}"
   # 备份时以 -C data/uploads . 打包，直接解包到目标目录即可
@@ -159,8 +204,8 @@ done
 log "校验通过：核心表 users/projects/project_members/work_items/stored_files 均存在"
 
 # 3.3 文件 SHA-256 与 stored_files 记录抽查比对
-if [[ -n "${UPLOADS_TARGET}" ]]; then
-  total_files="$(psql_target -tAc "SELECT count(*) FROM stored_files;")"
+if [[ -n "${UPLOADS_ARCHIVE}" ]]; then
+  total_files="$(psql_target -tAc "SELECT count(*) FROM stored_files WHERE storage_backend = 'local';")"
   log "stored_files 共 ${total_files} 条记录，随机抽查最多 ${VERIFY_SAMPLE_SIZE} 条"
   ok=0; bad=0; missing=0
   while IFS='|' read -r storage_key sha256; do
@@ -177,7 +222,7 @@ if [[ -n "${UPLOADS_TARGET}" ]]; then
       log "  哈希不一致：${storage_key} 期望 ${sha256} 实际 ${actual}"
       bad=$((bad + 1))
     fi
-  done < <(psql_target -tAc "SELECT storage_key, sha256 FROM stored_files ORDER BY random() LIMIT ${VERIFY_SAMPLE_SIZE};")
+  done < <(psql_target -tAc "SELECT storage_key, sha256 FROM stored_files WHERE storage_backend = 'local' ORDER BY random() LIMIT ${VERIFY_SAMPLE_SIZE};")
   log "SHA-256 抽查结果：一致 ${ok}，不一致 ${bad}，文件缺失 ${missing}"
   [[ "${bad}" -eq 0 && "${missing}" -eq 0 ]] || fail "校验失败：存在哈希不一致或缺失文件"
   log "校验通过：抽查文件 SHA-256 全部与 stored_files 记录一致"

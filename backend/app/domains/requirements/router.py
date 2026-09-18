@@ -19,7 +19,7 @@ from app.domains.requirements.service import (
     audit, command, project_exists, requirement_out, start_analysis, upload_material,
 )
 from app.infrastructure.database.engine import get_session
-from app.infrastructure.storage.provider import StorageProvider, get_storage_provider
+from app.infrastructure.storage.provider import StorageProvider, get_storage_provider, storage_for
 
 router = APIRouter(tags=["requirements"])
 admin = APIRouter(prefix="/admin/projects/{project_id}")
@@ -46,7 +46,11 @@ async def download(project_id: uuid.UUID, material_id: uuid.UUID,
                    provider: StorageProvider = Depends(get_storage_provider)):
     material = await session.scalar(select(Material).options(defer(Material.chunks)).where(
         Material.id == material_id, Material.project_id == project_id))
-    if material is None or material.storage_backend != provider.backend_name or not await provider.exists(material.storage_key):
+    if material is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "Material not found")
+    if material.storage_backend != provider.backend_name:
+        provider = storage_for(material.storage_backend)
+    if not await provider.exists(material.storage_key):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Material not found")
     await audit(session, "material_downloaded", actor.id, material)
     await session.commit()

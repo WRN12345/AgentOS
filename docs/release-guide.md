@@ -40,7 +40,9 @@ cp .env.example .env   # 然后按下表逐项修改
 | `SCHEDULER_EXAMPLE_INTERVAL_SECONDS` | Scheduler 示例任务周期 | 默认即可 |
 | `DUE_SCAN_INTERVAL_SECONDS` | 到期/逾期提醒扫描周期（秒） | 默认 300 |
 | `AGENT_RISK_SCAN_INTERVAL_SECONDS` | 风险扫描 Agent 周期（秒） | 默认 86400（24 小时） |
-| `STORAGE_BACKEND` / `STORAGE_ROOT` | 文件存储后端（首版 `local`）与容器内根目录 | 默认即可 |
+| `STORAGE_BACKEND` / `STORAGE_ROOT` | 新文件后端 `local|minio` 与本地根目录；已有文件按记录读取 | 默认 `local` |
+| `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | MinIO 地址（不带协议）与专用应用凭据 | 使用 MinIO 时必填 |
+| `MINIO_BUCKET` / `MINIO_SECURE` | 预先创建的私有 bucket 与 TLS 开关 | 生产使用 TLS |
 | `UPLOAD_MAX_BYTES` / `UPLOAD_ALLOWED_EXTENSIONS` / `UPLOAD_ALLOWED_MIME_TYPES` | 上传大小上限与类型白名单 | 按需收紧 |
 | `JWT_SECRET` | JWT 签名密钥 | **必须换强随机值** |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | 令牌有效期 | — |
@@ -61,6 +63,16 @@ docker compose ps        # 六个服务全部 healthy 即就绪
 - 数据持久化在 `./data/`（postgres / redis / uploads / backups / logs），备份见第 5 节。
 
 ## 4. 快速开发模式（19.3 节）
+
+### 可选 MinIO 存储
+
+默认本地存储无需运行 MinIO。使用 Compose 自带实例时，在 `.env` 配置强随机 `MINIO_ROOT_PASSWORD`，执行 `docker compose --profile minio up -d minio`。服务数据保存在 `data/minio/`，API 和管理控制台仅绑定宿主机回环的 9000/9001 端口。
+
+通过管理控制台预先创建私有 `agentos-files` bucket 及受限应用访问账号，配置 `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`，再设置 `STORAGE_BACKEND=minio`。应用账号需要目标 bucket 内对象读写删除权限，不使用管理账号。外部 MinIO 直接配置 endpoint 和 TLS，无需启用 Compose profile。
+
+重新构建并启动 backend、worker、scheduler 以加载一致配置；已有本地文件仍需保留 `data/uploads/` 挂载。只改变环境变量不会迁移历史文件。迁移命令和备份恢复流程见 `deploy/scripts/README.md`。
+
+### 宿主机开发
 
 只让 PostgreSQL 和 Redis 跑在 Docker，应用进程在宿主机跑（热重载）：
 
@@ -87,11 +99,11 @@ cd frontend && npm install && npm run dev
 
 ## 5. 备份与恢复（19.4 节，T6.5）
 
-- 每日备份：`deploy/scripts/backup.sh`（PostgreSQL 逻辑备份 + 上传目录增量备份 +
+- 每日备份：`deploy/scripts/backup.sh`（PostgreSQL 逻辑备份 + local/MinIO 完整文件快照 +
   14 天保留清理，日志写 `data/logs/backup.log`）。
-- 恢复：`deploy/scripts/restore.sh --dump <文件> --target-db <库名> [--uploads-archive ...]`，
-  覆盖主库需显式 `--confirm`；恢复后自动校验（连通性、核心表、文件 SHA-256 抽查）。
-- 定时任务（宿主机 crontab）与增量恢复细节见 `deploy/scripts/README.md`。
+- 恢复：`deploy/scripts/restore.sh --dump <文件> --target-db <库名> --storage-archive <快照> --uploads-target <目录>`，
+  MinIO 数据另需 `--minio-target-bucket`；覆盖主库需显式 `--confirm`；完整快照逐文件校验大小及 SHA-256。
+- 定时任务（宿主机 crontab）、迁移与历史归档恢复细节见 `deploy/scripts/README.md`。
 - 恢复演练记录：`docs/quality-baseline-2026-07-29.md` 第 3 节（MVP 标准 12 证据，每月至少一次）。
 
 ## 6. 测试入口
@@ -119,7 +131,7 @@ cd frontend && npm install && npm run dev
 - 单项目、无 SSO、无多项目/跨项目成员。
 - 无 GitProvider/NotificationProvider 集成：Git 链接由成员手工粘贴，飞书同步为系统外
   手工步骤（平台以终态归档 + 证据文件留痕）。
-- 无 WebSocket（实时推送用 SSE）、无 MinIO/对象存储（本地文件存储，预留 StorageProvider 抽象）。
+- 无 WebSocket（实时推送用 SSE）；文件支持本地与 MinIO，下载统一经过权限检查。
 - Agent 只能生成建议，不能改变任何正式业务状态（原则 2，标准 10）。
 
 ## 9. 常见问题

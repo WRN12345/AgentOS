@@ -43,9 +43,11 @@ async def _upload(
     content: bytes = b"content",
     filename: str = "guide.md",
     mime: str = "text/markdown",
+    directory_path: str | None = None,
 ) -> httpx.Response:
     return await client.post(
-        "/api/v1/files", headers=headers, files={"file": (filename, content, mime)}
+        "/api/v1/files", headers=headers, files={"file": (filename, content, mime)},
+        data={"directory_path": directory_path} if directory_path is not None else {},
     )
 
 
@@ -139,3 +141,36 @@ def test_no_file_delete_endpoint_anywhere() -> None:
         if hasattr(route, "methods") and "DELETE" in route.methods  # type: ignore[attr-defined]
     ]
     assert not any("files" in path for path in delete_routes), delete_routes
+
+
+async def test_directory_scopes_versions_history_and_current_filter(client, project, storage):
+    await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    root = (await _upload(client, headers)).json()
+    first = (await _upload(client, headers, directory_path="docs//guides/")).json()
+    second = (await _upload(client, headers, directory_path="/docs/guides")).json()
+    other = (await _upload(client, headers, directory_path="/other")).json()
+    assert root["directory_path"] == "/"
+    assert first["directory_path"] == second["directory_path"] == "/docs/guides"
+    assert [row["version"] for row in (root, first, second, other)] == [1, 1, 2, 1]
+    history = await client.get(f"/api/v1/files/{first['id']}/versions", headers=headers)
+    assert [row["id"] for row in history.json()] == [second["id"], first["id"]]
+    all_files = await client.get("/api/v1/files", headers=headers)
+    assert {row["id"] for row in all_files.json()} == {root["id"], second["id"], other["id"]}
+    for directory, expected in [("///", root), ("docs//guides/", second), ("/other", other)]:
+        filtered = await client.get("/api/v1/files", headers=headers, params={"directory_path": directory})
+        assert [row["id"] for row in filtered.json()] == [expected["id"]]
+    async with async_session_factory() as session:
+        rows = (await session.execute(select(StoredFile))).scalars().all()
+        assert all(row.storage_key == f"projects/{project.id}/files/{row.id}" for row in rows)
+
+
+@pytest.mark.parametrize("directory", ["/a/../b", "/./a", "a\\b", "/a\x00b", "/" + "a" * 512])
+async def test_invalid_directory_returns_422(client, project, storage, directory):
+    await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    response = await _upload(client, headers, directory_path=directory)
+    assert response.status_code == 422, response.text
+    response = await client.get("/api/v1/files", headers=headers, params={"directory_path": directory})
+    assert response.status_code == 422, response.text
+    assert not any(path.is_file() for path in storage._root.rglob("*"))

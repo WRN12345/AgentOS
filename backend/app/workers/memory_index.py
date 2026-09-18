@@ -44,7 +44,7 @@ from app.domains.memory.models import CoreMemoryEntry, MemberProfile
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import enqueue, enqueue_delayed
-from app.infrastructure.storage.provider import get_storage_provider
+from app.infrastructure.storage.provider import get_storage_provider, storage_for
 
 logger = setup_logging("worker.memory_index")
 
@@ -85,6 +85,8 @@ async def _index_stored_file(file_id: uuid.UUID) -> int:
         # 状态为 indexing 时说明是任务重试，直接继续
 
         provider = get_storage_provider()
+        if provider.backend_name != stored.storage_backend:
+            provider = storage_for(stored.storage_backend)
         data = await provider.load(stored.storage_key)
         try:
             text = extract_text(stored.original_filename, data)

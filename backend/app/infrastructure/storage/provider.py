@@ -7,10 +7,26 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import PurePosixPath, PureWindowsPath
 
 from app.core.config import settings
 
 DEFAULT_CHUNK_SIZE = 64 * 1024
+
+
+def validate_key(storage_key: str) -> PurePosixPath:
+    key = PurePosixPath(storage_key)
+    if (
+        not storage_key
+        or "\x00" in storage_key
+        or key.is_absolute()
+        or PureWindowsPath(storage_key).is_absolute()
+        or "\\" in storage_key
+        or any(part in ("", ".", "..") for part in storage_key.split("/"))
+    ):
+        raise ValueError(f"Invalid storage_key: {storage_key!r}")
+    return key
 
 
 class StagedUpload(ABC):
@@ -30,13 +46,35 @@ class StorageProvider(ABC):
 
     backend_name: str
 
-    @abstractmethod
+    @asynccontextmanager
+    async def open(self, storage_key: str, mode: str = "rb"):
+        """Open a sequential binary stream; successful writes publish on exit."""
+        if mode not in ("rb", "wb"):
+            raise ValueError("Storage mode must be 'rb' or 'wb'")
+        validate_key(storage_key)
+        if mode == "rb":
+            async with self._open_reader(storage_key) as reader:
+                yield reader
+        else:
+            staged = await self.stage()
+            try:
+                yield staged
+                await self.commit(staged, storage_key)
+            finally:
+                await self.discard(staged)
+
+    def _open_reader(self, storage_key: str):
+        raise NotImplementedError
+
     async def save(self, storage_key: str, data: bytes) -> None:
         """一次性写入小文件（原子落位）。"""
+        async with self.open(storage_key, "wb") as stream:
+            await stream.write(data)
 
-    @abstractmethod
     async def load(self, storage_key: str) -> bytes:
         """读取完整内容。"""
+        async with self.open(storage_key, "rb") as stream:
+            return await stream.read()
 
     @abstractmethod
     async def delete(self, storage_key: str) -> None:
@@ -46,15 +84,19 @@ class StorageProvider(ABC):
     async def exists(self, storage_key: str) -> bool:
         """存在性检查。"""
 
-    @abstractmethod
-    def iter_chunks(
+    async def iter_chunks(
         self, storage_key: str, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> AsyncIterator[bytes]:
         """流式读取（下载用），避免整文件载入内存。"""
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        async with self.open(storage_key, "rb") as stream:
+            while chunk := await stream.read(chunk_size):
+                yield chunk
 
     @abstractmethod
     async def stage(self) -> StagedUpload:
-        """开启一次暂存写入（与正式存储同后端，保证 commit 可原子完成）。"""
+        """开启一次本地磁盘暂存写入，由 commit 发布完整对象。"""
 
     @abstractmethod
     async def commit(self, staged: StagedUpload, storage_key: str) -> None:
@@ -66,6 +108,33 @@ class StorageProvider(ABC):
 
 
 _provider: StorageProvider | None = None
+_providers: dict[str, StorageProvider] = {}
+
+
+def storage_for(backend: str) -> StorageProvider:
+    """Return the cached provider for a persisted backend name."""
+    global _provider
+    if backend == "local":
+        # Keep the local singleton resettable when tests replace storage_root.
+        if _provider is None:
+            from app.infrastructure.storage.local import LocalStorageProvider
+
+            _provider = LocalStorageProvider(settings.storage_root)
+        return _provider
+    if backend == "minio":
+        settings.validate_minio()
+        if backend not in _providers:
+            from app.infrastructure.storage.minio import MinioStorageProvider
+
+            _providers[backend] = MinioStorageProvider(
+                settings.minio_endpoint,
+                settings.minio_access_key,
+                settings.minio_secret_key,
+                settings.minio_bucket,
+                settings.minio_secure,
+            )
+        return _providers[backend]
+    raise ValueError(f"Unsupported storage backend: {backend}")
 
 
 def get_storage_provider() -> StorageProvider:
@@ -74,12 +143,4 @@ def get_storage_provider() -> StorageProvider:
     业务层经 Depends(get_storage_provider) 注入；测试用
     app.dependency_overrides 覆盖注入任意 StorageProvider 实现。
     """
-    global _provider
-    if _provider is None:
-        if settings.storage_backend == "local":
-            from app.infrastructure.storage.local import LocalStorageProvider
-
-            _provider = LocalStorageProvider(settings.storage_root)
-        else:
-            raise RuntimeError(f"不支持的存储后端: {settings.storage_backend}")
-    return _provider
+    return storage_for(settings.storage_backend)

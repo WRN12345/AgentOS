@@ -368,3 +368,93 @@ async def test_download_writes_audit_event(
     assert event.target_type == "stored_file"
     assert event.request_id is not None
     assert event.after["original_filename"] == "report.txt"
+
+
+async def test_download_selects_record_backend_after_authorization(client, project, storage, monkeypatch, tmp_path):
+    from unittest.mock import Mock
+    from app.domains.files import service
+
+    ctx = await _setup(client, project)
+    item_id = await _create_item(client, ctx["leader_headers"], str(ctx["alice"].id))
+    uploaded = await _upload(client, ctx["alice_headers"], work_item_id=item_id)
+    file_id = uploaded.json()["id"]
+    alternate = LocalStorageProvider(tmp_path / "alternate")
+    alternate.backend_name = "minio"
+    async with async_session_factory() as session:
+        row = await session.get(StoredFile, uuid.UUID(file_id))
+        await alternate.save(row.storage_key, CONTENT)
+        await storage.delete(row.storage_key)
+        row.storage_backend = "minio"
+        await session.commit()
+    resolve = Mock(return_value=alternate)
+    monkeypatch.setattr(service, "storage_for", resolve)
+    denied = await client.get(f"/api/v1/files/{file_id}/download", headers=ctx["dave_headers"])
+    assert denied.status_code == 403
+    resolve.assert_not_called()
+    downloaded = await client.get(f"/api/v1/files/{file_id}/download", headers=ctx["alice_headers"])
+    assert downloaded.status_code == 200
+    assert downloaded.content == CONTENT
+    resolve.assert_called_once_with("minio")
+
+
+@pytest.mark.parametrize(
+    "failure,retain",
+    [("storage_commit", False), ("lookup", False), ("flush", False),
+     ("db_commit", True), ("commit_ack", True), ("refresh", True),
+     ("rollback_after_commit", True), ("cleanup", True)],
+)
+async def test_upload_compensation_boundaries(project, storage, monkeypatch, failure, retain):
+    from io import BytesIO
+    from fastapi import UploadFile
+    from starlette.datastructures import Headers
+    from app.domains.files import service
+
+    _, actor = await add_member(project, "alice", ALICE_PW)
+    upload = UploadFile(BytesIO(CONTENT), filename="report.txt", headers=Headers({"content-type": "text/plain"}))
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("primary failure")
+
+    async with async_session_factory() as session:
+        if failure == "storage_commit":
+            commit = storage.commit
+
+            async def storage_commit(*args):
+                await commit(*args)
+                raise RuntimeError("primary failure")
+
+            monkeypatch.setattr(storage, "commit", storage_commit)
+        elif failure == "lookup":
+            monkeypatch.setattr(session, "execute", boom)
+        elif failure == "flush":
+            monkeypatch.setattr(session, "flush", boom)
+        elif failure in ("db_commit", "rollback_after_commit"):
+            monkeypatch.setattr(session, "commit", boom)
+            if failure == "rollback_after_commit":
+                monkeypatch.setattr(session, "rollback", boom)
+        elif failure == "commit_ack":
+            commit = session.commit
+
+            async def commit_ack():
+                await commit()
+                raise RuntimeError("primary failure")
+
+            monkeypatch.setattr(session, "commit", commit_ack)
+        elif failure == "refresh":
+            monkeypatch.setattr(session, "refresh", boom)
+        elif failure == "cleanup":
+            monkeypatch.setattr(session, "execute", boom)
+
+            async def cleanup_boom(*args):
+                raise RuntimeError("cleanup failure")
+
+            monkeypatch.setattr(storage, "delete", cleanup_boom)
+            monkeypatch.setattr(storage, "discard", cleanup_boom)
+            monkeypatch.setattr(session, "rollback", cleanup_boom)
+
+        with pytest.raises(RuntimeError, match="^primary failure$"):
+            await service.upload_file(session, actor, upload, None, storage)
+    assert bool(_files_on_disk(storage._root)) is retain
+    async with async_session_factory() as session:
+        rows = (await session.execute(select(StoredFile))).scalars().all()
+        assert bool(rows) is (failure in ("commit_ack", "refresh"))

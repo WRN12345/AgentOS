@@ -1,6 +1,29 @@
 name: agentos
 
+x-storage-environment: &storage-environment
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+  STORAGE_ROOT: ${STORAGE_ROOT:-/app/data/uploads}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+  MINIO_BUCKET: ${MINIO_BUCKET:-agentos-files}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+
 services:
+  minio:
+    profiles: [minio]
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: [server, /data, --console-address, ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agentos-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - ./data/minio:/data
+    restart: unless-stopped
+
   postgres:
     # pgvector 官方镜像（基于 postgres:16），提供 vector 扩展供记忆模块语义检索使用
     image: pgvector/pgvector:pg16
@@ -44,6 +67,7 @@ services:
         PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     container_name: agentos-backend
     environment:
+      <<: *storage-environment
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -68,8 +92,6 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-14}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
-      STORAGE_ROOT: ${STORAGE_ROOT:-/app/data/uploads}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-20971520}
       UPLOAD_ALLOWED_EXTENSIONS: ${UPLOAD_ALLOWED_EXTENSIONS:-.txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip,.docx}
       UPLOAD_ALLOWED_MIME_TYPES: ${UPLOAD_ALLOWED_MIME_TYPES:-text/plain,text/markdown,text/csv,application/json,application/pdf,image/png,image/jpeg,application/zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document}
@@ -101,6 +123,7 @@ services:
     container_name: agentos-worker
     command: ["python", "-m", "app.workers.worker"]
     environment:
+      <<: *storage-environment
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -146,6 +169,7 @@ services:
     container_name: agentos-scheduler
     command: ["python", "-m", "app.workers.scheduler"]
     environment:
+      <<: *storage-environment
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

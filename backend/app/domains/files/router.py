@@ -5,14 +5,15 @@
 """
 
 import uuid
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import idempotency_guard
-from app.domains.files.schemas import StoredFileOut
+from app.domains.files.schemas import DirectoryPath, StoredFileOut
 from app.domains.files.service import (
     authorize_download,
     list_current_files,
@@ -38,21 +39,23 @@ def _content_disposition(filename: str) -> str:
 async def upload_file_endpoint(
     file: UploadFile = File(...),
     work_item_id: uuid.UUID | None = Form(None),
+    directory_path: Annotated[DirectoryPath, Form()] = "/",
     actor: ProjectMember = Depends(get_current_member),
     _: None = Depends(idempotency_guard),
     provider: StorageProvider = Depends(get_storage_provider),
     session: AsyncSession = Depends(get_session),
 ) -> StoredFileOut:
-    return await upload_file(session, actor, file, work_item_id, provider)
+    return await upload_file(session, actor, file, work_item_id, provider, directory_path)
 
 
 @router.get("/files", response_model=list[StoredFileOut])
 async def list_files_endpoint(
+    directory_path: Annotated[DirectoryPath | None, Query()] = None,
     actor: ProjectMember = Depends(get_current_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[StoredFileOut]:
     """返回项目内文件的当前版本。"""
-    return await list_current_files(session, actor)
+    return await list_current_files(session, actor, directory_path)
 
 
 @router.get("/files/{file_id}/versions", response_model=list[StoredFileOut])
@@ -82,7 +85,7 @@ async def download_file_endpoint(
     provider: StorageProvider = Depends(get_storage_provider),
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
-    stored = await authorize_download(session, actor, file_id, provider)
+    stored, provider = await authorize_download(session, actor, file_id, provider)
     return StreamingResponse(
         provider.iter_chunks(stored.storage_key),
         media_type=stored.mime_type,
