@@ -1,19 +1,23 @@
 import asyncio
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.agents.specialists.common import strip_model_noise
 from app.domains.requirements.models import Analysis, Material, Requirement
 from app.domains.requirements.schemas import Candidates
 from app.domains.requirements.service import TASK_TYPE, audit
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.models.provider import get_model_provider
+from app.infrastructure.models.errors import ModelTimeoutError
 from app.infrastructure.queue.queue import enqueue
 
 MAX_ATTEMPTS = 3
 LEASE_SECONDS = 360
+logger = logging.getLogger("worker")
 
 
 async def recover_requirement_analyses(redis_client) -> None:
@@ -56,6 +60,7 @@ async def execute_requirement_analysis(payload: dict, redis_client) -> None:
         job.next_delivery_at = job.available_at
         project_id, material_ids = job.project_id, job.material_ids
         await session.commit()
+    stage = "materials"
     try:
         async with async_session_factory() as session:
             materials = (await session.scalars(select(Material).where(
@@ -78,9 +83,12 @@ async def execute_requirement_analysis(payload: dict, redis_client) -> None:
             "Return an empty requirements array when no actionable requirements are supported. "
             "Put unresolved ambiguities in clarification_questions, otherwise use an empty string."
         )
+        stage = "model"
         raw = await asyncio.wait_for(get_model_provider().generate(
             prompt, system=system, json_output=True), timeout=300)
-        candidates = Candidates.model_validate_json(raw)
+        stage = "schema"
+        candidates = Candidates.model_validate_json(strip_model_noise(raw))
+        stage = "sources"
         for candidate in candidates.requirements:
             for source in candidate.sources:
                 entry = chunks.get(source.chunk_id)
@@ -90,6 +98,7 @@ async def execute_requirement_analysis(payload: dict, redis_client) -> None:
                 if (source.material_id != material.id or source.filename != material.original_filename
                         or not source.quote.strip() or source.quote not in text):
                     raise ValueError("Invalid citation")
+        stage = "save"
         async with async_session_factory() as session:
             job = await session.scalar(select(Analysis).where(Analysis.id == job_id).with_for_update())
             if job.status != "running" or job.lease_token != token:
@@ -100,13 +109,24 @@ async def execute_requirement_analysis(payload: dict, redis_client) -> None:
             job.status, job.error, job.lease_token = "succeeded", None, None
             await audit(session, "analysis_succeeded", job.requested_by, job)
             await session.commit()
-    except Exception:
+    except Exception as exc:
+        error = {
+            "materials": "Analysis failed: source materials could not be loaded",
+            "model": "Analysis failed: model service unavailable",
+            "schema": "Analysis failed: model output is not valid requirement JSON",
+            "sources": "Analysis failed: source citations do not match the uploaded material",
+            "save": "Analysis failed: requirements could not be saved",
+        }[stage]
+        if isinstance(exc, (TimeoutError, ModelTimeoutError)):
+            error = "Analysis failed: model request timed out"
+        logger.warning("requirement analysis failed: analysis_id=%s stage=%s error_type=%s",
+                       job_id, stage, type(exc).__name__)
         async with async_session_factory() as session:
             job = await session.scalar(select(Analysis).where(Analysis.id == job_id).with_for_update())
             if job.status != "running" or job.lease_token != token:
                 return
             job.status = "failed" if job.attempts >= MAX_ATTEMPTS else "pending"
-            job.error = "Analysis failed: model output or source validation unavailable"
+            job.error = error
             job.lease_token = None
             job.available_at = datetime.now(UTC) + timedelta(seconds=30 * job.attempts)
             job.next_delivery_at = job.available_at

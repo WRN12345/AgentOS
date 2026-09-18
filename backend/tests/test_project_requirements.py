@@ -21,6 +21,7 @@ from app.domains.requirements.models import Analysis, Material, Requirement
 from app.domains.work_items.models import WorkItem
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.models.provider import ModelProvider
+from app.infrastructure.models.errors import ModelTimeoutError
 from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import get_storage_provider
 from app.main import app
@@ -92,6 +93,63 @@ async def generate(client, project, headers):
     assert response.status_code == 200, response.text
     assert len(response.json()) == 1
     return response.json()[0], material, job
+
+
+@pytest.mark.parametrize("prefix,suffix", [
+    ("<think>Check the supplied evidence.</think>\n", ""),
+    ("```json\n", "\n```"),
+    ("<think>Check the supplied evidence.</think>\n```json\n", "\n```"),
+])
+async def test_reasoning_and_fences_preserve_valid_requirements(
+    client, project_a, admin_headers, providers, monkeypatch, prefix, suffix,
+):
+    fake, _, redis = providers
+    original = fake.generate
+
+    async def wrapped(*args, **kwargs):
+        return prefix + await original(*args, **kwargs) + suffix
+
+    monkeypatch.setattr(fake, "generate", wrapped)
+    material = await upload(client, project_a, admin_headers)
+    job = await analyze(client, project_a, admin_headers, material)
+    await worker.execute_requirement_analysis({"analysis_id": job["id"]}, redis)
+    async with async_session_factory() as session:
+        assert (await session.get(Analysis, uuid.UUID(job["id"]))).status == "succeeded"
+        candidate = await session.scalar(select(Requirement))
+        assert candidate.sources[0]["quote"] == TEXT
+        assert candidate.status == "draft"
+
+
+@pytest.mark.parametrize("failure,expected", [
+    ("schema", "not valid requirement JSON"),
+    ("model", "model service unavailable"),
+    ("timeout", "model request timed out"),
+])
+async def test_analysis_failure_reports_stage_without_private_content(
+    client, project_a, admin_headers, providers, monkeypatch, caplog, failure, expected,
+):
+    fake, _, redis = providers
+    marker = "sensitive-model-content"
+    generate = AsyncMock(return_value=f"<think>{marker}</think>invalid JSON")
+    if failure == "model":
+        generate.side_effect = RuntimeError(marker)
+    elif failure == "timeout":
+        generate.side_effect = ModelTimeoutError(marker)
+    monkeypatch.setattr(fake, "generate", generate)
+    material = await upload(client, project_a, admin_headers)
+    job = await analyze(client, project_a, admin_headers, material)
+    async with async_session_factory() as session:
+        await session.execute(update(Analysis).where(Analysis.id == uuid.UUID(job["id"])).values(attempts=2))
+        await session.commit()
+    await worker.execute_requirement_analysis({"analysis_id": job["id"]}, redis)
+    async with async_session_factory() as session:
+        analysis = await session.get(Analysis, uuid.UUID(job["id"]))
+        assert analysis.status == "failed"
+        assert expected in analysis.error
+        assert marker not in analysis.error
+        assert await session.scalar(select(func.count()).select_from(Requirement)) == 0
+    assert marker not in caplog.text
+    assert "stage=" in caplog.text
 
 
 async def test_material_isolation(client, project_a, project_b, leader, admin_headers, providers):
@@ -175,6 +233,7 @@ async def test_invalid_citations_retry_without_candidates(client, project_a, adm
     async with async_session_factory() as session:
         current = await session.get(Analysis, uuid.UUID(job["id"]))
         assert current.status == "failed" and current.attempts == 3
+        assert "source citations" in current.error
         assert "fabricated" not in current.error
         assert await session.scalar(select(func.count()).select_from(Requirement)) == 0
     fake.mutate = lambda result: None
