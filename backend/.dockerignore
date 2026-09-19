@@ -1,0 +1,36 @@
+# Local environments and credentials
+**/.venv
+**/.venv-test
+**/venv
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python caches and build artifacts
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+build/
+dist/
+**/.coverage
+**/.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime data
+data/
+backend/data/
+logs/
+backups/
+**/*.log
+**/*.pid
+
+# Local tooling
+.git/
+.idea/
+.vscode/
+**/.DS_Store

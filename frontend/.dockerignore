@@ -1,0 +1,25 @@
+# Dependencies installed inside the build image
+**/node_modules
+
+# Build artifacts and test caches
+dist/
+build/
+coverage/
+**/.vite
+**/*.tsbuildinfo
+
+# Local credentials and runtime data
+**/.env
+**/.env.*
+!**/.env.example
+data/
+logs/
+backups/
+**/*.log
+**/*.pid
+
+# Local tooling
+.git/
+.idea/
+.vscode/
+**/.DS_Store
