@@ -51,7 +51,7 @@ import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * Agent 建议中心（13.1 节，T5.7）：建议列表 + 过滤 + 采纳/忽略反馈 +
- * 失败运行人工重新触发。全员可读，反馈操作仅负责人（后端同步强校验）。
+ * 失败运行人工重新触发。按任务可见范围读取，反馈操作仅负责人（后端同步强校验）。
  */
 export default function AgentAssistantPage() {
   const isLeader = useIsLeader();

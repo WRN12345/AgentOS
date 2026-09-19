@@ -68,7 +68,7 @@ export default function DashboardPage() {
     queryFn: () => api.get<ApprovalItem[]>("/approvals"),
     enabled: isLeader,
   });
-  // AI 动态 + 待反馈建议数（列表全员可读，反馈操作仅负责人）
+  // AI 动态 + 待反馈建议数（后端按任务可见范围过滤，反馈操作仅负责人）
   const { data: suggestions } = useQuery({
     queryKey: queryKeys.agentSuggestions("dashboard"),
     queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),

@@ -9,9 +9,9 @@
 
 Agent 只产出 agent_suggestions，不具备业务写工具；正式工作项创建仍走
 POST /work-items。建议查询与反馈接口如下：
-- GET  /agent-suggestions                登录成员可读：按类型/反馈状态/关联工作项过滤
+- GET  /agent-suggestions                负责人可读全部，成员可读主执行或协助任务的建议
 - POST /agent-suggestions/{id}/feedback  仅负责人：采纳/忽略，重复反馈 409
-- GET  /agent-runs[/{id}]                登录成员可读：运行记录（失败重触发入口）
+- GET  /agent-runs[/{id}]                按任务可见范围读取运行记录（失败重触发入口）
 """
 
 import uuid
@@ -25,6 +25,7 @@ from app.agents.models import AgentRun, AgentSuggestion
 from app.agents.schemas.analysis import AgentAnalysisIn, AgentRunOut, ProjectAgentAnalysisIn
 from app.agents.schemas.suggestions import AgentSuggestionFeedbackIn, AgentSuggestionOut
 from app.agents.service import (
+    agent_run_visibility,
     list_suggestions,
     request_agent_analysis,
     retry_agent_run,
@@ -268,13 +269,14 @@ async def list_agent_suggestions_endpoint(
 ) -> list[AgentSuggestionOut]:
     """查询当前项目的 Agent 建议。
 
-    登录项目成员均可读，反馈操作仅限负责人。只返回 actor.project_id 所属项目的建议，
+    负责人可读全部，成员可读主执行或协助任务的建议，反馈操作仅限负责人。
+    只返回 actor.project_id 所属项目的建议，
     经 run 推导归属，agent_suggestions 不冗余 project_id。
     使用 limit/offset 分页并返回当前页数组。
     """
     rows = await list_suggestions(
         session,
-        project_id=actor.project_id,
+        actor=actor,
         suggestion_type=suggestion_type,
         review_status=review_status,
         work_item_id=work_item_id,
@@ -356,12 +358,11 @@ async def list_agent_runs_endpoint(
 ) -> list[AgentRunOut]:
     """查询运行记录，failed 记录可供人工重新触发。
 
-    权限：登录成员可读（与建议查询同策略：无敏感信息，反馈/触发仍限权）。
-    只返回 actor.project_id 所属项目的运行记录。
+    负责人可读项目全部运行，成员可读主执行或协助任务的运行。
     """
     stmt = (
         select(AgentRun)
-        .where(AgentRun.project_id == actor.project_id)
+        .where(agent_run_visibility(actor))
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(limit)
         .offset(offset)
@@ -380,9 +381,13 @@ async def get_agent_run_endpoint(
 ) -> AgentRunOut:
     """查询单个运行记录，供创建工作项引导等场景轮询状态。
 
-    跨项目运行视为不存在并返回 404，避免泄漏其他项目资源。
+    不可见的运行视为不存在并返回 404。
     """
-    run = await _get_run_in_project(session, run_id, actor.project_id)
+    run = (
+        await session.execute(
+            select(AgentRun).where(AgentRun.id == run_id, agent_run_visibility(actor))
+        )
+    ).scalar_one_or_none()
     if run is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 运行不存在")
     return _run_out(run, with_details=True)
