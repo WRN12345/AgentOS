@@ -48,7 +48,7 @@ export default function CoreMemoryPage() {
       api.post<CoreMemoryEntry>("/memory/core-entries", { content }),
     onSuccess: () => {
       setDraft("");
-      toast.success("核心记忆已添加并生效");
+      toast.success("项目约定已添加并生效");
       void queryClient.invalidateQueries({ queryKey: queryKeys.coreMemory() });
     },
     onError: (error) => {
@@ -76,10 +76,10 @@ export default function CoreMemoryPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">核心记忆</h1>
+        <h1 className="text-xl font-semibold">项目约定</h1>
         <p className="text-sm text-muted-foreground">
-          少量高价值条目：技术约定、关键决策、踩坑教训；每次 AI
-          拆解/分配任务时全量注入参考
+          全体成员共享的技术约束、业务规则与已确认决策，由负责人维护。
+          生效约定用于需求拆解、开发文档与交付初审，也可通过知识库问答查询。
         </p>
       </div>
 
@@ -87,7 +87,7 @@ export default function CoreMemoryPage() {
         <CardHeader>
           <CardTitle className="text-base">容量占用</CardTitle>
           <CardDescription>
-            容量预算逼大家只留真正重要的；快满时请作废过时条目或确认整合精简提议
+            保留当前有效的重要约定，过时条目由负责人作废，历史记录保留供追溯
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -101,9 +101,9 @@ export default function CoreMemoryPage() {
       {isLeader && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">手写条目</CardTitle>
+            <CardTitle className="text-base">添加项目约定</CardTitle>
             <CardDescription>
-              负责人手写立即生效；新项目可先写几条种子记忆（技术栈、基本约定）
+              负责人添加后立即生效。AI 提议经负责人确认后生效。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -142,7 +142,7 @@ export default function CoreMemoryPage() {
             </div>
           ) : entries.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              暂无核心记忆——本项目积累尚少
+              暂无项目约定
             </p>
           ) : (
             <Table>

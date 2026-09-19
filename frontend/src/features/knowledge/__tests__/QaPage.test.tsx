@@ -67,6 +67,19 @@ describe("QaPage", () => {
     });
   });
 
+  it("项目约定依据提供只读查阅入口", async () => {
+    stubGet({ "/memory/qa/history": [] });
+    mockApi.post.mockResolvedValue({
+      ...answered,
+      sources: [{ source_type: "core_memory", source_id: "cm-1", title: "接口约定", snippet: "接口应校验项目成员身份" }],
+    });
+    renderWithProviders(<QaPage />);
+    await userEvent.setup().type(screen.getByLabelText("问题"), "接口权限有什么要求");
+    await userEvent.setup().click(screen.getByRole("button", { name: "提问" }));
+    await userEvent.setup().click(await screen.findByText("接口约定"));
+    expect(screen.getByRole("link", { name: "查看项目约定" })).toHaveAttribute("href", "/core-memory");
+  });
+
   it("拒答态：明确告知未找到并列出最接近的线索", async () => {
     mockApi.post.mockResolvedValue(refused);
     renderWithProviders(<QaPage />);

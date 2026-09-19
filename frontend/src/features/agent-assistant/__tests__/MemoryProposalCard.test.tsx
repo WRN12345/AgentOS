@@ -59,7 +59,7 @@ describe("核心记忆提议确认入口", () => {
         screen.getByText("新增条目：改 X 表结构一定要同步改 Y"),
       ).toBeInTheDocument(),
     );
-    expect(screen.getByText("核心记忆提议")).toBeInTheDocument();
+    expect(screen.getByText("项目约定提议")).toBeInTheDocument();
 
     // 操作按钮在展开详情内
     await userEvent.setup().click(screen.getByText("展开详情"));
@@ -74,7 +74,7 @@ describe("核心记忆提议确认入口", () => {
       ),
     );
     await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith("已确认，核心记忆已生效"),
+      expect(toast.success).toHaveBeenCalledWith("已确认，项目约定已生效"),
     );
   });
 

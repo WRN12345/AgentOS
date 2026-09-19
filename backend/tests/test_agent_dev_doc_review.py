@@ -26,7 +26,7 @@ from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.database.engine import async_session_factory
 from app.workers.worker import handle_task
 from tests.conftest import add_member
-from tests.test_dev_docs_api import LEADER_PW, ALICE_PW
+from tests.test_dev_docs_api import ALICE_PW, LEADER_PW
 
 
 class _ScriptedProvider:
@@ -195,7 +195,7 @@ async def test_dev_doc_review_produces_contract_suggestion(
                 )
             ).scalar_one()
             assert suggestion.suggestion_type == dev_doc_review.SUGGESTION_TYPE == "dev_doc_review"
-            assert suggestion.prompt_version == dev_doc_review.PROMPT_VERSION == "dev_doc_review.v1"
+            assert suggestion.prompt_version == dev_doc_review.PROMPT_VERSION == "dev_doc_review.v2"
             content = suggestion.content
             assert content["verdict"] == "needs_work"
             assert [c["aspect"] for c in content["checklist"]] == [
@@ -204,6 +204,10 @@ async def test_dev_doc_review_produces_contract_suggestion(
             assert content["checklist"][3]["verdict"] == "uncertain"
             assert content["alignment"]
             assert content["risks"] == ["排期未细化"]
+            assert content["review_context"]["dev_doc"] == {
+                "id": str(doc.id), "doc_version": doc.doc_version,
+                "version": doc.version, "content": doc.content,
+            }
             assert suggestion.fact_refs == {
                 "work_item_ids": [str(item_id)],
                 "dev_doc_ids": [str(doc.id)],

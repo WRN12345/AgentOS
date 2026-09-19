@@ -472,6 +472,20 @@ export type AgentSuggestionReviewStatus =
   /** 核心记忆提议挂起超 7 天自动过期：终态，不可再确认 */
   | "expired";
 
+/** 服务端记录的初审材料与项目约定快照。 */
+export interface ReviewContext {
+  work_item?: Pick<WorkItem, "id" | "title" | "description" | "acceptance_criteria" | "version"> | null;
+  dev_doc: {
+    id: string;
+    doc_version: number;
+    version: number;
+    content: string;
+  } | null;
+  deliverable: { id: string; version: number } | null;
+  core_memory: { id: string; content: string }[];
+  core_memory_loaded: boolean;
+}
+
 /**
  * Agent 建议（GET /agent-suggestions）。
  * content 统一含 summary/rationale，其余字段随 suggestion_type 扩展
@@ -481,7 +495,11 @@ export interface AgentSuggestion {
   id: string;
   run_id: string;
   suggestion_type: string;
-  content: Record<string, unknown> & { summary?: string; rationale?: string };
+  content: Record<string, unknown> & {
+    summary?: string;
+    rationale?: string;
+    review_context?: ReviewContext | null;
+  };
   confidence: number | null;
   risks: string | null;
   fact_refs: Record<string, string[]> | null;

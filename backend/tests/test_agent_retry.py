@@ -370,6 +370,8 @@ async def test_manual_retry_permissions_and_status(
         bob_headers = await auth_headers(client, "bob", BOB_PW, project_id=str(project.id))
 
         resp = await client.post(f"/api/v1/agent-runs/{failed_run.id}/retry", headers=alice_headers)
+        assert resp.status_code == 403
+        resp = await client.post(f"/api/v1/agent-runs/{failed_run.id}/retry", headers=leader_headers)
         assert resp.status_code == 202, resp.text
         # 再次制造失败，以继续验证后续权限分支。
         await redis_client.delete(QUEUE_KEY)

@@ -26,6 +26,7 @@ import type { Member, WorkItem, WorkItemStatus } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDateTime } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
 import { DevDocSection } from "./DevDocSection";
+import { DeliverableReviewPanel } from "./TaskReviewPanel";
 import { CollaborationSection } from "../collaboration/CollaborationSection";
 import { DeliverableSection } from "../deliverables/DeliverableSection";
 import { TransferSection } from "../collaboration/TransferSection";
@@ -117,6 +118,8 @@ export default function WorkItemDetailPage() {
     onSuccess: (_data, cmd) => {
       toast.success(`「${cmd.label}」操作成功`);
       queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
     },
     onError: (error) => {
       // 开发文档前置：未确认文档且未豁免时 start 被 409 拦截，引导到文档区。
@@ -266,7 +269,10 @@ export default function WorkItemDetailPage() {
 
       <DevDocSection workItem={item} />
 
-      <DeliverableSection workItem={item} />
+      <div className="space-y-3">
+        <DeliverableSection workItem={item} />
+        <DeliverableReviewPanel workItemId={item.id} workItem={item} />
+      </div>
 
       <TransferSection workItem={item} members={members ?? []} />
 

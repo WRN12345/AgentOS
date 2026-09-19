@@ -11,11 +11,16 @@
 - 审计：提交/确认/打回/豁免均写 audit_events。
 """
 
+import uuid
+from datetime import UTC, datetime, timedelta
+
 import httpx
 from sqlalchemy import select
 
-from app.agents.models import AgentRun
+from app.agents.models import AgentRun, AgentSuggestion
 from app.domains.audit.models import AuditEvent
+from app.domains.dev_docs.models import DevDoc
+from app.domains.dev_docs.service import _latest_review_suggestion_id
 from app.domains.project.models import Project, ProjectMember
 from app.infrastructure.database.engine import async_session_factory
 from tests.conftest import add_member, auth_headers
@@ -72,6 +77,53 @@ async def _start(client, headers, item_id: str, version: int = 2):
     return await client.post(
         f"/api/v1/work-items/{item_id}/start", json={"version": version}, headers=headers
     )
+
+
+async def test_review_pointer_matches_document_snapshot(client, project):
+    ctx = await _setup(client, project)
+    item_id = ctx["item"]["id"]
+    response = await _put_doc(client, ctx["alice_headers"], item_id, "当前开发方案")
+    assert response.status_code == 200
+    async with async_session_factory() as session:
+        doc = await session.get(DevDoc, uuid.UUID(response.json()["id"]))
+        run = AgentRun(
+            project_id=project.id,
+            work_item_id=uuid.UUID(item_id),
+            agent_type="dev_doc_review",
+            status="succeeded",
+        )
+        session.add(run)
+        await session.flush()
+        snapshot = {
+            "id": str(doc.id), "doc_version": doc.doc_version,
+            "version": doc.version, "content": doc.content,
+        }
+        now = datetime.now(UTC)
+        current = AgentSuggestion(
+            run_id=run.id, suggestion_type="dev_doc_review",
+            content={"review_context": {"dev_doc": snapshot}}, created_at=now,
+        )
+        session.add(current)
+        # 旧材料的运行可能晚完成；历史无快照建议也不能覆盖当前初审。
+        for offset, content in enumerate([
+            {"review_context": {"dev_doc": {**snapshot, "content": "旧正文"}}},
+            {"review_context": {"dev_doc": {**snapshot, "doc_version": -1}}},
+            {"review_context": {"dev_doc": {**snapshot, "id": str(uuid.uuid4())}}},
+            {"summary": "无材料快照的历史意见"},
+        ], start=1):
+            session.add(AgentSuggestion(
+                run_id=run.id, suggestion_type="dev_doc_review", content=content,
+                created_at=now + timedelta(seconds=offset),
+            ))
+        await session.flush()
+        assert await _latest_review_suggestion_id(session, doc) == current.id
+        doc.version += 1
+        assert await _latest_review_suggestion_id(session, doc) == current.id
+        doc.content = "修改后的开发方案"
+        assert await _latest_review_suggestion_id(session, doc) is None
+        doc.content = snapshot["content"]
+        doc.doc_version += 1
+        assert await _latest_review_suggestion_id(session, doc) is None
 
 
 async def test_start_blocked_until_dev_doc_confirmed(

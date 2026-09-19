@@ -66,7 +66,8 @@ describe("CoreMemoryPage", () => {
     // 容量占用
     expect(screen.getByText("已用 9 / 4000 字符")).toBeInTheDocument();
     // 非负责人无写入口
-    expect(screen.queryByText("手写条目")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "项目约定" })).toBeInTheDocument();
+    expect(screen.queryByText("添加项目约定")).not.toBeInTheDocument();
     expect(screen.queryByText("作废")).not.toBeInTheDocument();
   });
 
@@ -75,7 +76,7 @@ describe("CoreMemoryPage", () => {
     mockApi.post.mockResolvedValue({});
     renderWithProviders(<CoreMemoryPage />);
 
-    await waitFor(() => expect(screen.getByText("手写条目")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("添加项目约定")).toBeInTheDocument());
     await userEvent.setup().type(
       screen.getByLabelText("内容"),
       "支付模块走独立服务",
@@ -88,7 +89,7 @@ describe("CoreMemoryPage", () => {
       }),
     );
     await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith("核心记忆已添加并生效"),
+      expect(toast.success).toHaveBeenCalledWith("项目约定已添加并生效"),
     );
   });
 
@@ -120,7 +121,7 @@ describe("CoreMemoryPage", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("暂无核心记忆——本项目积累尚少"),
+        screen.getByText("暂无项目约定"),
       ).toBeInTheDocument(),
     );
   });

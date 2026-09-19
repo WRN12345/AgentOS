@@ -547,6 +547,7 @@ function PendingApprovals() {
                 {devDocDetail.latest_review_suggestion_id && (
                   <DevDocReviewPanel
                     suggestionId={devDocDetail.latest_review_suggestion_id}
+                    workItemId={devDocDetail.work_item_id}
                   />
                 )}
               </div>

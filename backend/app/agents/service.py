@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.collaboration.models import CollaborationRequest
 from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES, enqueue_run_history_index
 from app.domains.memory.core_memory import enqueue_core_memory_index, enqueue_core_memory_index_id
 from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, MemoryProposalPayload, apply_memory_proposal
@@ -126,7 +127,7 @@ async def retry_agent_run(
 
 
 def agent_run_visibility(actor: ProjectMember) -> ColumnElement[bool]:
-    """负责人可读项目全部运行；成员可读自己主执行或协助任务的运行。"""
+    """负责人可读项目全部运行；成员关系与 is_work_item_related 保持一致。"""
     project_scope = AgentRun.project_id == actor.project_id
     if actor.role == ROLE_LEADER:
         return project_scope
@@ -135,6 +136,15 @@ def agent_run_visibility(actor: ProjectMember) -> ColumnElement[bool]:
         or_(
             WorkItem.assignee_id == actor.id,
             WorkItem.collaborators.any(WorkItemCollaborator.member_id == actor.id),
+            select(CollaborationRequest.id)
+            .where(
+                CollaborationRequest.work_item_id == WorkItem.id,
+                or_(
+                    CollaborationRequest.requester_id == actor.id,
+                    CollaborationRequest.assignee_id == actor.id,
+                ),
+            )
+            .exists(),
         ),
     )
     return and_(project_scope, AgentRun.work_item_id.in_(visible_items))

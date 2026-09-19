@@ -9,8 +9,15 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import review as review_prompts
-from app.agents.specialists.common import build_output, call_model_json, context_project_id
+from app.agents.specialists.common import (
+    build_output,
+    call_model_json,
+    context_project_id,
+    load_review_core_memory,
+    review_context_snapshot,
+)
 from app.agents.tools import TOOL_REGISTRY
+from app.domains.dev_docs.state_machine import DevDocStatus
 from app.infrastructure.database.engine import async_session_factory
 
 if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查时导入以避免循环依赖
@@ -18,7 +25,7 @@ if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查�
 
 AGENT_TYPE = "deliverable_review"
 SUGGESTION_TYPE = "review"
-PROMPT_VERSION = "deliverable_review.v1"
+PROMPT_VERSION = "deliverable_review.v2"
 
 
 async def deliverable_review_capability(state: "AgentGraphState") -> Any:
@@ -34,6 +41,12 @@ async def deliverable_review_capability(state: "AgentGraphState") -> Any:
         deliverables = await TOOL_REGISTRY["list_deliverable_metadata"].func(
             session, work_item_id, project_id=project_id
         )
+        dev_doc = await TOOL_REGISTRY["get_dev_doc"].func(
+            session, work_item_id, project_id=project_id
+        )
+        if dev_doc is not None and dev_doc["status"] != DevDocStatus.CONFIRMED.value:
+            dev_doc = None
+        core_memory, core_memory_loaded = await load_review_core_memory(session, project_id)
 
     latest = max(deliverables, key=lambda d: d["version"]) if deliverables else None
     context = state.get("context", {})
@@ -42,16 +55,27 @@ async def deliverable_review_capability(state: "AgentGraphState") -> Any:
         work_item=overview,
         acceptance_criteria=(overview or {}).get("acceptance_criteria"),
         latest_deliverable=latest,
+        dev_doc=dev_doc,
+        core_memory=core_memory,
+        core_memory_loaded=core_memory_loaded,
     )
     raw = await call_model_json(system=review_prompts.SYSTEM_PROMPT, user_prompt=user_prompt)
 
     fact_refs: dict[str, list[str]] = {
         "work_item_ids": [str(work_item_id)],
-        "deliverable_ids": [d["id"] for d in deliverables],
+        "deliverable_ids": [latest["id"]] if latest else [],
     }
+    if dev_doc is not None:
+        fact_refs["dev_doc_ids"] = [dev_doc["id"]]
+    if core_memory:
+        fact_refs["core_memory_ids"] = [entry["id"] for entry in core_memory]
     return build_output(
         raw,
         suggestion_type=SUGGESTION_TYPE,
         prompt_version=PROMPT_VERSION,
         fact_refs=fact_refs,
+        review_context=review_context_snapshot(
+            work_item=overview, dev_doc=dev_doc, deliverable=latest,
+            core_memory=core_memory, core_memory_loaded=core_memory_loaded,
+        ),
     )

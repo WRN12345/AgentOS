@@ -13,7 +13,7 @@ export const SUGGESTION_TYPE_META: Record<
   summary: { label: "进展摘要", className: "bg-green-100 text-green-700" },
   pipeline: { label: "需求拆解方案", className: "bg-indigo-100 text-indigo-700" },
   dev_doc_review: { label: "文档初审", className: "bg-teal-100 text-teal-700" },  memory_proposal: {
-    label: "核心记忆提议",
+    label: "项目约定提议",
     className: "bg-orange-100 text-orange-700",
   },
   echo: { label: "链路自检", className: "bg-gray-100 text-gray-700" },

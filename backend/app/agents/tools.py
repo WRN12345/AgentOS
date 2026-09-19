@@ -25,12 +25,15 @@ from app.agents.schemas.suggestion import AgentSuggestionEnvelope
 from app.domains.collaboration.models import CollaborationRequest
 from app.domains.collaboration.state_machine import CollaborationStatus
 from app.domains.deadlines.models import DeadlineChangeRequest
-from app.domains.deadlines.state_machine import PENDING_STATUSES as DEADLINE_PENDING_STATUSES
+from app.domains.deadlines.state_machine import (
+    PENDING_STATUSES as DEADLINE_PENDING_STATUSES,
+)
 from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.files.models import StoredFile
 from app.domains.identity.models import User
 from app.domains.memory.member_stats import member_completion_stats
+from app.domains.memory.models import CoreMemoryEntry
 from app.domains.memory.search import CALLER_AGENT_ASSIGNMENT, search_memory
 from app.domains.project.models import MemberCapability, ProjectMember
 from app.domains.transfers.models import TransferRequest
@@ -71,6 +74,8 @@ async def get_work_item_overview(
     return {
         "id": str(item.id),
         "title": item.title,
+        "description": item.description,
+        "version": item.version,
         "status": item.status,
         "priority": item.priority,
         "assignee_id": str(item.assignee_id),
@@ -273,8 +278,30 @@ async def get_dev_doc(
         "work_item_id": str(doc.work_item_id),
         "status": doc.status,
         "doc_version": doc.doc_version,
+        "version": doc.version,
         "content": doc.content,
     }
+
+
+async def list_review_core_memory(
+    session: AsyncSession, *, project_id: uuid.UUID | None = None
+) -> list[dict]:
+    """读取本项目已生效约定的全文，供初审与审查依据快照使用。"""
+    if project_id is None:
+        return []
+    entries = (
+        await session.execute(
+            select(CoreMemoryEntry)
+            .where(
+                CoreMemoryEntry.project_id == project_id,
+                CoreMemoryEntry.scope == "project",
+                CoreMemoryEntry.status == "active",
+                CoreMemoryEntry.effective_at <= func.now(),
+            )
+            .order_by(CoreMemoryEntry.effective_at, CoreMemoryEntry.id)
+        )
+    ).scalars().all()
+    return [{"id": str(entry.id), "content": entry.content} for entry in entries]
 
 
 async def list_blocked_items(
@@ -702,6 +729,12 @@ TOOL_REGISTRY: dict[str, AgentTool] = {
             kind="read_query",
             func=list_deliverable_metadata,
             description="查询工作项交付物最小上下文（文本正文/Git 链接/文件元数据，不读文件原文）",
+        ),
+        AgentTool(
+            name="list_review_core_memory",
+            kind="read_query",
+            func=list_review_core_memory,
+            description="读取当前项目生效约定全文（供初审及依据快照）",
         ),
         AgentTool(
             name="get_dev_doc",

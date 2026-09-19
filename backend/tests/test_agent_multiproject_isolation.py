@@ -236,12 +236,13 @@ async def test_tools_single_item_ownership_blocks_cross_project(
         ) is None
 
 
+@pytest.mark.parametrize("role", ["leader", "member"])
 async def test_agent_api_is_project_scoped(
-    client, project_a: Project, project_b: Project, leader: ProjectMember
+    client, project_a: Project, project_b: Project, leader: ProjectMember, role: str
 ) -> None:
     """其他项目负责人不得查看或操作当前项目的运行和建议。"""
     _, leader_b = await add_member(
-        project_b, "lead_b", "LeadB123!", role="leader", display_name="负责人B"
+        project_b, "lead_b", "LeadB123!", role=role, display_name="成员B"
     )
     item_a = await _make_work_item(leader.id, project_id=project_a.id)
     redis_client = create_redis_client()
@@ -266,6 +267,21 @@ async def test_agent_api_is_project_scoped(
     resp = await client.get("/api/v1/agent-runs", headers=headers_b)
     assert resp.status_code == 200
     assert all(r["id"] != str(run_a.id) for r in resp.json())
+    resp = await client.get(
+        f"/api/v1/agent-runs?work_item_id={item_a.id}&agent_type=echo", headers=headers_b
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+    resp = await client.get(
+        f"/api/v1/agent-suggestions?work_item_id={item_a.id}", headers=headers_b
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+    resp = await client.post(
+        f"/api/v1/work-items/{item_a.id}/agent-analysis",
+        json={"agent_type": "dev_doc_review"}, headers=headers_b,
+    )
+    assert resp.status_code == 404
     resp = await client.get(f"/api/v1/agent-runs/{run_a.id}", headers=headers_b)
     assert resp.status_code == 404
     resp = await client.post(f"/api/v1/agent-runs/{run_a.id}/retry", headers=headers_b)

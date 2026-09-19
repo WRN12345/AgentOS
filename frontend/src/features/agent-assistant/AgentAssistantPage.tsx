@@ -99,15 +99,17 @@ export default function AgentAssistantPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
-            <CardTitle>AI 助手</CardTitle>
+            <CardTitle>AI 建议与运行</CardTitle>
             <CardDescription>
-              AI 把一句话需求拆成任务并推荐负责人，确认后才生效
+              查看分析建议、处理反馈与重试失败运行。任务初审意见也可在对应任务内查看。
             </CardDescription>
           </div>
           {isLeader && (
-            <Button variant="outline" onClick={() => setWizard({ resume: null })}>
-              <Sparkles className="size-4" />
-              需求拆解向导
+            <Button variant="outline" asChild>
+              <Link to="/project-requirements">
+                <Sparkles className="size-4" />
+                项目需求
+              </Link>
             </Button>
           )}
         </CardHeader>
@@ -159,10 +161,12 @@ export default function AgentAssistantPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setWizard({ resume: null })}
+                  asChild
                 >
-                  <Sparkles className="size-4" />
-                  去拆解需求
+                  <Link to="/project-requirements">
+                    <Sparkles className="size-4" />
+                    去拆解需求
+                  </Link>
                 </Button>
               )}
             </div>
@@ -219,7 +223,7 @@ function SuggestionCard({
       if (suggestion.suggestion_type === "memory_proposal") {
         // 记忆提议确认即生效：刷新核心记忆缓存
         toast.success(
-          action === "accepted" ? "已确认，核心记忆已生效" : "已拒绝该提议",
+          action === "accepted" ? "已确认，项目约定已生效" : "已拒绝该提议",
         );
         queryClient.invalidateQueries({ queryKey: queryKeys.coreMemory() });
       } else {
@@ -369,6 +373,7 @@ function SuggestionCard({
 /** 运行记录：展示状态/耗时/错误，failed 运行可人工重新触发。 */
 function AgentRunsCard() {
   const queryClient = useQueryClient();
+  const isLeader = useIsLeader();
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.agentRuns(),
@@ -441,7 +446,8 @@ function AgentRunsCard() {
                 </TableCell>
                 <TableCell>{formatDateTime(run.created_at)}</TableCell>
                 <TableCell className="text-right">
-                  {run.status === "failed" && (
+                  {run.status === "failed" && (isLeader || (run.work_item_id &&
+                    ["dev_doc_review", "deliverable_review"].includes(run.agent_type))) && (
                     <Button
                       size="sm"
                       variant="outline"

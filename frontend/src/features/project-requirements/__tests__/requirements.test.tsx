@@ -58,6 +58,19 @@ function deferred<T>() {
 }
 
 describe("项目需求", () => {
+  it("负责人从项目需求打开 AI 拆解向导", async () => {
+    signInAs(makeMember({ role: "leader" }));
+    stubGet({
+      "/project-requirements": [],
+      "/members": [],
+      "/config": { llm_is_external: false },
+    });
+    renderWithProviders(<ProjectRequirementsPage />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "AI 需求拆解" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalledWith("/members"));
+  });
+
   it.each(["draft", "confirmed", "dispatched", "clarification_requested"] as const)(
     "admin replies to assigned %s with exact versioned payload", async (status) => {
       const assigned = { ...requirement, status, assignee_id: "leader-1" };

@@ -70,18 +70,27 @@ def _require_assignee(actor: ProjectMember, item: WorkItem) -> None:
 
 
 async def _latest_review_suggestion_id(
-    session: AsyncSession, work_item_id: uuid.UUID
+    session: AsyncSession, doc: DevDoc
 ) -> uuid.UUID | None:
-    """返回最近一次 `dev_doc_review` 建议 ID；LLM 不可用时返回 `None`。"""
+    """仅返回匹配当前提交及正文的初审，确认/打回不改变材料版本。"""
     return (
         await session.execute(
             select(AgentSuggestion.id)
             .join(AgentRun, AgentRun.id == AgentSuggestion.run_id)
             .where(
-                AgentRun.work_item_id == work_item_id,
+                AgentRun.work_item_id == doc.work_item_id,
                 AgentSuggestion.suggestion_type == DEV_DOC_REVIEW_SUGGESTION_TYPE,
+                AgentSuggestion.content.contains({
+                    "review_context": {
+                        "dev_doc": {
+                            "id": str(doc.id),
+                            "doc_version": doc.doc_version,
+                            "content": doc.content,
+                        },
+                    },
+                }),
             )
-            .order_by(AgentSuggestion.created_at.desc())
+            .order_by(AgentSuggestion.created_at.desc(), AgentSuggestion.id.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -119,7 +128,7 @@ async def _to_out(session: AsyncSession, doc: DevDoc) -> DevDocOut:
         doc_version=doc.doc_version,
         waived=doc.waived,
         latest_review_suggestion_id=await _latest_review_suggestion_id(
-            session, doc.work_item_id
+            session, doc
         ),
         version=doc.version,
         created_at=doc.created_at,

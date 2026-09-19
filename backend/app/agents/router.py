@@ -9,7 +9,7 @@
 
 Agent 只产出 agent_suggestions，不具备业务写工具；正式工作项创建仍走
 POST /work-items。建议查询与反馈接口如下：
-- GET  /agent-suggestions                负责人可读全部，成员可读主执行或协助任务的建议
+- GET  /agent-suggestions                负责人可读全部，成员可读相关工作项的建议
 - POST /agent-suggestions/{id}/feedback  仅负责人：采纳/忽略，重复反馈 409
 - GET  /agent-runs[/{id}]                按任务可见范围读取运行记录（失败重触发入口）
 """
@@ -44,6 +44,23 @@ from app.infrastructure.database.engine import get_session
 logger = setup_logging("backend")
 
 router = APIRouter(tags=["agents"])
+
+
+async def _authorize_work_item_analysis(
+    session: AsyncSession,
+    actor: ProjectMember,
+    work_item_id: uuid.UUID | None,
+    agent_type: str,
+) -> None:
+    if actor.role == ROLE_LEADER:
+        return
+    if agent_type not in {"dev_doc_review", "deliverable_review"}:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "成员仅可触发或重试开发文档与交付物审查")
+    if work_item_id is None:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可操作项目级 Agent")
+    await get_work_item(session, work_item_id, project_id=actor.project_id)
+    if not await is_work_item_related(session, work_item_id, actor.id):
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项相关成员可触发或重试 Agent 分析")
 
 
 def _run_out(run: AgentRun, *, with_details: bool = False) -> AgentRunOut:
@@ -91,7 +108,7 @@ async def request_agent_analysis_endpoint(
 
     权限：项目负责人或该工作项相关成员（主执行人/协作者/协作请求任一方，
     与文件下载使用同一套“相关”判定）；工作项不存在返回 404，无关成员返回 403，
-    未注册的 agent_type 400。
+    成员仅可触发 dev_doc_review 和 deliverable_review；未注册的 agent_type 400。
     """
     if payload.agent_type not in AGENT_ROUTES:
         raise ApiException(
@@ -101,8 +118,7 @@ async def request_agent_analysis_endpoint(
             details={"agent_type": payload.agent_type, "registered": sorted(AGENT_ROUTES)},
         )
     item = await get_work_item(session, item_id, project_id=actor.project_id)  # 跨项目同样返回 404
-    if actor.role != ROLE_LEADER and not await is_work_item_related(session, item.id, actor.id):
-        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或工作项相关成员可触发 Agent 分析")
+    await _authorize_work_item_analysis(session, actor, item.id, payload.agent_type)
 
     redis_client = create_redis_client()
     try:
@@ -213,19 +229,15 @@ async def retry_agent_run_endpoint(
     """人工重新触发失败的 Agent 运行。
 
     权限：项目负责人，或 run 关联工作项的相关成员（与触发接口同一套
-    "相关"判定）；项目级 run（无 work_item_id）仅负责人可重试。
+    "相关"判定），成员仅可重试 dev_doc_review 和 deliverable_review；
+    项目级 run（无 work_item_id）仅负责人可重试。
     仅 failed 状态可重试（其余 409）；重置为 pending 按原输入重新投递，
     202 返回运行信息。
     """
     run = await _get_run_in_project(session, run_id, actor.project_id)
     if run is None:
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Agent 运行不存在")
-    if actor.role != ROLE_LEADER:
-        related = run.work_item_id is not None and await is_work_item_related(
-            session, run.work_item_id, actor.id
-        )
-        if not related:
-            raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人或工作项相关成员可重新触发 Agent 运行")
+    await _authorize_work_item_analysis(session, actor, run.work_item_id, run.agent_type)
     if run.status != "failed":
         raise ApiException(
             409,
@@ -269,7 +281,7 @@ async def list_agent_suggestions_endpoint(
 ) -> list[AgentSuggestionOut]:
     """查询当前项目的 Agent 建议。
 
-    负责人可读全部，成员可读主执行或协助任务的建议，反馈操作仅限负责人。
+    负责人可读全部，成员可读相关工作项的建议，反馈操作仅限负责人。
     只返回 actor.project_id 所属项目的建议，
     经 run 推导归属，agent_suggestions 不冗余 project_id。
     使用 limit/offset 分页并返回当前页数组。
@@ -351,6 +363,8 @@ async def submit_suggestion_feedback_endpoint(
 @router.get("/agent-runs", response_model=list[AgentRunOut])
 async def list_agent_runs_endpoint(
     status: str | None = Query(default=None),
+    work_item_id: uuid.UUID | None = None,
+    agent_type: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     actor: ProjectMember = Depends(get_current_member),
@@ -358,7 +372,7 @@ async def list_agent_runs_endpoint(
 ) -> list[AgentRunOut]:
     """查询运行记录，failed 记录可供人工重新触发。
 
-    负责人可读项目全部运行，成员可读主执行或协助任务的运行。
+    负责人可读项目全部运行，成员可读相关工作项的运行。
     """
     stmt = (
         select(AgentRun)
@@ -369,6 +383,10 @@ async def list_agent_runs_endpoint(
     )
     if status:
         stmt = stmt.where(AgentRun.status == status)
+    if work_item_id is not None:
+        stmt = stmt.where(AgentRun.work_item_id == work_item_id)
+    if agent_type is not None:
+        stmt = stmt.where(AgentRun.agent_type == agent_type)
     runs = list((await session.execute(stmt)).scalars().all())
     return [_run_out(run, with_details=True) for run in runs]
 

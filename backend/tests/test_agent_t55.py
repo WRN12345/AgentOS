@@ -291,7 +291,7 @@ async def test_submit_triggers_deliverable_review_without_touching_reviews(
                 )
             ).scalar_one()
         assert suggestion.suggestion_type == review.SUGGESTION_TYPE == "review"
-        assert suggestion.prompt_version == review.PROMPT_VERSION == "deliverable_review.v1"
+        assert suggestion.prompt_version == review.PROMPT_VERSION == "deliverable_review.v2"
         checklist = suggestion.content["checklist"]
         assert [c["verdict"] for c in checklist] == ["pass", "uncertain"]
         assert checklist[0]["checkpoint"] and checklist[0]["evidence"]
@@ -321,7 +321,7 @@ async def test_submit_survives_review_dispatch_failure(
         alice, acceptance_criteria="可登录", deliverable_content="实现说明"
     )
 
-    async def _boom(*args, **kwargs):  # noqa: ANN202
+    async def _boom(*args, **kwargs):
         raise RuntimeError("queue down")
 
     monkeypatch.setattr("app.domains.work_items.service.request_agent_analysis", _boom)
@@ -429,7 +429,7 @@ async def test_project_level_agent_analysis_api(
 ) -> None:
     """项目级分析仅允许负责人触发，并校验 Agent 类型和工作项。"""
     _, leader = await add_member(project, "leader", LEADER_PW, role="leader", display_name="负责人")
-    _, alice = await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
+    await add_member(project, "alice", ALICE_PW, display_name="爱丽丝")
     leader_headers = await auth_headers(client, "leader", LEADER_PW, project_id=str(project.id))
     alice_headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
 

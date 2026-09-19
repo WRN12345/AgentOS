@@ -646,7 +646,7 @@ export function RequirementPipelineWizard({
             </ul>
             {hasFailed && (
               <p className="text-muted-foreground">
-                已成功创建的任务不受影响；失败项可重试，或关闭后在 AI 助手页重新处理该建议。
+                已成功创建的任务不受影响；失败项可重试，或关闭后在 AI 建议与运行页重新处理该建议。
               </p>
             )}
             <DialogFooter className="gap-2">

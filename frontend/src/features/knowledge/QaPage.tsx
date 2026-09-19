@@ -29,7 +29,7 @@ import { formatDateTime } from "../work-items/constants";
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   document: "项目文档",
   history: "历史记录",
-  core_memory: "核心记忆",
+  core_memory: "项目约定",
 };
 
 /** 冷启动标注：本次检索结果稀少时如实提示"本项目积累尚少"。 */
@@ -80,7 +80,7 @@ function SourceDialog({
         {source?.source_type === "core_memory" && (
           <Link to="/core-memory">
             <Button variant="outline" size="sm">
-              查看核心记忆
+              查看项目约定
             </Button>
           </Link>
         )}
@@ -169,7 +169,7 @@ export default function QaPage() {
       <div>
         <h1 className="text-xl font-semibold">知识库问答</h1>
         <p className="text-sm text-muted-foreground">
-          就项目文档、核心记忆与历史记录提问；答案附依据可溯源，查不到会明说
+          就项目文档、项目约定与历史记录提问；答案附依据可溯源，查不到会明说
         </p>
       </div>
 

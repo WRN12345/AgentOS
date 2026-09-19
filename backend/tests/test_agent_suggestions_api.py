@@ -414,6 +414,49 @@ async def test_list_and_get_agent_runs(
     assert missing.status_code == 404
 
 
+async def test_run_filters_respect_visibility_and_pagination(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    ctx = await _setup(client, project)
+    first = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=ctx["item_id"]
+    )
+    second = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=ctx["item_id"]
+    )
+    await _make_suggestion(
+        project_id=project.id, suggestion_type="risk", work_item_id=ctx["item_id"]
+    )
+    await _make_suggestion(project_id=project.id, suggestion_type="review")
+    for headers_key in ("alice_headers", "leader_headers"):
+        headers = ctx[headers_key]
+        params = {
+            "work_item_id": ctx["item_id"], "agent_type": "review_agent", "status": "succeeded"
+        }
+        response = await client.get("/api/v1/agent-runs", params=params, headers=headers)
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == [str(second.run_id), str(first.run_id)]
+        page = await client.get(
+            "/api/v1/agent-runs", params={**params, "limit": 1, "offset": 1}, headers=headers
+        )
+        assert [row["id"] for row in page.json()] == [str(first.run_id)]
+        for override in (
+            {"agent_type": "unknown"}, {"status": "failed"}, {"work_item_id": str(uuid.uuid4())}
+        ):
+            response = await client.get(
+                "/api/v1/agent-runs", params={**params, **override}, headers=headers
+            )
+            assert response.json() == []
+    by_type = await client.get(
+        "/api/v1/agent-runs?agent_type=review_agent", headers=ctx["alice_headers"]
+    )
+    assert [row["id"] for row in by_type.json()] == [str(second.run_id), str(first.run_id)]
+    invalid = await client.get(
+        "/api/v1/agent-runs?work_item_id=invalid", headers=ctx["alice_headers"]
+    )
+    assert invalid.status_code == 422
+
+
 async def test_config_exposes_llm_external_flag(
     client: httpx.AsyncClient, project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
