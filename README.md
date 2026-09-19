@@ -76,6 +76,8 @@ docker compose up -d --build
 
 后端要求 Python 3.12+，依赖统一声明在 `backend/pyproject.toml`；前端建议 Node.js 20+。以下命令从仓库根目录执行：
 
+本地源码默认使用仓库根 `data/`；容器及自定义路径配置见[发布指南](docs/release-guide.md#本地数据路径)。
+
 ```bash
 # 后端测试，仅在隔离的开发或测试环境运行
 docker compose up -d postgres redis

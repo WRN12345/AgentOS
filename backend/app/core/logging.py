@@ -14,14 +14,14 @@ _initialized: set[str] = set()
 
 def setup_logging(process_name: str, log_dir: str | None = None) -> logging.Logger:
     """为 backend、worker 或 scheduler 配置控制台和文件日志。"""
-    from app.core.config import settings
-
-    directory = Path(log_dir or settings.log_dir)
-    directory.mkdir(parents=True, exist_ok=True)
+    from app.core.config import resolve_data_path, settings
 
     logger = logging.getLogger(process_name)
     if process_name in _initialized:
         return logger
+
+    directory = Path(resolve_data_path(log_dir if log_dir is not None else settings.log_dir))
+    directory.mkdir(parents=True, exist_ok=True)
     logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter(_FORMAT)

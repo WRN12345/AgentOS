@@ -223,6 +223,24 @@ docker compose run --rm --no-deps backend python -m app.scripts.migrate_file_sto
 
 宿主机运行后端需 Python 3.12+，前端建议 Node.js 20+。连接仓库 PostgreSQL 应使用 `localhost:5436`，不是 5432；Redis 默认没有宿主机端口，须提供独立开发实例或仅绑定回环的开发映射。API、Worker 和 Scheduler 使用一致的数据库、Redis、存储与模型配置，启动 API 前执行迁移和 bootstrap。推荐直接在 Compose 网络内开发测试，避免混用宿主机服务。
 
+### 本地数据路径
+
+本地源码运行默认将日志和上传保存在仓库根 `data/logs/`、`data/uploads/`。`LOG_DIR`、`STORAGE_ROOT` 的相对值以应用项目根解析，不随启动工作目录变化；显式绝对路径保持不变。
+
+源码根通过 `backend/pyproject.toml` 和仓库 `docker-compose.yml` 识别；容器源码的项目根为 `/app`。脱离源码树的已安装包须显式配置绝对 `LOG_DIR`、`STORAGE_ROOT`，不向虚拟环境写入数据。
+
+`.env.example` 用于容器：镜像与 Compose 保持 `/app/data/logs`、`/app/data/uploads`，挂载对应宿主机根 `data/`。本地启动若加载了该示例配置，可用进程环境 `LOG_DIR=data/logs STORAGE_ROOT=data/uploads` 覆盖。宿主机备份/恢复脚本的 `LOG_DIR` 应使用宿主机路径，而不是容器路径。
+
+测试在导入 app 前将日志和默认本地存储隔离到会话临时目录，文件用例使用 `tmp_path`。以下路径和独立存储测试覆盖了数据库 fixture，无需启动服务，从仓库根目录执行：
+
+```bash
+PYTHONPATH=backend STORAGE_BACKEND=local python -m pytest -q \
+  backend/tests/test_data_paths.py backend/tests/test_storage_provider.py \
+  backend/tests/test_storage_minio.py backend/tests/test_storage_tools.py
+```
+
+### 常见问题
+
 | 现象 | 核查方向 |
 | --- | --- |
 | backend unhealthy | 迁移和 bootstrap 日志、数据库/Redis 可达性；不要靠反复清空数据目录解决 |

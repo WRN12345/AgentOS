@@ -1,16 +1,36 @@
 """统一配置：全部从环境变量加载，禁止在代码中硬编码密钥。"""
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def resolve_data_path(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute():
+        return value
+
+    # Source checkout: <repo>/backend/app; image source: /app/app.
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "pyproject.toml").is_file():
+        raise ValueError("Installed packages require absolute LOG_DIR and STORAGE_ROOT paths")
+    if root.name == "backend" and (root.parent / "docker-compose.yml").is_file():
+        root = root.parent
+    return str((root / path).resolve())
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     app_env: str = "development"
-    log_dir: str = "/app/data/logs"
+    log_dir: str = "data/logs"
+
+    @field_validator("log_dir", "storage_root")
+    @classmethod
+    def _resolve_data_path(cls, value: str) -> str:
+        return resolve_data_path(value)
 
     database_url: str = "postgresql+asyncpg://agentos:agentos@postgres:5432/agentos"
     redis_url: str = "redis://redis:6379/0"
@@ -78,7 +98,7 @@ class Settings(BaseSettings):
 
     # 数据库仅保存相对 `storage_key`，上传目录不得直接暴露。
     storage_backend: Literal["local", "minio"] = "local"
-    storage_root: str = "/app/data/uploads"
+    storage_root: str = "data/uploads"
     minio_endpoint: str = ""
     minio_access_key: str = ""
     minio_secret_key: str = ""

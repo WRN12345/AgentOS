@@ -23,7 +23,6 @@ htmlcov/
 
 # Runtime data
 data/
-backend/data/
 logs/
 backups/
 **/*.log

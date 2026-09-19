@@ -14,6 +14,16 @@ from app.infrastructure.storage import provider as factories
 from app.infrastructure.storage.minio import MinioStorageProvider
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _prepare_test_database():
+    pass
+
+
+@pytest.fixture(autouse=True)
+def _clean_tables():
+    pass
+
+
 def s3_error(code: str) -> S3Error:
     return S3Error(code, code, "resource", "request", "host", None)
 
