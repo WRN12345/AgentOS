@@ -44,6 +44,7 @@ const STATUS_ORDER: WorkItemStatus[] = [
   "IN_PROGRESS",
   "BLOCKED",
   "IN_REVIEW",
+  "WAITING_ACCEPTANCE",
   "COMPLETED",
   "CANCELLED",
 ];
@@ -55,6 +56,7 @@ const STATUS_CHART_COLORS: Record<WorkItemStatus, string> = {
   IN_PROGRESS: "#f59e0b", // amber-500
   BLOCKED: "#ef4444", // red-500
   IN_REVIEW: "#a855f7", // purple-500
+  WAITING_ACCEPTANCE: "#06b6d4", // cyan-500
   COMPLETED: "#22c55e", // green-500
   CANCELLED: "#d1d5db", // gray-300
 };

@@ -81,6 +81,7 @@ export type WorkItemStatus =
   | "IN_PROGRESS"
   | "BLOCKED"
   | "IN_REVIEW"
+  | "WAITING_ACCEPTANCE"
   | "COMPLETED"
   | "CANCELLED";
 
@@ -408,6 +409,28 @@ export interface Deliverable {
 }
 
 export type ReviewDecision = "approve" | "request_changes" | "reject";
+
+export type HandoffWorkItem = Pick<WorkItemSummary, "id" | "title" | "status" | "version">;
+
+export interface HandoffTarget extends HandoffWorkItem {
+  assignee: MemberBrief;
+}
+
+export interface Handoff {
+  id: string;
+  source_work_item: HandoffWorkItem;
+  target_work_item: HandoffWorkItem;
+  deliverable: Deliverable;
+  sender: MemberBrief;
+  recipient: MemberBrief;
+  status: "pending" | "accepted" | "changes_requested";
+  note: string | null;
+  response_note: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  responded_at: string | null;
+}
 
 /** 最终审核记录：反馈正文仅负责人与主执行人可见。 */
 export interface Review {

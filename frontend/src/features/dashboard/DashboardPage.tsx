@@ -39,6 +39,7 @@ import {
 } from "../agent-assistant/constants";
 import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
 import { TodoSection } from "./TodoSection";
+import { HandoffInbox } from "./HandoffInbox";
 import { ACTIVE_STATUSES, StatCard, daysUntil } from "./shared";
 import { queryKeys } from "../../lib/queryKeys";
 
@@ -126,9 +127,10 @@ export default function DashboardPage() {
 
       {/* 统计卡：点击跳转到对应页面 */}
       <div
-        className={`grid grid-cols-1 gap-3 ${isLeader ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}
+        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${isLeader ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}
       >
         <StatCard label="我的进行中任务" value={inProgressCount} to="/work-items" />
+        <StatCard label="我的待接收任务" value={myItems.filter((i) => i.status === "WAITING_ACCEPTANCE").length} to="/work-items" />
         <StatCard
           label="今日到期 / 已逾期"
           value={dueTodayCount + overdueCount}
@@ -153,6 +155,7 @@ export default function DashboardPage() {
         <div className="space-y-4 lg:col-span-2">
           {/* 待处理中心：需要当前用户动作的事项聚合 */}
           <TodoSection />
+          <HandoffInbox />
 
           {/* 我的待办：我作为主执行人的未完成任务，按 DDL 升序；超长内部滚动 */}
           <Card>

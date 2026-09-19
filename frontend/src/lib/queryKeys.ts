@@ -29,6 +29,8 @@ export const queryKeys = {
   deadlineChangeRequests: (...suffix: unknown[]) =>
     scoped("deadline-change-requests", ...suffix),
   deliverables: (...suffix: unknown[]) => scoped("deliverables", ...suffix),
+  handoffs: (...suffix: unknown[]) => scoped("handoffs", ...suffix),
+  handoffTargets: (...suffix: unknown[]) => scoped("handoff-targets", ...suffix),
   files: (...suffix: unknown[]) => scoped("files", ...suffix),
   coreMemory: (...suffix: unknown[]) => scoped("core-memory", ...suffix),
   qaHistory: (...suffix: unknown[]) => scoped("qa-history", ...suffix),

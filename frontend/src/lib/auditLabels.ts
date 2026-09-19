@@ -14,6 +14,9 @@ export const ACTION_LABELS: Record<string, string> = {
   "work_item.submitted": "提交审核",
   "work_item.cancelled": "取消工作项",
   "work_item.assignee_changed": "变更主执行人",
+  "handoff.created": "移交任务",
+  "handoff.accepted": "接收移交",
+  "handoff.changes_requested": "请求移交补正",
   "collaboration.requested": "发起协作请求",
   "collaboration.accepted": "接受协作请求",
   "collaboration.declined": "拒绝协作请求",
@@ -42,6 +45,7 @@ export const ACTION_LABELS: Record<string, string> = {
 
 export const TARGET_TYPE_LABELS: Record<string, string> = {
   work_item: "工作项",
+  deliverable_handoff: "任务移交",
   collaboration_request: "协作请求",
   transfer_request: "转派申请",
   deadline_change_request: "DDL 变更",

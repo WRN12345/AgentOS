@@ -55,6 +55,7 @@ import { queryKeys } from "../../lib/queryKeys";
 
 interface Props {
   workItem: WorkItem;
+  handoffPending?: boolean;
 }
 
 /**
@@ -62,7 +63,7 @@ interface Props {
  * 三类交付物提交 Dialog、审核反馈区（仅负责人与主执行人可见）。
  * 交付物列表对工作项无关成员 403，整体静默不渲染。
  */
-export function DeliverableSection({ workItem }: Props) {
+export function DeliverableSection({ workItem, handoffPending = false }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -88,7 +89,7 @@ export function DeliverableSection({ workItem }: Props) {
   const isAssignee = selfMember?.id === workItem.assignee.id;
   const terminal =
     workItem.status === "COMPLETED" || workItem.status === "CANCELLED";
-  const canSubmit = isAssignee && !terminal;
+  const canSubmit = isAssignee && !terminal && !handoffPending && workItem.status !== "WAITING_ACCEPTANCE";
   const latest = deliverables?.[0];
 
   return (
@@ -132,7 +133,7 @@ export function DeliverableSection({ workItem }: Props) {
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">
-            暂无交付记录。提交审核前需先提交交付物。
+            暂无交付记录。移交前需先提交交付物。
           </p>
         )}
 

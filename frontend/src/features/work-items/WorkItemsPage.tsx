@@ -48,6 +48,7 @@ const STATUS_OPTIONS: WorkItemStatus[] = [
   "IN_PROGRESS",
   "BLOCKED",
   "IN_REVIEW",
+  "WAITING_ACCEPTANCE",
   "COMPLETED",
   "CANCELLED",
 ];

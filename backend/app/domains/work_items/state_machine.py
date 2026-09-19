@@ -8,6 +8,9 @@
     IN_PROGRESS → IN_REVIEW    提交最终交付物（submit）
     IN_REVIEW   → IN_PROGRESS  负责人要求修改（request_changes）
     IN_REVIEW   → COMPLETED    负责人通过（complete）
+    IN_PROGRESS → WAITING_ACCEPTANCE  发送成果移交（handoff）
+    WAITING_ACCEPTANCE → COMPLETED   接收人确认（accept_handoff）
+    WAITING_ACCEPTANCE → IN_PROGRESS 接收人要求补充（return_handoff）
     DRAFT/READY/IN_PROGRESS → CANCELLED  取消（cancel）
 
 状态机只判断状态能否迁移，触发权限由对应应用服务校验。
@@ -25,6 +28,7 @@ class WorkItemStatus(StrEnum):
     IN_PROGRESS = "IN_PROGRESS"
     BLOCKED = "BLOCKED"
     IN_REVIEW = "IN_REVIEW"
+    WAITING_ACCEPTANCE = "WAITING_ACCEPTANCE"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
 
@@ -35,6 +39,7 @@ ACTIVE_STATUSES: tuple[str, ...] = (
     WorkItemStatus.IN_PROGRESS.value,
     WorkItemStatus.BLOCKED.value,
     WorkItemStatus.IN_REVIEW.value,
+    WorkItemStatus.WAITING_ACCEPTANCE.value,
 )
 
 _TRANSITIONS: dict[str, tuple[frozenset[WorkItemStatus], WorkItemStatus]] = {
@@ -45,6 +50,9 @@ _TRANSITIONS: dict[str, tuple[frozenset[WorkItemStatus], WorkItemStatus]] = {
     "submit": (frozenset({WorkItemStatus.IN_PROGRESS}), WorkItemStatus.IN_REVIEW),
     "request_changes": (frozenset({WorkItemStatus.IN_REVIEW}), WorkItemStatus.IN_PROGRESS),
     "complete": (frozenset({WorkItemStatus.IN_REVIEW}), WorkItemStatus.COMPLETED),
+    "handoff": (frozenset({WorkItemStatus.IN_PROGRESS}), WorkItemStatus.WAITING_ACCEPTANCE),
+    "accept_handoff": (frozenset({WorkItemStatus.WAITING_ACCEPTANCE}), WorkItemStatus.COMPLETED),
+    "return_handoff": (frozenset({WorkItemStatus.WAITING_ACCEPTANCE}), WorkItemStatus.IN_PROGRESS),
     "cancel": (
         frozenset(
             {WorkItemStatus.DRAFT, WorkItemStatus.READY, WorkItemStatus.IN_PROGRESS}

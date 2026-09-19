@@ -39,6 +39,9 @@ const EVENT_TYPES = [
   "review.approved",
   "review.changes_requested",
   "review.rejected",
+  "handoff.created",
+  "handoff.accepted",
+  "handoff.changes_requested",
   // Agent 分析完成，触发建议中心自动刷新
   "agent.suggestion_ready",
   "requirements.dispatched",
@@ -63,11 +66,20 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       break;
     case "work_item":
       queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
+      break;
+    case "handoff":
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffs() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.deliverables() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       break;
     case "collaboration":
       queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
       break;
     case "transfer":
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
       queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       // 转派通过会变更主执行人
@@ -86,6 +98,7 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       break;
     case "member":
       queryClient.invalidateQueries({ queryKey: queryKeys.members() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
       break;
     case "review":
       // 审核结论推进工作项状态，并产生新的 reviews 记录与审批中心变化

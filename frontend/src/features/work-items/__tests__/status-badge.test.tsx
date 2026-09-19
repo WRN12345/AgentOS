@@ -21,6 +21,7 @@ describe("工作项状态徽标", () => {
     IN_PROGRESS: "进行中",
     BLOCKED: "阻塞",
     IN_REVIEW: "审核中",
+    WAITING_ACCEPTANCE: "待接收",
     COMPLETED: "已完成",
     CANCELLED: "已取消",
   };
@@ -36,7 +37,7 @@ describe("工作项状态徽标", () => {
     },
   );
 
-  it("STATUS_META 覆盖全部 7 种工作项状态", () => {
+  it("STATUS_META 覆盖全部工作项状态", () => {
     expect(Object.keys(STATUS_META).sort()).toEqual(
       Object.keys(expected).sort(),
     );

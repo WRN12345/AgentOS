@@ -26,6 +26,7 @@ import type { Member, WorkItem, WorkItemStatus } from "../../types";
 import { PRIORITY_META, STATUS_META, formatDateTime } from "./constants";
 import { WorkItemFormDialog } from "./work-item-form";
 import { DevDocSection } from "./DevDocSection";
+import { HandoffSection, useTaskHandoffs } from "./HandoffSection";
 import { DeliverableReviewPanel } from "./TaskReviewPanel";
 import { CollaborationSection } from "../collaboration/CollaborationSection";
 import { DeliverableSection } from "../deliverables/DeliverableSection";
@@ -74,12 +75,6 @@ const COMMANDS: Command[] = [
     visible: ({ isAssignee, status }) => isAssignee && status === "BLOCKED",
   },
   {
-    key: "submit",
-    label: "提交审核",
-    path: "submit",
-    visible: ({ isAssignee, status }) => isAssignee && status === "IN_PROGRESS",
-  },
-  {
     key: "cancel",
     label: "取消",
     path: "cancel",
@@ -96,6 +91,9 @@ export default function WorkItemDetailPage() {
   const isLeader = useIsLeader();
   const selfMember = useAuthStore((s) => s.member);
   const [editOpen, setEditOpen] = useState(false);
+  const handoffs = useTaskHandoffs(id!);
+  const hasPendingHandoff = handoffs.data?.some((handoff) => handoff.status === "pending") ?? false;
+  const hasPendingIncoming = handoffs.data?.some((handoff) => handoff.status === "pending" && handoff.target_work_item.id === id) ?? false;
 
   const { data: item, isLoading } = useQuery({
     queryKey: queryKeys.workItems(id),
@@ -138,11 +136,6 @@ export default function WorkItemDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
         return;
       }
-      // 无交付物时提交审核被 422 拒绝，引导先提交交付物
-      if (error instanceof ApiError && error.code === "DELIVERABLE_REQUIRED") {
-        toast.error("请先提交交付物，再提交审核");
-        return;
-      }
       toast.error(errorMessage(error, "操作失败"));
     },
   });
@@ -175,20 +168,25 @@ export default function WorkItemDetailPage() {
             <Button
               key={cmd.key}
               variant={cmd.variant ?? "default"}
-              disabled={command.isPending}
+              disabled={command.isPending || hasPendingHandoff || item.status === "WAITING_ACCEPTANCE" || (cmd.key === "start" && handoffs.isFetching)}
               onClick={() => command.mutate(cmd)}
             >
               {cmd.label}
             </Button>
           ))}
+          {isAssignee && item.status === "IN_PROGRESS" && (
+            <Button asChild><a href="#handoff-section">移交任务</a></Button>
+          )}
           {isLeader && (
-            <Button variant="outline" onClick={() => setEditOpen(true)}>
+            <Button variant="outline" disabled={hasPendingHandoff || item.status === "WAITING_ACCEPTANCE"} onClick={() => setEditOpen(true)}>
               <Pencil className="size-4" />
               编辑
             </Button>
           )}
         </div>
       </div>
+
+      {hasPendingIncoming && <p className="text-sm text-muted-foreground">请先处理待接收移交，再开始接续任务。</p>}
 
       <Card>
         <CardHeader>
@@ -270,16 +268,18 @@ export default function WorkItemDetailPage() {
       <DevDocSection workItem={item} />
 
       <div className="space-y-3">
-        <DeliverableSection workItem={item} />
+        <DeliverableSection workItem={item} handoffPending={hasPendingHandoff} />
         <DeliverableReviewPanel workItemId={item.id} workItem={item} />
       </div>
 
-      <TransferSection workItem={item} members={members ?? []} />
+      <HandoffSection workItem={item} />
+
+      <TransferSection workItem={item} members={members ?? []} handoffPending={hasPendingHandoff || item.status === "WAITING_ACCEPTANCE"} />
 
       <DeadlineChangeSection workItem={item} />
 
       <WorkItemFormDialog
-        open={editOpen}
+        open={editOpen && !hasPendingHandoff && item.status !== "WAITING_ACCEPTANCE"}
         onOpenChange={setEditOpen}
         members={members ?? []}
         workItem={item}

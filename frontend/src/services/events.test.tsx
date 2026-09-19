@@ -29,6 +29,19 @@ describe("requirement events", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(["handoff.created", "handoff.accepted", "handoff.changes_requested"])("refreshes handoff inbox, targets and tasks for %s", (type) => {
+    const view = renderWithProviders(<Stream />);
+    const keys = [queryKeys.handoffs("received", "pending"), queryKeys.handoffs("task", "wi-2"), queryKeys.handoffTargets("wi-1"), queryKeys.workItems(), queryKeys.deliverables(), queryKeys.members()];
+    keys.forEach((key) => { view.queryClient.setQueryData(key, []); });
+    const otherProject = ["project-b", "handoffs"];
+    view.queryClient.setQueryData(otherProject, []);
+    const stream = TestEventSource.instances[0];
+    expect(stream.listeners.has(type)).toBe(true);
+    act(() => stream.listeners.get(type)!(new MessageEvent(type, { data: JSON.stringify({ type, data: {} }) })));
+    keys.forEach((key) => expect(view.queryClient.getQueryState(key)?.isInvalidated).toBe(true));
+    expect(view.queryClient.getQueryState(otherProject)?.isInvalidated).toBe(false);
+  });
+
   it.each(["requirements.dispatched", "requirements.replied"])("invalidates only the current project and toasts %s", (type) => {
     const view = renderWithProviders(<Stream />);
     const a = queryKeys.projectRequirements();

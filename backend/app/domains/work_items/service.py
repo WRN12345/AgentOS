@@ -24,6 +24,8 @@ from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
+from app.domains.handoffs.models import DeliverableHandoff
+from app.domains.handoffs.policy import ensure_no_pending_handoff
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import (
@@ -91,7 +93,7 @@ async def get_work_item(
     )
     if for_update:
         # 行锁让并发写请求基于最新已提交数据执行版本检查
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None or (project_id is not None and item.project_id != project_id):
         # 跨项目对象按不存在处理，避免泄露其存在性
@@ -372,6 +374,8 @@ async def update_work_item(
     item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     _check_version(item, payload.version)
 
+    await ensure_no_pending_handoff(session, item.id)
+
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     for field in ("title", "description", "acceptance_criteria", "priority", "due_at"):
@@ -432,8 +436,20 @@ async def run_command(
     elif item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅当前主执行人可执行该操作")
     _check_version(item, version)
+    await ensure_no_pending_handoff(session, item.id)
 
     if command == "submit":
+        prior_handoff = await session.scalar(
+            select(DeliverableHandoff.id)
+            .where(DeliverableHandoff.source_work_item_id == item.id)
+            .limit(1)
+        )
+        if prior_handoff is not None:
+            raise ApiException(
+                409,
+                ErrorCodes.WORK_ITEM_INVALID_TRANSITION,
+                "该任务通过成果移交完成，请重新移交并由接收人确认",
+            )
         # 没有交付物时禁止进入审核，避免产生无审核对象的 IN_REVIEW 工作项
         deliverable_exists = (
             await session.execute(

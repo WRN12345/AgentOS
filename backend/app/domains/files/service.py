@@ -25,8 +25,10 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.collaboration.models import CollaborationRequest
+from app.domains.deliverables.models import Deliverable
 from app.domains.files.models import StoredFile
 from app.domains.files.schemas import StoredFileOut, normalize_directory_path
+from app.domains.handoffs.models import DeliverableHandoff
 from app.domains.memory.extractors import SUPPORTED_EXTENSIONS
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.domains.project.models import ROLE_LEADER, ProjectMember
@@ -369,13 +371,36 @@ async def can_download_file(
 ) -> bool:
     """负责人和上传人可下载；未关联工作项的知识库文档对项目成员开放；
     关联工作项的交付文件仅上传人或与工作项有关的成员可下。"""
+    if stored.project_id != actor.project_id:
+        return False
     if actor.role in (ROLE_LEADER):
         return True
     if stored.uploaded_by == actor.id:
         return True
     if stored.work_item_id is None:
         return True
-    return await is_work_item_related(session, stored.work_item_id, actor.id)
+    if await is_work_item_related(session, stored.work_item_id, actor.id):
+        return True
+    # 移交只授权被选定的文件版本，不扩大为整个来源任务的访问权。
+    handoffs = (
+        await session.execute(
+            select(DeliverableHandoff)
+            .join(Deliverable, Deliverable.id == DeliverableHandoff.deliverable_id)
+            .where(
+                DeliverableHandoff.project_id == actor.project_id,
+                Deliverable.project_id == actor.project_id,
+                Deliverable.stored_file_id == stored.id,
+            )
+        )
+    ).scalars().all()
+    for handoff in handoffs:
+        if actor.id in (handoff.sender_id, handoff.recipient_id):
+            return True
+        if handoff.status == "accepted" and await is_work_item_related(
+            session, handoff.target_work_item_id, actor.id
+        ):
+            return True
+    return False
 
 
 async def authorize_download(

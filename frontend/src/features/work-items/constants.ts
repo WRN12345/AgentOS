@@ -10,6 +10,7 @@ export const STATUS_META: Record<
   IN_PROGRESS: { label: "进行中", className: "bg-amber-100 text-amber-700" },
   BLOCKED: { label: "阻塞", className: "bg-red-100 text-red-700" },
   IN_REVIEW: { label: "审核中", className: "bg-purple-100 text-purple-700" },
+  WAITING_ACCEPTANCE: { label: "待接收", className: "bg-cyan-100 text-cyan-700" },
   COMPLETED: { label: "已完成", className: "bg-green-100 text-green-700" },
   CANCELLED: { label: "已取消", className: "bg-muted text-muted-foreground line-through" },
 };
