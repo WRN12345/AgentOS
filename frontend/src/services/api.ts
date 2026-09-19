@@ -133,7 +133,7 @@ async function request<T>(
   // Access Token 过期：刷新后重试一次
   if (response.status === 401 && token && !options.retried) {
     if (await tryRefreshToken()) {
-      return request<T>(path, init, { ...options, retried: true });
+      return request<T>(path, { ...init, headers }, { ...options, retried: true });
     }
   }
 
