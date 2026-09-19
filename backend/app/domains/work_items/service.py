@@ -3,7 +3,7 @@
 权限规则由各用例显式校验：
 - 创建、修改、发布、取消：仅项目负责人；
 - start / block / unblock / submit：仅当前主执行人；
-- 查询：任何项目成员。
+- 查询：负责人可看全部，普通成员可看自己主执行或协作的任务。
 状态迁移由 domains/work_items/state_machine.py 裁决；状态或字段变更与审计事件
 在同一事务写入，assignee 变化必须留痕。
 """
@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -76,11 +76,13 @@ async def get_work_item(
     *,
     for_update: bool = False,
     project_id: uuid.UUID | None = None,
+    viewer: ProjectMember | None = None,
 ) -> WorkItem:
-    """按 id 获取工作项，可选校验项目边界。
+    """按 id 获取工作项，可选校验项目边界及查看者权限。
 
     传入 project_id 时，跨项目对象按不存在处理；不传则供派生域通过
     work_item_id 查询父对象。
+    传入 viewer 时，校验其项目归属及主执行人、协作者或负责人身份。
     """
     stmt = (
         select(WorkItem)
@@ -93,6 +95,15 @@ async def get_work_item(
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None or (project_id is not None and item.project_id != project_id):
         # 跨项目对象按不存在处理，避免泄露其存在性
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
+    if viewer is not None and (
+        item.project_id != viewer.project_id
+        or (
+            viewer.role != ROLE_LEADER
+            and item.assignee_id != viewer.id
+            and not any(c.member_id == viewer.id for c in item.collaborators)
+        )
+    ):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
     return item
 
@@ -114,14 +125,21 @@ async def get_work_item_project_id(
 async def list_work_items(
     session: AsyncSession,
     *,
-    project_id: uuid.UUID,
+    actor: ProjectMember,
     assignee_id: uuid.UUID | None = None,
     status: str | None = None,
     due_from: datetime | None = None,
     due_to: datetime | None = None,
 ) -> list[WorkItemSummaryOut]:
-    """返回当前项目工作项，支持按负责人、状态和 DDL 区间过滤。"""
-    stmt = select(WorkItem).where(WorkItem.project_id == project_id)
+    """返回成员可见的项目工作项，支持按主执行人、状态和 DDL 区间过滤。"""
+    stmt = select(WorkItem).where(WorkItem.project_id == actor.project_id)
+    if actor.role != ROLE_LEADER:
+        stmt = stmt.where(
+            or_(
+                WorkItem.assignee_id == actor.id,
+                WorkItem.collaborators.any(WorkItemCollaborator.member_id == actor.id),
+            )
+        )
     stmt = stmt.order_by(WorkItem.created_at.desc())
     if assignee_id is not None:
         stmt = stmt.where(WorkItem.assignee_id == assignee_id)
