@@ -12,7 +12,9 @@ import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelin
 
 export default function ProjectRequirementsPage() {
   const isLeader = useIsLeader();
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const projectId = useAuthStore((s) => s.currentProject?.id);
+  const [selected, setSelected] = useState<{ projectId: string | undefined; id: string } | null>(null);
+  const wizardOpen = selected !== null && selected.projectId === projectId;
   const { data: members } = useQuery({
     queryKey: queryKeys.members(),
     queryFn: () => api.get<Member[]>("/members"),
@@ -23,7 +25,6 @@ export default function ProjectRequirementsPage() {
     queryFn: () => api.get<AgentConfig>("/config"),
     enabled: isLeader && wizardOpen,
   });
-  const projectId = useAuthStore((s) => s.currentProject?.id);
   const client = useQueryClient();
   const requirementsKey = queryKeys.projectRequirements();
   const requirements = useQuery({
@@ -34,13 +35,15 @@ export default function ProjectRequirementsPage() {
     refetchIntervalInBackground: false,
     retry: false,
   });
+  const selectedRequirement = wizardOpen
+    ? requirements.data?.find((item) => item.id === selected.id && item.status === "accepted")
+    : undefined;
   if (!isLeader) return <Navigate to="/" replace />;
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">项目需求</h1>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => setWizardOpen(true)}>AI 需求拆解</Button>
           <Button
             variant="outline"
             disabled={requirements.isFetching}
@@ -63,6 +66,7 @@ export default function ProjectRequirementsPage() {
         <RequirementCard
           key={`${projectId}-${requirement.id}`}
           requirement={requirement}
+          onDecompose={() => setSelected({ projectId, id: requirement.id })}
           onChanged={(updated) => {
             void client.cancelQueries({
               queryKey: requirementsKey,
@@ -82,13 +86,16 @@ export default function ProjectRequirementsPage() {
           }}
         />
       ))}
-      <RequirementPipelineWizard
-        key={projectId}
-        open={wizardOpen}
-        onOpenChange={setWizardOpen}
-        members={members ?? []}
-        llmIsExternal={config?.llm_is_external ?? false}
-      />
+      {selectedRequirement && (
+        <RequirementPipelineWizard
+          key={`${projectId}-${selectedRequirement.id}`}
+          open
+          onOpenChange={(open) => { if (!open) setSelected(null); }}
+          members={members ?? []}
+          llmIsExternal={config?.llm_is_external ?? false}
+          projectRequirement={selectedRequirement}
+        />
+      )}
     </div>
   );
 }

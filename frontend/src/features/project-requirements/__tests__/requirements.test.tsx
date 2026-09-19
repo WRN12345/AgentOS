@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 vi.mock("../../../services/api", async (importOriginal) => {
@@ -58,7 +58,7 @@ function deferred<T>() {
 }
 
 describe("项目需求", () => {
-  it("负责人从项目需求打开 AI 拆解向导", async () => {
+  it("没有已接收需求时不提供项目级拆解入口", async () => {
     signInAs(makeMember({ role: "leader" }));
     stubGet({
       "/project-requirements": [],
@@ -66,9 +66,109 @@ describe("项目需求", () => {
       "/config": { llm_is_external: false },
     });
     renderWithProviders(<ProjectRequirementsPage />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "AI 需求拆解" }));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalledWith("/members"));
+    await screen.findByText("暂无派发给你的需求");
+    expect(screen.queryByRole("button", { name: "AI 需求拆解" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each(["draft", "confirmed", "excluded", "dispatched", "clarification_requested"] as const)(
+    "%s 需求在接收前不能拆解", (status) => {
+      renderWithProviders(<RequirementCard requirement={{ ...requirement, status }} onChanged={vi.fn()} onDecompose={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "AI 需求拆解" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("管理员不能从需求卡片发起负责人拆解", () => {
+    renderWithProviders(<RequirementCard requirement={{ ...requirement, status: "accepted" }} adminPath={`${base}/requirements`} onChanged={vi.fn()} onDecompose={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "AI 需求拆解" })).not.toBeInTheDocument();
+  });
+
+  it("仅拆解选中的已接收需求，无需填写或提交需求正文", async () => {
+    signInAs(makeMember({ role: "leader" }));
+    const second = { ...requirement, id: "req-2", title: "第二项需求", description: "独立范围", acceptance_criteria: "独立验收", version: 4, status: "accepted" as const };
+    stubGet({
+      "/project-requirements": [{ ...requirement, status: "accepted" }, second],
+      "/members": [], "/config": { llm_is_external: true },
+    });
+    mockApi.post.mockResolvedValue({ id: "run-2", status: "pending" });
+    renderWithProviders(<ProjectRequirementsPage />);
+    const buttons = await screen.findAllByRole("button", { name: "AI 需求拆解" });
+    expect(buttons).toHaveLength(2);
+    const user = userEvent.setup();
+    await user.click(buttons[1]);
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("region", { name: "本次拆解需求" })).toHaveTextContent(/第二项需求.*独立范围.*独立验收/);
+    expect(dialog.queryByText(requirement.title)).not.toBeInTheDocument();
+    expect(dialog.queryByRole("textbox")).not.toBeInTheDocument();
+    await dialog.findByText(/当前使用云端模型服务/);
+    await user.click(dialog.getByRole("button", { name: "生成拆解方案" }));
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith(
+      "/project-requirements/req-2/agent-analysis", { version: 4 }, expect.any(String),
+    ));
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+    expect(dialog.getByText(/Agent 正在分析并拆解需求/)).toBeInTheDocument();
+  });
+
+  it("接收成功后才能对该项需求打开拆解", async () => {
+    signInAs(makeMember({ role: "leader" }));
+    let items: Requirement[] = [{ ...requirement, status: "dispatched", assignee_id: "leader-1" }];
+    mockApi.get.mockImplementation(async (path: string) => path === "/project-requirements" ? items : path === "/config" ? { llm_is_external: false } : []);
+    const response = deferred<Requirement>();
+    mockApi.post.mockReturnValue(response.promise);
+    renderWithProviders(<ProjectRequirementsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "接收需求" }));
+    expect(screen.queryByRole("button", { name: "AI 需求拆解" })).not.toBeInTheDocument();
+    items = [{ ...items[0], status: "accepted", version: 3 }];
+    await act(async () => response.resolve(items[0]));
+    await user.click(await screen.findByRole("button", { name: "AI 需求拆解" }));
+    expect(within(screen.getByRole("dialog")).getByRole("heading", { name: requirement.title })).toBeInTheDocument();
+    expect(mockApi.post).toHaveBeenCalledWith("/project-requirements/req-1/accept", { version: 2 }, expect.any(String));
+  });
+
+  it("单项拆解结果先供负责人确认，确认后才创建任务", async () => {
+    const member = makeMember({ id: "assignee-1", display_name: "执行成员" });
+    signInAs(makeMember({ role: "leader" }));
+    stubGet({
+      "/project-requirements": [{ ...requirement, status: "accepted" }],
+      "/members": [member], "/config": { llm_is_external: false },
+      "/agent-runs/run-1": { id: "run-1", status: "succeeded" },
+      "/agent-suggestions?limit=50": [{
+        id: "suggestion-1", run_id: "run-1", suggestion_type: "pipeline",
+        content: { work_item_breakdown: [{
+          title: "拆解出的任务", description: "实现需求范围", acceptance_criteria: "通过该项验收", priority: "P1",
+          recommended_assignee: { member_id: member.id, display_name: member.display_name },
+        }] },
+      }],
+    });
+    mockApi.post.mockImplementation(async (path: string) => path.endsWith("/agent-analysis") ? { id: "run-1", status: "pending" } : {});
+    renderWithProviders(<ProjectRequirementsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "AI 需求拆解" }));
+    await user.click(screen.getByRole("button", { name: "生成拆解方案" }));
+    expect(await screen.findByDisplayValue("拆解出的任务")).toBeInTheDocument();
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "确认批量创建（1 项）" }));
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith("/work-items", {
+      title: "拆解出的任务", description: "实现需求范围", acceptance_criteria: "通过该项验收",
+      priority: "high", assignee_id: member.id, collaborator_ids: [], due_at: null,
+    }, expect.any(String)));
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith(
+      "/agent-suggestions/suggestion-1/feedback", { action: "accepted" }, expect.any(String),
+    ));
+  });
+
+  it("拆解请求失败时保留该项内容供重试", async () => {
+    signInAs(makeMember({ role: "leader" }));
+    stubGet({ "/project-requirements": [{ ...requirement, status: "accepted" }], "/members": [], "/config": { llm_is_external: false } });
+    mockApi.post.mockRejectedValue(new Error("请求失败"));
+    renderWithProviders(<ProjectRequirementsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "AI 需求拆解" }));
+    await user.click(screen.getByRole("button", { name: "生成拆解方案" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成拆解方案" })).toBeEnabled());
+    expect(within(screen.getByRole("dialog")).getByRole("region", { name: "本次拆解需求" })).toHaveTextContent(requirement.description);
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
   });
 
   it.each(["draft", "confirmed", "dispatched", "clarification_requested"] as const)(
