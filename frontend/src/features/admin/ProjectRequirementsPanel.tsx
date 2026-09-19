@@ -328,7 +328,7 @@ export default function ProjectRequirementsPanel({
           requirement={requirement}
           adminPath={`${base}/requirements`}
           onChanged={(updated) => {
-            // Cancel reads started before the write so they cannot restore an old version.
+            // 取消写入前已发起的读取请求，避免其结果将数据覆盖为旧版本。
             void client.cancelQueries({
               queryKey: requirementsKey,
               exact: true,

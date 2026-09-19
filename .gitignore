@@ -1,15 +1,15 @@
-# Environment variables and local secrets
+# 环境变量和本地密钥
 .env
 .env.*
 !.env.example
 
-# Local agent and tool state
+# 本地 Agent 和工具状态
 .superpowers/
 .agent/
 .agents/
 .docker-cli-plugins/
 
-# Python virtual environments, caches, and build output
+# Python 虚拟环境、缓存和构建产物
 .venv/
 .venv-test/
 venv/
@@ -24,26 +24,26 @@ build/
 coverage.xml
 htmlcov/
 
-# Frontend dependencies, caches, and build output
+# 前端依赖、缓存和构建产物
 node_modules/
 dist/
 coverage/
 .vite/
 *.tsbuildinfo
 
-# Runtime data
+# 运行时数据
 data/
 logs/
 backups/
 
-# Generated files
+# 自动生成的文件
 *.pyc
 *.pyo
 *.log
 *.pid
 *.tmp
 
-# Editor and operating system files
+# 编辑器和操作系统文件
 .idea/
 .vscode/
 *.swp

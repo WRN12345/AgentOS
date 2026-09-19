@@ -1,4 +1,4 @@
-"""Isolated project materials and source-grounded requirements."""
+"""隔离的项目材料与有来源依据的需求。"""
 
 from alembic import op
 import sqlalchemy as sa

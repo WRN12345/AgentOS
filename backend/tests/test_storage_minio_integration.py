@@ -1,4 +1,4 @@
-"""Opt-in SDK integration against an isolated MinIO server."""
+"""按需启用的 SDK 集成测试，使用隔离的 MinIO 服务器。"""
 
 import asyncio
 import os

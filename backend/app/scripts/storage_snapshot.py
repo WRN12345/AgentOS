@@ -1,4 +1,4 @@
-"""Portable verified object snapshots; database dumps are handled separately."""
+"""可移植且经过校验的对象快照；数据库转储单独处理。"""
 
 import argparse
 import asyncio
@@ -23,7 +23,7 @@ from app.scripts.migrate_file_storage import (
 
 
 def safe_path(root: Path, key: str) -> Path:
-    """Accept only canonical relative keys and reject symlinks within snapshots."""
+    """仅接受规范的相对键，并拒绝快照内的符号链接。"""
     if not isinstance(key, str) or not key or "\\" in key or "\x00" in key:
         raise ValueError("Invalid snapshot key")
     parts = PurePosixPath(key).parts
@@ -89,7 +89,7 @@ async def database_records(session_factory):
 
 
 async def verify_snapshot(root: Path) -> dict[tuple[str, str], FileRecord]:
-    """Validate all archived payloads without accessing or changing a database."""
+    """校验所有归档内容，期间不访问或修改数据库。"""
     records = read_manifest(root)
     source = LocalStorageProvider(root)
     for record in records.values():
@@ -117,7 +117,7 @@ async def export_snapshot(output, *, session_factory=async_session_factory, prov
             safe_path(root, key)
             verified.append(await copy_verified(provider_for(record.backend), target, record,
                                                 target_key=key, apply=True))
-        # The manifest is the complete marker. A failed export has no manifest.
+        # 清单是导出完成的标志；导出失败时不会生成清单。
         temporary = safe_path(root, f".manifest-{uuid.uuid4().hex}.tmp")
         try:
             with temporary.open("x", encoding="utf-8") as handle:
@@ -141,15 +141,15 @@ async def import_snapshot(input_path, *, apply=False, session_factory=async_sess
             expected = manifest.get((record.source, record.id))
             if expected is None:
                 raise ValueError(f"Snapshot does not match restored database record {record.id}")
-            # Materials predate persisted checksums; the snapshot carries their source hash.
+            # 材料数据早于校验和持久化机制，因此由快照记录其源内容的哈希值。
             if record.sha256 is None:
                 record = replace(record, sha256=expected.sha256)
             if expected != record:
                 raise ValueError(f"Snapshot does not match restored database record {record.id}")
             selected.append(record)
         source = LocalStorageProvider(root)
-        # Preflight all selected content and destinations before writing anything.
-        # Extra snapshot records are allowed: uploads may follow the DB dump.
+        # 写入前预先检查所有选定内容及目标位置。
+        # 允许快照包含额外记录：数据库转储后可能仍有文件上传。
         for record in selected:
             key = f"{record.backend}/{record.key}"
             safe_path(root, key)

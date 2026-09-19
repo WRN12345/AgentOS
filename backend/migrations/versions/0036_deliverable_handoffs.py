@@ -1,4 +1,4 @@
-"""Add deliverable handoffs between existing work items."""
+"""新增现有工作项之间的交付物交接。"""
 
 import sqlalchemy as sa
 from alembic import op

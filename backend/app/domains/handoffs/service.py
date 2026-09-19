@@ -47,7 +47,7 @@ async def _lock_items(
     source_id: uuid.UUID,
     target_id: uuid.UUID,
 ) -> tuple[WorkItem, WorkItem]:
-    # All mutations lock endpoints in UUID order before locking a handoff record.
+    # 所有修改操作先按 UUID 顺序锁定两端工作项，再锁定移交记录。
     items = (
         await session.scalars(
             select(WorkItem)
@@ -317,7 +317,7 @@ async def create_handoff(
     result = await _to_out(session, handoff)
     try:
         await _dispatch_deliverable_review(session, source)
-    except Exception:  # noqa: BLE001 - Derived work cannot undo a committed handoff.
+    except Exception:  # noqa: BLE001 - 派生任务不能回滚已提交的移交。
         logger.warning("Handoff review dispatch failed: handoff_id=%s", result.id)
     return result
 
@@ -384,7 +384,7 @@ async def respond(
         for enqueue in (enqueue_work_item_conclusion_index, enqueue_work_item_summary):
             try:
                 await enqueue(source)
-            except Exception:  # noqa: BLE001 - Each derived task is independently best-effort.
+            except Exception:  # noqa: BLE001 - 各派生任务独立尽力执行。
                 logger.warning(
                     "Handoff conclusion dispatch failed: handoff_id=%s", result.id
                 )

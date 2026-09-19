@@ -33,7 +33,7 @@ async def project_exists(session: AsyncSession, project_id: uuid.UUID) -> None:
 
 
 async def audit(session, action, actor_id, resource):
-    # Content and citations remain outside the project-visible audit stream.
+    # 正文与引用不写入项目可见的审计流。
     await record_event(session, action=f"requirements.{action}", actor_id=actor_id,
                        target_type=resource.__tablename__, target_id=resource.id,
                        project_id=resource.project_id)
@@ -117,7 +117,7 @@ async def start_analysis(session: AsyncSession, project_id: uuid.UUID, actor: Us
     try:
         await enqueue(client, TASK_TYPE, {"analysis_id": str(job.id)})
     except Exception:
-        # Persisted pending jobs are recovered by the worker if enqueue fails.
+        # 入队失败时，由 worker 恢复已持久化的待处理任务。
         job.next_delivery_at = datetime.now(UTC)
         await session.commit()
     finally:

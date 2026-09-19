@@ -8,7 +8,7 @@ from app.domains.handoffs.models import DeliverableHandoff
 
 
 async def ensure_no_pending_handoff(session: AsyncSession, item_id: uuid.UUID) -> None:
-    """Call while holding the work-item row lock, before mutating either endpoint."""
+    """持有工作项行锁时调用，且须在修改任一端工作项之前调用。"""
     pending = await session.scalar(
         select(DeliverableHandoff.id)
         .where(

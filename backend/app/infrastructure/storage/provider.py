@@ -48,7 +48,7 @@ class StorageProvider(ABC):
 
     @asynccontextmanager
     async def open(self, storage_key: str, mode: str = "rb"):
-        """Open a sequential binary stream; successful writes publish on exit."""
+        """打开顺序二进制流；写入成功时在退出上下文时发布。"""
         if mode not in ("rb", "wb"):
             raise ValueError("Storage mode must be 'rb' or 'wb'")
         validate_key(storage_key)
@@ -112,10 +112,10 @@ _providers: dict[str, StorageProvider] = {}
 
 
 def storage_for(backend: str) -> StorageProvider:
-    """Return the cached provider for a persisted backend name."""
+    """根据持久化的后端名称返回缓存的 Provider。"""
     global _provider
     if backend == "local":
-        # Keep the local singleton resettable when tests replace storage_root.
+        # 测试替换 storage_root 时，允许重置本地单例。
         if _provider is None:
             from app.infrastructure.storage.local import LocalStorageProvider
 

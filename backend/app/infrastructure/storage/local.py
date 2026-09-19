@@ -1,4 +1,4 @@
-"""Local storage with disk staging and atomic publication."""
+"""支持磁盘暂存与原子发布的本地存储。"""
 
 import os
 import tempfile

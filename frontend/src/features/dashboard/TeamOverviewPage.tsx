@@ -86,7 +86,7 @@ export default function TeamOverviewPage() {
 
   const all = items ?? [];
 
-  // 状态分布（donut 图数据，只保留有数量的状态）
+  // 状态分布（环形图数据，只保留有数量的状态）
   const statusCount = new Map<WorkItemStatus, number>();
   for (const item of all) {
     statusCount.set(item.status, (statusCount.get(item.status) ?? 0) + 1);
@@ -128,7 +128,7 @@ export default function TeamOverviewPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* 任务状态分布（donut，中心为总数） */}
+        {/* 任务状态分布（环形图，中心为总数） */}
         <Card>
           <CardHeader>
             <CardTitle>任务状态分布</CardTitle>

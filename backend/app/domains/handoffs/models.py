@@ -1,4 +1,4 @@
-"""Deliveries offered as inputs to an existing work item."""
+"""作为现有工作项输入提供的交付物。"""
 
 import uuid
 from datetime import datetime

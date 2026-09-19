@@ -1,4 +1,4 @@
-"""Verified, resumable storage migration. Pause application writes while running."""
+"""带校验且可续传的存储迁移。运行期间需暂停应用写入。"""
 
 import argparse
 import asyncio
@@ -17,7 +17,7 @@ from app.infrastructure.storage.provider import StorageProvider, storage_for
 
 BACKENDS = ("local", "minio")
 FILE_MODELS = {"stored_files": StoredFile, "project_materials": Material}
-# Shared by migration and snapshot commands, including migrations in reverse.
+# 迁移与快照命令共用，包括反向迁移。
 STORAGE_OPERATION_LOCK = 724190382610
 
 
@@ -38,7 +38,7 @@ class FileRecord:
 
 @asynccontextmanager
 async def operation_lock(session_factory):
-    # A separate transaction holds the lock while per-file transactions commit.
+    # 各文件事务提交期间，由独立事务持有锁。
     async with session_factory() as session:
         async with session.begin():
             acquired = await session.scalar(
@@ -63,7 +63,7 @@ async def verify(provider: StorageProvider, key: str, record: FileRecord) -> Fil
 
 
 async def copy_verified(source, target, record, *, source_key=None, target_key=None, apply=False):
-    """Never delete published objects, even after an uncertain commit outcome."""
+    """始终保留已发布的对象，即使事务提交结果不确定。"""
     source_key = record.key if source_key is None else source_key
     target_key = record.key if target_key is None else target_key
     if await target.exists(target_key):
@@ -85,8 +85,8 @@ async def copy_verified(source, target, record, *, source_key=None, target_key=N
         if size != record.size or (record.sha256 is not None and sha256 != record.sha256):
             raise ValueError(f"Source integrity mismatch for {record.id}")
         record = replace(record, sha256=sha256)
-        # Cooperating tools are serialized. Application writes must be paused;
-        # the provider interface itself has no conditional-create primitive.
+        # 协作工具串行执行。应用写入必须暂停；
+        # Provider 接口本身不提供条件创建原语。
         if await target.exists(target_key):
             await verify(target, target_key, record)
         else:
@@ -94,7 +94,7 @@ async def copy_verified(source, target, record, *, source_key=None, target_key=N
         await verify(target, target_key, record)
         return record
     finally:
-        # Only temporary data is discarded, never the destination key.
+        # 仅丢弃临时数据，始终保留目标键。
         await target.discard(staged)
 
 
@@ -126,8 +126,8 @@ async def migrate(from_backend, to_backend, *, apply=False,
                             raise RuntimeError(f"Record changed during migration: {file_id}")
                         await copy_verified(source, target, FileRecord.from_row(row, source_name), apply=apply)
                         if apply:
-                            # Core UPDATE avoids loading unrelated ORM models merely
-                            # to resolve their foreign keys during an ORM flush.
+                            # 使用 Core UPDATE，避免仅为在 ORM flush 时解析外键
+                            # 而加载无关的 ORM 模型。
                             await session.execute(
                                 update(model.__table__).where(model.id == file_id)
                                 .values(storage_backend=to_backend)

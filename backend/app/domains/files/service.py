@@ -223,7 +223,7 @@ async def upload_file(
             logger.warning("upload rollback failed: key=%s error=%s", storage_key, type(cleanup_error).__name__)
         delete_object = storage_commit_attempted and not db_commit_attempted
         if db_commit_attempted:
-            # A lost acknowledgement can precede commit visibility on another connection.
+            # 提交确认丢失时，提交结果可能尚未对其他连接可见。
             logger.warning("upload commit outcome uncertain; retaining key=%s error=%s", storage_key, type(exc).__name__)
         try:
             await provider.discard(staged)

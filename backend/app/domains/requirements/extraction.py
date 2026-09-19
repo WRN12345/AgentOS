@@ -1,4 +1,4 @@
-"""Bounded extraction of untrusted project documents."""
+"""在资源限制下提取不可信项目文档的内容。"""
 
 import asyncio
 import io
@@ -44,7 +44,7 @@ async def extract_material_text(filename: str, data: bytes) -> str:
 
 
 def main() -> None:
-    # Parser allocation and CPU limits apply before importing document libraries.
+    # 导入文档库前先设置解析器内存分配与 CPU 使用限制。
     import resource
 
     resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))

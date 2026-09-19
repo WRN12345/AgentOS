@@ -52,7 +52,7 @@ interface DraftItem {
   description: string;
   acceptanceCriteria: string;
   priority: WorkItemPriority;
-  /** date input 值（yyyy-mm-dd），空串表示无 DDL。 */
+  /** 日期输入框的值（yyyy-mm-dd），空串表示无 DDL。 */
   dueAt: string;
   assigneeId: string;
   recommended: PipelineAssigneeCandidate | null;
@@ -225,7 +225,7 @@ export function RequirementPipelineWizard({
     setStep("confirm");
   }, [open, resumeSuggestion]);
 
-  // 反馈（best-effort）：采纳/忽略只写 agent_suggestions，不产生业务写入
+  // 尽力提交反馈：采纳/忽略只写 agent_suggestions，不产生业务写入
   const sendFeedback = async (action: "accepted" | "ignored") => {
     if (!suggestion) return;
     try {

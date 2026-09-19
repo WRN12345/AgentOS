@@ -1,4 +1,4 @@
-"""Exercise deployment script control flow without Docker or a real database."""
+"""在不依赖 Docker 或真实数据库的情况下测试部署脚本的控制流程。"""
 
 import json
 import os

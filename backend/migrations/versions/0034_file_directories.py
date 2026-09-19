@@ -1,4 +1,4 @@
-"""Scope file versions to logical directories."""
+"""将文件版本的作用域限定为逻辑目录。"""
 
 from alembic import op
 import sqlalchemy as sa
@@ -22,7 +22,7 @@ def upgrade():
 
 
 def downgrade():
-    # Conflicting current names across directories must be resolved before downgrade.
+    # 降级前必须解决跨目录的当前文件名称冲突。
     op.drop_index("ux_stored_files_current_name", table_name="stored_files")
     op.create_index(
         "ux_stored_files_current_name", "stored_files",

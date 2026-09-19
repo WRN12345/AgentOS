@@ -1,4 +1,4 @@
-"""Private MinIO objects using the official synchronous SDK in worker threads."""
+"""在工作线程中使用官方同步 SDK 操作 MinIO 私有对象。"""
 
 import os
 import tempfile

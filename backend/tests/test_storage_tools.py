@@ -1,4 +1,4 @@
-"""Operational tooling tests use only fake DB sessions and isolated storage."""
+"""运维工具测试仅使用数据库会话替身和隔离存储。"""
 
 import hashlib
 import json
@@ -13,7 +13,7 @@ from app.scripts.migrate_file_storage import FileRecord, copy_verified, migrate
 from app.scripts.storage_snapshot import export_snapshot, import_snapshot, read_manifest, verify_snapshot
 
 
-# Override the integration-suite fixtures: no PostgreSQL, Redis or prod mutations.
+# 覆盖集成测试套件的 fixture：不使用 PostgreSQL、Redis，也不修改生产环境。
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_test_database():
     pass
@@ -93,7 +93,7 @@ class FakeDatabase:
                         item.storage_backend = backend
                     raise
                 if self.changed and database.fail_db_commit:
-                    # Simulate commit succeeding but the response being lost.
+                    # 模拟提交成功但响应丢失。
                     raise RuntimeError("Database commit response lost")
 
             async def scalar(self, statement, params=None):
@@ -190,7 +190,7 @@ async def test_snapshot_mixed_backend_export_and_isolated_restore(tmp_path):
     await export_snapshot(snapshot, session_factory=db.session, provider_for=original.__getitem__)
     assert len(read_manifest(snapshot)) == 3
     assert db.updates == 0
-    db.rows = rows[:2]  # Snapshot can contain uploads made after the database dump.
+    db.rows = rows[:2]  # 快照可能包含数据库转储之后上传的文件。
     restored = {"local": LocalStorageProvider(tmp_path / "fresh-local"), "minio": FakeProvider()}
     await import_snapshot(snapshot, session_factory=db.session, provider_for=restored.__getitem__)
     assert not await restored["local"].exists(rows[0].storage_key)
@@ -270,7 +270,7 @@ async def test_zero_byte_stream_copy():
 async def test_materials_are_migrated_and_snapshotted_with_derived_checksum(tmp_path):
     file = row()
     material = row("admin-materials/project/original.txt", source="project_materials")
-    material.id = file.id  # IDs from different tables must remain independent.
+    material.id = file.id  # 不同表中的 ID 必须保持独立。
     del material.sha256
     db = FakeDatabase([file, material])
     source = FakeProvider({file.storage_key: b"hello storage", material.storage_key: b"hello storage"})

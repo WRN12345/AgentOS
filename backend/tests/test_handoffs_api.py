@@ -1,4 +1,4 @@
-"""Handoff authorization, optimistic locking, and recipient-driven completion."""
+"""交接授权、乐观锁与接收方驱动的完成流程。"""
 
 import asyncio
 import uuid

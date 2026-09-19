@@ -1,4 +1,4 @@
-"""Allow verified storage relocation without changing immutable material evidence."""
+"""支持经过验证的存储迁移，同时保持材料证据不可变。"""
 
 from alembic import op
 

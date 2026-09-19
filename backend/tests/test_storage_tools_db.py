@@ -1,4 +1,4 @@
-"""Verify operational SQL against both persisted file-record models."""
+"""针对两种持久化文件记录模型验证运维 SQL。"""
 
 import hashlib
 import uuid
@@ -52,7 +52,7 @@ async def test_mixed_file_records_migrate_snapshot_restore(project, leader, admi
     await import_snapshot(snapshot, apply=True, provider_for=lambda _: restored)
     for key in keys:
         assert await restored.load(key) == content
-    # Relocation changes only the backend. Original evidence remains immutable.
+    # 存储迁移仅更改存储后端，原始证据保持不可变。
     for statement in (
         update(Material).where(Material.id == file_id).values(storage_backend="local", original_filename="changed.txt"),
         update(Material).where(Material.id == file_id).values(storage_backend="unsupported"),

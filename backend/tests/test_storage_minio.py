@@ -1,4 +1,4 @@
-"""MinIO contract tests using deterministic SDK responses, without an object server."""
+"""使用确定性 SDK 响应的 MinIO 契约测试，无需对象存储服务器。"""
 
 import asyncio
 import io

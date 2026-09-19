@@ -460,7 +460,7 @@ async def test_discussion_migration_retains_legacy_question(client, project_a, l
         assert discussion[0]["author_id"] == str(leader.user_id)
         assert discussion[0]["author_role"] == "leader"
         assert discussion[0]["created_at"] is None and discussion[0]["version"] is None
-        # Transaction rollback restores the test schema and data.
+        # 事务回滚会恢复测试数据库结构和数据。
 
 
 @pytest.mark.parametrize("field,value,expected", [

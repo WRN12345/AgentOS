@@ -1,4 +1,4 @@
-"""Sequential streams and cancellation-safe threaded storage operations."""
+"""顺序流与可安全处理取消的线程化存储操作。"""
 
 import asyncio
 from io import UnsupportedOperation
@@ -8,7 +8,7 @@ from app.infrastructure.storage.provider import StagedUpload
 
 
 async def run_sync(function, *args, on_cancel=None, **kwargs):
-    # A thread keeps running after task cancellation. Join it before closing resources.
+    # 任务取消后线程仍会继续运行；关闭资源前需等待线程结束。
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
     cancelled = None
     while not task.done():

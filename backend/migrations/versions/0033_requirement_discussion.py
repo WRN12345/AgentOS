@@ -1,4 +1,4 @@
-"""Preserve multi-round requirement clarification history."""
+"""保留多轮需求澄清历史。"""
 
 from alembic import op
 import sqlalchemy as sa
@@ -13,7 +13,7 @@ depends_on = None
 def upgrade():
     op.add_column("project_requirements", sa.Column(
         "discussion", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")))
-    # The old field retained only the latest question, without its original time/version.
+    # 旧字段仅保留最新问题，不含其原始时间和版本。
     op.execute("""
         UPDATE project_requirements r
         SET discussion = jsonb_build_array(jsonb_build_object(

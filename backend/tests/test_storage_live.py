@@ -1,4 +1,4 @@
-"""Opt-in real MinIO contract tests against a disposable test server."""
+"""按需启用的真实 MinIO 契约测试，使用一次性测试服务器。"""
 
 import hashlib
 import os
