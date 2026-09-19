@@ -125,7 +125,9 @@ export default function DashboardPage() {
       </div>
 
       {/* 统计卡：点击跳转到对应页面 */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div
+        className={`grid grid-cols-1 gap-3 ${isLeader ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}
+      >
         <StatCard label="我的进行中任务" value={inProgressCount} to="/work-items" />
         <StatCard
           label="今日到期 / 已逾期"
