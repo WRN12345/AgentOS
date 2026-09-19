@@ -42,7 +42,7 @@ interface CreateProjectDialogProps {
 }
 
 /**
- * 管理控制台"新建项目"对话框（ticket 10）：
+ * 管理控制台"新建项目"对话框：
  * admin 输入完整用户名解析指定负责人（无搜索端点），创建后该负责人成为项目的 leader 成员。
  */
 export function CreateProjectDialog({

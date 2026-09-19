@@ -42,7 +42,7 @@ function makeProposal(overrides: Partial<AgentSuggestion> = {}): AgentSuggestion
   };
 }
 
-describe("核心记忆提议确认入口（M4.8）", () => {
+describe("核心记忆提议确认入口", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeLeader());
@@ -59,7 +59,7 @@ describe("核心记忆提议确认入口（M4.8）", () => {
         screen.getByText("新增条目：改 X 表结构一定要同步改 Y"),
       ).toBeInTheDocument(),
     );
-    expect(screen.getByText("核心记忆提议")).toBeInTheDocument();
+    expect(screen.getByText("项目约定提议")).toBeInTheDocument();
 
     // 操作按钮在展开详情内
     await userEvent.setup().click(screen.getByText("展开详情"));
@@ -74,7 +74,7 @@ describe("核心记忆提议确认入口（M4.8）", () => {
       ),
     );
     await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith("已确认，核心记忆已生效"),
+      expect(toast.success).toHaveBeenCalledWith("已确认，项目约定已生效"),
     );
   });
 
@@ -98,7 +98,7 @@ describe("核心记忆提议确认入口（M4.8）", () => {
     );
   });
 
-  it("过期提议展示已过期样式且不可再确认（16.6）", async () => {
+  it("过期提议展示已过期样式且不可再确认", async () => {
     stubGet({
       "/agent-suggestions": [makeProposal({ review_status: "expired" })],
     });

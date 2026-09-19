@@ -56,7 +56,7 @@ function makeAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
 
 /**
  * 管理控制台：侧边导航与项目、账号、审计管理操作。
- * 全部接口为 admin-only，管理员无项目上下文，接口不携带 X-Project-Id。
+ * 全部接口仅限管理员访问，管理员无项目上下文，接口不携带 X-Project-Id。
  */
 describe("AdminConsolePage 管理控制台", () => {
   beforeEach(() => {

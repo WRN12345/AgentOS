@@ -51,7 +51,7 @@ const requestedCollab: CollaborationRequestSummary = {
   updated_at: "2026-01-01T00:00:00Z",
 };
 
-/** 协作请求区组件测试（18.2 节）：列表渲染、身份相关操作、发起表单校验与提交。 */
+/** 协作请求区组件测试：列表渲染、身份相关操作、发起表单校验与提交。 */
 describe("CollaborationSection 协作请求", () => {
   beforeEach(() => {
     vi.clearAllMocks();

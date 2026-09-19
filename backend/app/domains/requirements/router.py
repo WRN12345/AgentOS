@@ -6,11 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
+from app.agents.schemas.analysis import AgentRunOut
+from app.agents.service import request_agent_analysis
 from app.core.errors import ApiException, ErrorCodes
+from app.core.idempotency import idempotency_guard
+from app.core.request_context import get_request_id
 from app.domains.files.router import _content_disposition
 from app.domains.identity.models import User
 from app.domains.project.dependencies import get_current_admin, get_current_leader
-from app.domains.project.models import ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.requirements.models import Analysis, Material, Requirement
 from app.domains.requirements.schemas import (
     AnalysisIn, AnalysisOut, ClarifyIn, EditIn, MaterialOut, ReplyIn, RequirementOut, VersionIn,
@@ -19,7 +23,8 @@ from app.domains.requirements.service import (
     audit, command, project_exists, requirement_out, start_analysis, upload_material,
 )
 from app.infrastructure.database.engine import get_session
-from app.infrastructure.storage.provider import StorageProvider, get_storage_provider
+from app.infrastructure.cache.redis import create_redis_client
+from app.infrastructure.storage.provider import StorageProvider, get_storage_provider, storage_for
 
 router = APIRouter(tags=["requirements"])
 admin = APIRouter(prefix="/admin/projects/{project_id}")
@@ -46,7 +51,11 @@ async def download(project_id: uuid.UUID, material_id: uuid.UUID,
                    provider: StorageProvider = Depends(get_storage_provider)):
     material = await session.scalar(select(Material).options(defer(Material.chunks)).where(
         Material.id == material_id, Material.project_id == project_id))
-    if material is None or material.storage_backend != provider.backend_name or not await provider.exists(material.storage_key):
+    if material is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "Material not found")
+    if material.storage_backend != provider.backend_name:
+        provider = storage_for(material.storage_backend)
+    if not await provider.exists(material.storage_key):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "Material not found")
     await audit(session, "material_downloaded", actor.id, material)
     await session.commit()
@@ -124,3 +133,38 @@ async def accept(requirement_id: uuid.UUID, body: VersionIn,
 async def clarify(requirement_id: uuid.UUID, body: ClarifyIn,
                   actor: ProjectMember = Depends(get_current_leader), session: AsyncSession = Depends(get_session)):
     return await command(session, actor.project_id, requirement_id, actor, body.version, "clarify", note=body.note)
+
+
+@router.post("/project-requirements/{requirement_id}/agent-analysis", response_model=AgentRunOut, status_code=202)
+async def decompose(requirement_id: uuid.UUID, body: VersionIn,
+                    actor: ProjectMember = Depends(get_current_leader),
+                    _: None = Depends(idempotency_guard), session: AsyncSession = Depends(get_session)):
+    item = await session.scalar(select(Requirement).where(
+        Requirement.id == requirement_id, Requirement.project_id == actor.project_id,
+        Requirement.assignee_id == actor.id,
+    ).with_for_update())
+    if item is None:
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "需求不存在")
+    current = await session.scalar(select(ProjectMember).join(User, User.id == ProjectMember.user_id).where(
+        ProjectMember.id == actor.id, ProjectMember.project_id == actor.project_id,
+        ProjectMember.role == ROLE_LEADER, ProjectMember.is_active.is_(True), User.is_active.is_(True),
+    ).with_for_update())
+    if current is None:
+        raise ApiException(403, ErrorCodes.FORBIDDEN, "仅当前有效的需求负责人可发起拆解")
+    if item.version != body.version:
+        raise ApiException(409, "REQUIREMENT_VERSION_CONFLICT", "需求已有新版本，请刷新后重试")
+    if item.status != "accepted":
+        raise ApiException(409, ErrorCodes.VALIDATION_ERROR, "请先接收该项需求，再进行 AI 拆解")
+
+    # 仅传入需求内容快照，避免字段名和 ID 被 pipeline 误识别为指定人选。
+    prompt = "\n\n".join((item.title, item.description, item.acceptance_criteria))
+    await audit(session, "decomposition_requested", actor.user_id, item)
+    redis_client = create_redis_client()
+    try:
+        run = await request_agent_analysis(
+            session, redis_client, agent_type="requirement_pipeline", project_id=actor.project_id,
+            prompt=prompt, request_id=get_request_id() or None,
+        )
+    finally:
+        await redis_client.aclose()
+    return AgentRunOut.model_validate(run, from_attributes=True)

@@ -10,6 +10,7 @@ export const STATUS_META: Record<
   IN_PROGRESS: { label: "进行中", className: "bg-amber-100 text-amber-700" },
   BLOCKED: { label: "阻塞", className: "bg-red-100 text-red-700" },
   IN_REVIEW: { label: "审核中", className: "bg-purple-100 text-purple-700" },
+  WAITING_ACCEPTANCE: { label: "待接收", className: "bg-cyan-100 text-cyan-700" },
   COMPLETED: { label: "已完成", className: "bg-green-100 text-green-700" },
   CANCELLED: { label: "已取消", className: "bg-muted text-muted-foreground line-through" },
 };
@@ -24,7 +25,7 @@ export const PRIORITY_META: Record<
   urgent: { label: "紧急", className: "bg-red-100 text-red-700" },
 };
 
-/** 开发文档状态中文文案与徽标样式（2026-07-30 设计文档 §4.1）。 */
+/** 开发文档状态中文文案与徽标样式。 */
 export const DEV_DOC_STATUS_META: Record<
   DevDocStatus,
   { label: string; className: string }

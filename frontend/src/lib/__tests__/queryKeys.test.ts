@@ -5,7 +5,7 @@ import { makeProject } from "../../test/fixtures";
 import { queryKeys } from "../queryKeys";
 
 /**
- * queryKeys 项目感知键工厂（ticket 08 ③）：
+ * queryKeys 项目感知键工厂：
  * 选定项目后业务缓存键以项目 id 打头，隔离跨项目数据；
  * 未选项目（登录分流前 / 全局管理员）不加前缀。
  */

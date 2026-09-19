@@ -9,7 +9,13 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.agents.prompts import dev_doc_review as dev_doc_review_prompts
-from app.agents.specialists.common import build_output, call_model_json, context_project_id
+from app.agents.specialists.common import (
+    build_output,
+    call_model_json,
+    context_project_id,
+    load_review_core_memory,
+    review_context_snapshot,
+)
 from app.agents.tools import TOOL_REGISTRY
 from app.infrastructure.database.engine import async_session_factory
 
@@ -18,7 +24,7 @@ if TYPE_CHECKING:  # graphs.base 会注册本能力，此处仅在类型检查�
 
 AGENT_TYPE = "dev_doc_review"
 SUGGESTION_TYPE = "dev_doc_review"
-PROMPT_VERSION = "dev_doc_review.v1"
+PROMPT_VERSION = "dev_doc_review.v2"
 
 
 async def dev_doc_review_capability(state: "AgentGraphState") -> Any:
@@ -34,12 +40,15 @@ async def dev_doc_review_capability(state: "AgentGraphState") -> Any:
         dev_doc = await TOOL_REGISTRY["get_dev_doc"].func(
             session, work_item_id, project_id=project_id
         )
+        core_memory, core_memory_loaded = await load_review_core_memory(session, project_id)
 
     context = state.get("context", {})
     user_prompt = dev_doc_review_prompts.render_user_prompt(
         project_name=(context.get("project") or {}).get("name") or "",
         work_item=overview,
         dev_doc=dev_doc,
+        core_memory=core_memory,
+        core_memory_loaded=core_memory_loaded,
     )
     raw = await call_model_json(
         system=dev_doc_review_prompts.SYSTEM_PROMPT, user_prompt=user_prompt
@@ -48,9 +57,15 @@ async def dev_doc_review_capability(state: "AgentGraphState") -> Any:
     fact_refs: dict[str, list[str]] = {"work_item_ids": [str(work_item_id)]}
     if dev_doc is not None:
         fact_refs["dev_doc_ids"] = [dev_doc["id"]]
+    if core_memory:
+        fact_refs["core_memory_ids"] = [entry["id"] for entry in core_memory]
     return build_output(
         raw,
         suggestion_type=SUGGESTION_TYPE,
         prompt_version=PROMPT_VERSION,
         fact_refs=fact_refs,
+        review_context=review_context_snapshot(
+            work_item=overview, dev_doc=dev_doc, deliverable=None,
+            core_memory=core_memory, core_memory_loaded=core_memory_loaded,
+        ),
     )

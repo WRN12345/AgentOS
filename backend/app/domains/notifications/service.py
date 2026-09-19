@@ -8,7 +8,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiException, ErrorCodes
@@ -105,6 +105,25 @@ async def list_mine(
         )
     ).scalar_one()
     return items, unread_count
+
+
+async def mark_all_read(
+    session: AsyncSession,
+    recipient_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID,
+) -> None:
+    """批量标记本人在当前项目的未读通知，保留已有已读时间。"""
+    await session.execute(
+        update(Notification)
+        .where(
+            Notification.recipient_id == recipient_id,
+            Notification.project_id == project_id,
+            Notification.is_read.is_(False),
+        )
+        .values(is_read=True, read_at=datetime.now(UTC))
+    )
+    await session.commit()
 
 
 async def mark_read(

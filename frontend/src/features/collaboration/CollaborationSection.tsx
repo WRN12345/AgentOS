@@ -86,7 +86,7 @@ interface Props {
   members: Member[];
 }
 
-/** 工作项详情页协作区（13.2 节"我的协作"）：列表、发起、按身份与状态的状态机操作。 */
+/** 工作项详情页协作区：列表、发起、按身份与状态的状态机操作。 */
 export function CollaborationSection({ workItem, members }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
@@ -242,7 +242,7 @@ export function CollaborationSection({ workItem, members }: Props) {
     (m) => m.is_active && m.id !== selfMember?.id,
   );
 
-  /** 按当前用户身份（发起人/接收人）与状态计算可见操作（8.2 节状态机）。 */
+  /** 按当前用户身份（发起人/接收人）与状态计算可见操作。 */
   const actionsFor = (c: CollaborationRequestSummary) => {
     const isRequester = selfMember?.id === c.requester.id;
     const isAssignee = selfMember?.id === c.assignee.id;

@@ -5,7 +5,7 @@ import { useAuthStore } from "../app/store";
 import { queryKeys } from "../lib/queryKeys";
 import type { RealtimeEvent } from "../types";
 
-/** 后端会推送的事件类型（4.3 节，T3.6）：EventSource 对命名事件需逐一监听。 */
+/** 后端会推送的事件类型：EventSource 对命名事件需逐一监听。 */
 const EVENT_TYPES = [
   "work_item.created",
   "work_item.updated",
@@ -39,7 +39,10 @@ const EVENT_TYPES = [
   "review.approved",
   "review.changes_requested",
   "review.rejected",
-  // T5.7：Agent 分析完成（4.3 节），触发建议中心自动刷新
+  "handoff.created",
+  "handoff.accepted",
+  "handoff.changes_requested",
+  // Agent 分析完成，触发建议中心自动刷新
   "agent.suggestion_ready",
   "requirements.dispatched",
   "requirements.replied",
@@ -63,11 +66,20 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       break;
     case "work_item":
       queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
+      break;
+    case "handoff":
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffs() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.deliverables() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.members() });
       break;
     case "collaboration":
       queryClient.invalidateQueries({ queryKey: queryKeys.collaborationRequests() });
       break;
     case "transfer":
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
       queryClient.invalidateQueries({ queryKey: queryKeys.transferRequests() });
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       // 转派通过会变更主执行人
@@ -86,6 +98,7 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       break;
     case "member":
       queryClient.invalidateQueries({ queryKey: queryKeys.members() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.handoffTargets() });
       break;
     case "review":
       // 审核结论推进工作项状态，并产生新的 reviews 记录与审批中心变化
@@ -94,7 +107,7 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
       break;
     case "agent":
-      // Agent 分析完成：刷新建议中心与运行记录（4.3 节，T5.7）
+      // Agent 分析完成：刷新建议中心与运行记录
       queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
       queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns() });
       break;
@@ -102,12 +115,12 @@ function invalidateForEvent(queryClient: QueryClient, type: string) {
 }
 
 /**
- * 项目 SSE 接入（4.3、12.6 节）：AppLayout 层建立 EventSource，
+ * 项目 SSE 接入：AppLayout 层建立 EventSource，
  * 收到事件后失效对应查询缓存实现自动刷新；reminder.* 弹 Sonner 提示。
  *
  * - EventSource 无法自定义请求头，token 与项目上下文走查询参数（nginx 已配流式转发）；
  * - accessToken / currentProject 变化（登录/刷新/登出/切换项目）时自动重连或关闭；
- * - 未选定项目（全局管理员 / 登录分流前）不建立连接，全局流属管理控制台（ticket 10）；
+ * - 未选定项目（全局管理员 / 登录分流前）不建立连接，全局流属管理控制台；
  * - 断线由浏览器 EventSource 自动重连，重连期间漏发的事件
  *   由"收到任意事件即失效相关缓存"兜底（与后端约定一致）。
  */

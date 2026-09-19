@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.handoffs.policy import ensure_no_pending_handoff
 from app.domains.notifications.service import notify
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.transfers.models import TransferRequest
@@ -292,9 +293,10 @@ async def create_transfer_request(
     commit 后发布实时事件。
     """
     events: list[OutgoingEvent] = []
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权按不存在处理
+    item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     if item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可发起转派申请")
+    await ensure_no_pending_handoff(session, item.id)
     if payload.to_member_id == actor.id:
         raise ApiException(422, ErrorCodes.VALIDATION_ERROR, "转派目标不能是发起人自己")
     to_member = await _get_active_member(
@@ -394,7 +396,10 @@ async def approve_transfer(
 
     # 审批时重新校验，避免转派给申请后被禁用的成员
     to_member = await _get_active_member(session, request.to_member_id, project_id=actor.project_id)
-    item = await get_work_item(session, request.work_item_id, project_id=actor.project_id)
+    item = await get_work_item(
+        session, request.work_item_id, for_update=True, project_id=actor.project_id
+    )
+    await ensure_no_pending_handoff(session, item.id)
 
     before_assignee = item.assignee_id
     item.assignee_id = to_member.id

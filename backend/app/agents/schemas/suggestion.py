@@ -126,6 +126,7 @@ class DevDocReviewSuggestionContent(SuggestionContent):
     alignment: str = Field(min_length=1)
     verdict: Literal["sufficient", "needs_work"]
     risks: list[str]
+    review_context: dict[str, Any] | None = None
 
 
 #: 特定 suggestion_type 需在通用 Schema 之外追加严格 content 校验。

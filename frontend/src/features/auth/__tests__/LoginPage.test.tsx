@@ -20,7 +20,7 @@ import { mockApi } from "../../../test/mock-api";
 import { renderWithProviders } from "../../../test/render";
 import { makeMember, makeProject, makeUser, tokens } from "../../../test/fixtures";
 
-/** 登录页组件测试（18.2 节 + ticket 09 分流时序）。 */
+/** 登录页组件测试（登录分流时序）。 */
 describe("LoginPage 登录表单", () => {
   beforeEach(() => {
     vi.clearAllMocks();

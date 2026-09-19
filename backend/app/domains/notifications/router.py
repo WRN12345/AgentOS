@@ -5,11 +5,11 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.notifications.schemas import NotificationListOut, NotificationOut
-from app.domains.notifications.service import list_mine, mark_read, to_out
+from app.domains.notifications.service import list_mine, mark_all_read, mark_read, to_out
 from app.domains.project.dependencies import get_current_member
 from app.domains.project.models import ProjectMember
 from app.infrastructure.database.engine import get_session
@@ -34,6 +34,15 @@ async def list_notifications_endpoint(
         offset=offset,
     )
     return NotificationListOut(items=[to_out(n) for n in items], unread_count=unread_count)
+
+
+@router.post("/read-all", status_code=204)
+async def mark_all_read_endpoint(
+    actor: ProjectMember = Depends(get_current_member),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    await mark_all_read(session, actor.id, project_id=actor.project_id)
+    return Response(status_code=204)
 
 
 @router.post("/{notification_id}/read", response_model=NotificationOut)

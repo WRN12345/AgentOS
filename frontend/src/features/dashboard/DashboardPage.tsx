@@ -39,6 +39,7 @@ import {
 } from "../agent-assistant/constants";
 import { RequirementPipelineWizard } from "../agent-assistant/RequirementPipelineWizard";
 import { TodoSection } from "./TodoSection";
+import { HandoffInbox } from "./HandoffInbox";
 import { ACTIVE_STATUSES, StatCard, daysUntil } from "./shared";
 import { queryKeys } from "../../lib/queryKeys";
 
@@ -68,7 +69,7 @@ export default function DashboardPage() {
     queryFn: () => api.get<ApprovalItem[]>("/approvals"),
     enabled: isLeader,
   });
-  // AI 动态 + 待反馈建议数（列表全员可读，反馈操作仅负责人）
+  // AI 动态 + 待反馈建议数（后端按任务可见范围过滤，反馈操作仅负责人）
   const { data: suggestions } = useQuery({
     queryKey: queryKeys.agentSuggestions("dashboard"),
     queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),
@@ -125,8 +126,11 @@ export default function DashboardPage() {
       </div>
 
       {/* 统计卡：点击跳转到对应页面 */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div
+        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${isLeader ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}
+      >
         <StatCard label="我的进行中任务" value={inProgressCount} to="/work-items" />
+        <StatCard label="我的待接收任务" value={myItems.filter((i) => i.status === "WAITING_ACCEPTANCE").length} to="/work-items" />
         <StatCard
           label="今日到期 / 已逾期"
           value={dueTodayCount + overdueCount}
@@ -149,8 +153,9 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          {/* 待处理中心：需要当前用户动作的事项聚合（13.2 节） */}
+          {/* 待处理中心：需要当前用户动作的事项聚合 */}
           <TodoSection />
+          <HandoffInbox />
 
           {/* 我的待办：我作为主执行人的未完成任务，按 DDL 升序；超长内部滚动 */}
           <Card>

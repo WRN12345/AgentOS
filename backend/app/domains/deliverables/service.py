@@ -26,6 +26,7 @@ from app.domains.deliverables.schemas import (
 )
 from app.domains.files.models import StoredFile
 from app.domains.files.service import get_stored_file, is_work_item_related
+from app.domains.handoffs.policy import ensure_no_pending_handoff
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.reviews.models import Review
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
@@ -304,9 +305,10 @@ async def create_deliverable(
     session: AsyncSession, actor: ProjectMember, item_id: uuid.UUID, payload: DeliverableCreateIn
 ) -> DeliverableOut:
     """由当前主执行人提交新版本；终态工作项拒绝提交并记录审计。"""
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权 → 404
+    item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     if item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅工作项当前主执行人可提交交付物")
+    await ensure_no_pending_handoff(session, item.id)
     if item.status in (WorkItemStatus.COMPLETED.value, WorkItemStatus.CANCELLED.value):
         raise ApiException(
             409,

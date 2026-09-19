@@ -17,7 +17,7 @@ import { loadProjects, logout, selectProject } from "./session";
 import type { MyProject } from "../../types";
 
 /**
- * 项目选择页（ticket 09）：登录分流后普通用户在此选择进入哪个项目。
+ * 项目选择页：登录分流后普通用户在此选择进入哪个项目。
  * 列出我参与的项目（带角色徽章），点选即选定并进入工作台。
  * 每次进入都重拉最新列表，避免持久化的旧列表误导选择。
  */

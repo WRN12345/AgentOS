@@ -1,8 +1,8 @@
 """工作项接口。
 
-- GET    /work-items                  任何成员：全量列表（assignee_id/status/due 区间过滤）
+- GET    /work-items                  负责人：全量；成员：主执行或协作的任务
 - POST   /work-items                  仅负责人：创建（初始 DRAFT）
-- GET    /work-items/{id}             任何成员：详情
+- GET    /work-items/{id}             负责人、主执行人或协作者：详情
 - PATCH  /work-items/{id}             仅负责人：改内容/主执行人/DDL/协作者（携带 version）
 - POST   /work-items/{id}/publish     仅负责人：发布 DRAFT → READY
 - POST   /work-items/{id}/start       仅主执行人：READY → IN_PROGRESS
@@ -53,7 +53,7 @@ async def list_work_items_endpoint(
 ) -> list[WorkItemSummaryOut]:
     return await list_work_items(
         session,
-        project_id=actor.project_id,
+        actor=actor,
         assignee_id=assignee_id,
         status=status,
         due_from=due_from,
@@ -78,7 +78,7 @@ async def get_work_item_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> WorkItemOut:
     return await work_item_to_out(
-        session, await get_work_item(session, item_id, project_id=actor.project_id)
+        session, await get_work_item(session, item_id, viewer=actor)
     )
 
 

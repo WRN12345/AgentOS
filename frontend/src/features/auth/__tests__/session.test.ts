@@ -16,7 +16,7 @@ afterEach(() => {
   useAuthStore.getState().clear();
 });
 
-/** 24h 记忆窗口：登录时据此决定直接进入上次项目还是进选择页（ticket 09）。 */
+/** 24h 记忆窗口：登录时据此决定直接进入上次项目还是进选择页。 */
 describe("session 项目记忆窗口", () => {
   it("isProjectRemembered：有 24h 内的时间戳才记为可直入", () => {
     expect(isProjectRemembered(null)).toBe(false);

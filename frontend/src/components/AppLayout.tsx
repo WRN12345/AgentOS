@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   BarChart3,
@@ -26,27 +24,43 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { roleBadgeVariant, roleLabel } from "@/lib/roles";
-import { api } from "../services/api";
 import { useAuthStore, useIsLeader } from "../app/store";
 import { logout } from "../features/auth/session";
 import { useEventStream } from "../services/events";
 import { NotificationBell } from "../features/notifications/NotificationBell";
-import { RequirementPipelineWizard } from "../features/agent-assistant/RequirementPipelineWizard";
-import type { AgentConfig, Member } from "../types";
-import { queryKeys } from "../lib/queryKeys";
 
-const navItems = [
-  { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
-  { to: "/team-overview", label: "团队概览", icon: BarChart3, end: false },
-  { to: "/members", label: "成员与能力", icon: Users, end: false },
-  { to: "/work-items", label: "任务", icon: ListTodo, end: false },
-  { to: "/project-requirements", label: "项目需求", icon: ClipboardCheck, end: false },
-  { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },
-  { to: "/deliverables", label: "交付物", icon: Package, end: false },
-  { to: "/agent-assistant", label: "AI 助手", icon: Bot, end: false },
-  { to: "/documents", label: "知识库文档", icon: BookOpen, end: false },
-  { to: "/core-memory", label: "核心记忆", icon: Sparkles, end: false },
-  { to: "/knowledge-qa", label: "知识库问答", icon: HelpCircle, end: false },
+const navGroups = [
+  {
+    label: "概览",
+    items: [
+      { to: "/", label: "工作台", icon: LayoutDashboard, end: true },
+      { to: "/team-overview", label: "团队概览", icon: BarChart3, end: false },
+    ],
+  },
+  {
+    label: "项目协作",
+    items: [
+      { to: "/project-requirements", label: "项目需求", icon: ClipboardCheck, end: false },
+      { to: "/work-items", label: "任务", icon: ListTodo, end: false },
+      { to: "/deliverables", label: "交付物", icon: Package, end: false },
+      { to: "/approvals", label: "审批中心", icon: ClipboardCheck, end: false },
+    ],
+  },
+  {
+    label: "团队与 AI",
+    items: [
+      { to: "/members", label: "成员与能力", icon: Users, end: false },
+      { to: "/agent-assistant", label: "AI 建议与运行", icon: Bot, end: false },
+    ],
+  },
+  {
+    label: "知识库",
+    items: [
+      { to: "/documents", label: "知识库文档", icon: BookOpen, end: false },
+      { to: "/core-memory", label: "项目约定", icon: Sparkles, end: false },
+      { to: "/knowledge-qa", label: "知识库问答", icon: HelpCircle, end: false },
+    ],
+  },
 ];
 
 /** 应用主布局：左侧导航 + 顶栏当前用户与登出入口。 */
@@ -54,22 +68,9 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const isLeader = useIsLeader();
   const { user, member, currentProject } = useAuthStore();
-  const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局 SSE：收到实时事件后失效对应查询缓存，页面无需手动刷新
   useEventStream();
-
-  // 顶栏「AI 需求拆解」向导所需数据（仅负责人可见该入口）
-  const { data: members } = useQuery({
-    queryKey: queryKeys.members(),
-    queryFn: () => api.get<Member[]>("/members"),
-    enabled: isLeader,
-  });
-  const { data: config } = useQuery({
-    queryKey: ["config"],
-    queryFn: () => api.get<AgentConfig>("/config"),
-    enabled: isLeader,
-  });
 
   const handleLogout = async () => {
     // 撤销 Refresh Token 并清空本地登录态（session.logout 统一实现）
@@ -87,25 +88,37 @@ export default function AppLayout() {
           <span className="text-lg font-semibold">AgentOS</span>
         </div>
         <Separator />
-        <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-          {navItems.filter(item => item.to !== "/project-requirements" || isLeader).map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-                )
-              }
-            >
-              <Icon className="size-4" />
-              {label}
-            </NavLink>
-          ))}
+        <nav className="flex-1 space-y-4 overflow-y-auto p-2">
+          {navGroups.map((group) => {
+            const items = group.items.filter(
+              (item) => isLeader || !["/project-requirements", "/agent-assistant"].includes(item.to),
+            );
+            if (items.length === 0) return null;
+
+            return (
+              <section key={group.label} aria-label={group.label} className="space-y-1">
+                <h2 className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                  {group.label}
+                </h2>
+                {items.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end}
+                    className={({ isActive }) => cn(
+                      "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground",
+                    )}
+                  >
+                    <Icon className="size-4" />
+                    {label}
+                  </NavLink>
+                ))}
+              </section>
+            );
+          })}
         </nav>
       </aside>
 
@@ -124,16 +137,6 @@ export default function AppLayout() {
             )}
           </span>
           <div className="flex items-center gap-1">
-            {isLeader && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setWizardOpen(true)}
-              >
-                <Sparkles className="size-4" />
-                AI 需求拆解
-              </Button>
-            )}
             <NotificationBell />
             {/* 轻量下拉（不用 Radix）：部分环境下 Radix 触发器无响应，见 SimpleMenu 注释 */}
             <SimpleMenu
@@ -190,12 +193,6 @@ export default function AppLayout() {
         </main>
       </div>
 
-      <RequirementPipelineWizard
-        open={wizardOpen}
-        onOpenChange={setWizardOpen}
-        members={members ?? []}
-        llmIsExternal={config?.llm_is_external ?? false}
-      />
     </div>
   );
 }

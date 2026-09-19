@@ -29,54 +29,53 @@ import {
 import { useAuthStore, useIsLeader } from "../../app/store";
 import type { AgentSuggestion, DevDoc, WorkItem } from "../../types";
 import { DEV_DOC_STATUS_META, formatDateTime } from "./constants";
-import {
-  DEV_DOC_VERDICT_META,
-  SuggestionContent,
-} from "../agent-assistant/SuggestionContent";
+import { ReviewOpinion, TaskReviewPanel } from "./TaskReviewPanel";
 import { queryKeys } from "../../lib/queryKeys";
 
 interface Props {
   workItem: WorkItem;
 }
 
-/** AI 初审意见面板：按 latest_review_suggestion_id 从建议列表中定位；初审未产出（LLM 降级）时不渲染、不阻塞。 */
-export function DevDocReviewPanel({ suggestionId }: { suggestionId: string }) {
+export function DevDocReviewPanel({
+  suggestionId,
+  workItemId,
+}: {
+  suggestionId: string;
+  workItemId?: string;
+}) {
   const { data: suggestions } = useQuery({
-    queryKey: queryKeys.agentSuggestions("dev-doc-review", suggestionId),
-    queryFn: () => api.get<AgentSuggestion[]>("/agent-suggestions?limit=50"),
+    queryKey: queryKeys.agentSuggestions(
+      "task-review",
+      workItemId,
+      "dev_doc_review",
+    ),
+    queryFn: () =>
+      api.get<AgentSuggestion[]>(
+        `/agent-suggestions?${new URLSearchParams({ work_item_id: workItemId!, suggestion_type: "dev_doc_review" })}`,
+      ),
+    enabled: !!workItemId,
+    refetchInterval: 5000,
+    retry: false,
   });
   const suggestion = suggestions?.find((s) => s.id === suggestionId);
   if (!suggestion) {
     return null;
   }
-  const verdict =
-    typeof suggestion.content.verdict === "string"
-      ? suggestion.content.verdict
-      : "";
-  const verdictMeta = DEV_DOC_VERDICT_META[verdict];
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <h4 className="font-medium">AI 初审意见</h4>
-        {verdict && (
-          <Badge className={verdictMeta?.className ?? ""}>
-            {verdictMeta?.label ?? verdict}
-          </Badge>
-        )}
         <span className="text-xs text-muted-foreground">
           仅供参考，确认由负责人决定
         </span>
       </div>
-      <SuggestionContent
-        suggestionType={suggestion.suggestion_type}
-        content={suggestion.content}
-      />
+      <ReviewOpinion suggestion={suggestion} />
     </div>
   );
 }
 
 /**
- * 开发文档区（2026-07-30 设计文档 §5）：先文档后开发。
+ * 开发文档区：先文档后开发。
  * 主执行人：撰写/编辑（textarea + 预览切换）、保存草稿、提交审核；被打回显示理由可重交。
  * 负责人：只读查看 + 确认/打回/豁免。无文档时 GET 返回 404，按"未创建"处理。
  */
@@ -91,7 +90,11 @@ export function DevDocSection({ workItem }: Props) {
   const [returnOpen, setReturnOpen] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
 
-  const { data: doc, isLoading, error } = useQuery({
+  const {
+    data: doc,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: queryKeys.devDoc(workItem.id),
     queryFn: () => api.get<DevDoc>(`/work-items/${workItem.id}/dev-doc`),
     retry: false,
@@ -108,6 +111,7 @@ export function DevDocSection({ workItem }: Props) {
     queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
     queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
     queryClient.invalidateQueries({ queryKey: queryKeys.agentSuggestions() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns() });
   };
 
   const onError = (fallback: string) => (e: unknown) => {
@@ -303,9 +307,12 @@ export function DevDocSection({ workItem }: Props) {
           )
         )}
 
-        {doc?.latest_review_suggestion_id && (
-          <DevDocReviewPanel suggestionId={doc.latest_review_suggestion_id} />
-        )}
+        <TaskReviewPanel
+          workItemId={workItem.id}
+          workItem={workItem}
+          agentType="dev_doc_review"
+          devDoc={doc ?? null}
+        />
 
         {doc?.confirmed_at && (
           <p className="text-xs text-muted-foreground">

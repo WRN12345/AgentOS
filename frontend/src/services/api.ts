@@ -25,7 +25,7 @@ export class ApiError extends Error {
 
 const BASE_URL = "/api/v1";
 
-/** 版本冲突提示文案（T2.7 验收要求）。 */
+/** 版本冲突提示文案。 */
 export const VERSION_CONFLICT_MESSAGE =
   "任务已被其他成员更新，请刷新后重试";
 
@@ -38,8 +38,8 @@ export function newIdempotencyKey(): string {
   }
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // 版本 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // 变体位为 10xx
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
   return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
     .slice(6, 8)
@@ -133,7 +133,7 @@ async function request<T>(
   // Access Token 过期：刷新后重试一次
   if (response.status === 401 && token && !options.retried) {
     if (await tryRefreshToken()) {
-      return request<T>(path, init, { ...options, retried: true });
+      return request<T>(path, { ...init, headers }, { ...options, retried: true });
     }
   }
 

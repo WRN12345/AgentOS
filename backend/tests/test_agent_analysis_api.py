@@ -4,11 +4,17 @@
 未注册 Agent 类型应得到对应的拒绝响应。
 """
 
+import uuid
+
 import httpx
+import pytest
 from sqlalchemy import select
 
-from app.agents.models import AgentRun
+from app.agents.graphs.base import AGENT_ROUTES
+from app.agents.models import AgentRun, AgentSuggestion
+from app.domains.collaboration.models import CollaborationRequest
 from app.domains.project.models import Project
+from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.database.engine import async_session_factory
 from app.infrastructure.queue.queue import QUEUE_KEY, dequeue
@@ -81,16 +87,19 @@ async def test_leader_can_trigger_agent_analysis(
         await redis_client.aclose()
 
 
-async def test_related_member_can_trigger(client: httpx.AsyncClient, project: Project) -> None:
+@pytest.mark.parametrize("agent_type", ["dev_doc_review", "deliverable_review"])
+async def test_related_member_can_trigger(
+    client: httpx.AsyncClient, project: Project, agent_type: str
+) -> None:
     """工作项主执行人应有权触发分析。"""
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]
-        json={"agent_type": "assignment_advisor"},
+        json={"agent_type": agent_type},
         headers=ctx["alice_headers"],  # type: ignore[arg-type]
     )
     assert resp.status_code == 202, resp.text
-    assert resp.json()["agent_type"] == "assignment_advisor"
+    assert resp.json()["agent_type"] == agent_type
 
 
 async def test_unrelated_member_forbidden(client: httpx.AsyncClient, project: Project) -> None:
@@ -98,7 +107,7 @@ async def test_unrelated_member_forbidden(client: httpx.AsyncClient, project: Pr
     ctx = await _setup(client, project)
     resp = await client.post(
         _url(ctx["item_id"]),  # type: ignore[arg-type]
-        json={"agent_type": "planning_advisor"},
+        json={"agent_type": "dev_doc_review"},
         headers=ctx["bob_headers"],  # type: ignore[arg-type]
     )
     assert resp.status_code == 403
@@ -137,3 +146,120 @@ async def test_unauthenticated_rejected(client: httpx.AsyncClient, project: Proj
         json={"agent_type": "requirement_analyst"},
     )
     assert resp.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "agent_type", sorted(set(AGENT_ROUTES) - {"dev_doc_review", "deliverable_review"})
+)
+async def test_member_management_agents_forbidden(
+    client: httpx.AsyncClient, project: Project, agent_type: str
+) -> None:
+    ctx = await _setup(client, project)
+    redis_client = create_redis_client()
+    try:
+        await redis_client.delete(QUEUE_KEY)
+        for path in (_url(ctx["item_id"]), "/api/v1/agent-analysis"):
+            response = await client.post(
+                path, json={"agent_type": agent_type, "work_item_id": ctx["item_id"]},
+                headers=ctx["alice_headers"],
+            )
+            assert response.status_code == 403, response.text
+        async with async_session_factory() as session:
+            assert list((await session.execute(select(AgentRun))).scalars()) == []
+
+        created = await client.post(
+            _url(ctx["item_id"]), json={"agent_type": agent_type},
+            headers=ctx["leader_headers"],
+        )
+        assert created.status_code == 202, created.text
+        run_id = uuid.UUID(created.json()["id"])
+        async with async_session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            run.status = "failed"
+            run.error = "test failure"
+            await session.commit()
+        await redis_client.delete(QUEUE_KEY)
+        response = await client.post(
+            f"/api/v1/agent-runs/{run_id}/retry", headers=ctx["alice_headers"]
+        )
+        assert response.status_code == 403
+        assert await redis_client.llen(QUEUE_KEY) == 0
+        async with async_session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            assert run.status == "failed"
+            assert run.error == "test failure"
+        response = await client.post(
+            f"/api/v1/agent-runs/{run_id}/retry", headers=ctx["leader_headers"]
+        )
+        assert response.status_code == 202, response.text
+    finally:
+        await redis_client.aclose()
+
+
+@pytest.mark.parametrize("relation", ["assignee", "collaborator", "requester", "recipient"])
+@pytest.mark.parametrize("agent_type", ["dev_doc_review", "deliverable_review"])
+async def test_related_member_trigger_retry_and_read_results(
+    client: httpx.AsyncClient, project: Project, relation: str, agent_type: str
+) -> None:
+    ctx = await _setup(client, project)
+    item_id = uuid.UUID(ctx["item_id"])
+    alice, leader = ctx["alice"], ctx["leader"]
+    async with async_session_factory() as session:
+        item = await session.get(WorkItem, item_id)
+        if relation != "assignee":
+            item.assignee_id = leader.id
+        if relation == "collaborator":
+            session.add(WorkItemCollaborator(work_item_id=item_id, member_id=alice.id))
+        if relation in {"requester", "recipient"}:
+            # 发起人转派主任务后仍是协作请求的一方。
+            session.add(CollaborationRequest(
+                work_item_id=item_id,
+                requester_id=alice.id if relation == "requester" else leader.id,
+                assignee_id=alice.id if relation == "recipient" else leader.id,
+                title="Review context", goal="Provide context", status="COMPLETED",
+            ))
+        await session.commit()
+    response = await client.post(
+        _url(ctx["item_id"]), json={"agent_type": agent_type}, headers=ctx["alice_headers"]
+    )
+    assert response.status_code == 202, response.text
+    run_id = uuid.UUID(response.json()["id"])
+    async with async_session_factory() as session:
+        run = await session.get(AgentRun, run_id)
+        run.status = "failed"
+        await session.commit()
+    denied = await client.post(
+        f"/api/v1/agent-runs/{run_id}/retry", headers=ctx["bob_headers"]
+    )
+    assert denied.status_code == 403
+    response = await client.post(
+        f"/api/v1/agent-runs/{run_id}/retry", headers=ctx["alice_headers"]
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["id"] == str(run_id)
+    async with async_session_factory() as session:
+        run = await session.get(AgentRun, run_id)
+        run.status = "succeeded"
+        suggestion = AgentSuggestion(
+            run_id=run_id, suggestion_type=agent_type, content={"summary": "Reviewed"},
+            confidence=0.8, risks="", fact_refs={}, prompt_version="test.v1",
+        )
+        session.add(suggestion)
+        await session.commit()
+        suggestion_id = str(suggestion.id)
+    for path, expected_id in (("agent-runs", str(run_id)), ("agent-suggestions", suggestion_id)):
+        response = await client.get(
+            f"/api/v1/{path}?work_item_id={item_id}", headers=ctx["alice_headers"]
+        )
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == [expected_id]
+        denied = await client.get(
+            f"/api/v1/{path}?work_item_id={item_id}", headers=ctx["bob_headers"]
+        )
+        assert denied.json() == []
+    assert (await client.get(
+        f"/api/v1/agent-runs/{run_id}", headers=ctx["alice_headers"]
+    )).status_code == 200
+    assert (await client.get(
+        f"/api/v1/agent-runs/{run_id}", headers=ctx["bob_headers"]
+    )).status_code == 404

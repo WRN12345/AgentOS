@@ -59,8 +59,90 @@ async def test_stage_commit_atomic_and_discard(provider: StorageProvider, tmp_pa
 
 
 async def test_rejects_path_traversal_and_absolute_keys(provider: StorageProvider) -> None:
-    for bad_key in ("../escape.txt", "a/../../escape.txt", "/abs/path.txt", ""):
+    for bad_key in (
+        "../escape.txt", "a/../../escape.txt", "/abs/path.txt", "", "a\\b", ".", "a//b", "C:/file",
+    ):
         with pytest.raises(ValueError):
             await provider.exists(bad_key)
         with pytest.raises(ValueError):
             await provider.save(bad_key, b"x")
+
+
+async def test_open_sequential_lifecycle(provider: StorageProvider) -> None:
+    from io import UnsupportedOperation
+
+    async with provider.open("ab/file", "wb") as writer:
+        await writer.write(b"abc")
+        await writer.write(b"def")
+        assert not await provider.exists("ab/file")
+        with pytest.raises(UnsupportedOperation):
+            await writer.read()
+        assert not hasattr(writer, "seek")
+    assert writer.closed
+    with pytest.raises(ValueError):
+        await writer.write(b"late")
+
+    async with provider.open("ab/file", "rb") as reader:
+        assert await reader.read(2) == b"ab"
+        assert await reader.read(0) == b""
+        assert await reader.read() == b"cdef"
+        assert await reader.read() == b""
+        with pytest.raises(UnsupportedOperation):
+            await reader.write(b"x")
+        assert not hasattr(reader, "seek")
+    assert reader.closed
+    with pytest.raises(ValueError):
+        await reader.read()
+
+
+async def test_failed_open_preserves_previous_content(provider: StorageProvider, tmp_path: Path) -> None:
+    await provider.save("key", b"previous")
+    with pytest.raises(RuntimeError):
+        async with provider.open("key", "wb") as writer:
+            await writer.write(b"partial")
+            raise RuntimeError("aborted")
+    assert writer.closed
+    assert await provider.load("key") == b"previous"
+    assert list((tmp_path / ".tmp").iterdir()) == []
+
+
+@pytest.mark.parametrize("mode", ["r", "w", "ab", "r+b", "rb+", "", None])
+async def test_invalid_open_modes(provider: StorageProvider, mode) -> None:
+    with pytest.raises(ValueError, match="mode"):
+        async with provider.open("key", mode):
+            pass
+
+
+async def test_containment_symlinks(provider: StorageProvider, tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"secret")
+    (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
+    for operation in (provider.exists, provider.load, provider.delete):
+        with pytest.raises(ValueError, match="escapes"):
+            await operation("escape/secret")
+    with pytest.raises(ValueError, match="escapes"):
+        await provider.save("escape/secret", b"overwritten")
+    assert (outside / "secret").read_bytes() == b"secret"
+    (tmp_path / ".tmp").rmdir()
+    (tmp_path / ".tmp").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        await provider.stage()
+
+
+async def test_commit_failure_cleans_staging(provider: StorageProvider, tmp_path: Path) -> None:
+    staged = await provider.stage()
+    await staged.write(b"x")
+    with pytest.raises(ValueError):
+        await provider.commit(staged, "../escape")
+    assert list((tmp_path / ".tmp").iterdir()) == []
+
+
+async def test_caught_write_failure_cannot_publish(provider: StorageProvider, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="failed storage write"):
+        async with provider.open("key", "wb") as writer:
+            await writer.write(b"partial")
+            with pytest.raises(TypeError):
+                await writer.write("not bytes")
+    assert not await provider.exists("key")
+    assert list((tmp_path / ".tmp").iterdir()) == []

@@ -70,10 +70,11 @@ type CreateValues = z.infer<typeof createSchema>;
 interface Props {
   workItem: WorkItem;
   members: Member[];
+  handoffPending?: boolean;
 }
 
-/** 工作项详情页转派区（7.3 节）：主执行人申请转派，展示转派历史。 */
-export function TransferSection({ workItem, members }: Props) {
+/** 工作项详情页转派区：主执行人申请转派，展示转派历史。 */
+export function TransferSection({ workItem, members, handoffPending = false }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
   const [createOpen, setCreateOpen] = useState(false);
@@ -148,15 +149,15 @@ export function TransferSection({ workItem, members }: Props) {
         <div>
           <CardTitle>转派</CardTitle>
           <CardDescription>
-            审批通过后主执行人才会变更，全程留痕（8.3 节）
+            审批通过后主执行人才会变更，全程留痕
           </CardDescription>
         </div>
         {isAssignee && (
           <Button
             size="sm"
             variant="outline"
-            disabled={hasPending}
-            title={hasPending ? "已存在待审批的转派申请" : undefined}
+            disabled={hasPending || handoffPending}
+            title={handoffPending ? "请先处理待接收移交" : hasPending ? "已存在待审批的转派申请" : undefined}
             onClick={() => setCreateOpen(true)}
           >
             <ArrowRightLeft className="size-4" />
@@ -211,12 +212,12 @@ export function TransferSection({ workItem, members }: Props) {
         )}
       </CardContent>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen && !handoffPending} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>申请转派</DialogTitle>
             <DialogDescription>
-              负责人审批通过前主执行人不变；原因与影响说明必填（7.3 节）。
+              负责人审批通过前主执行人不变；原因与影响说明必填。
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>

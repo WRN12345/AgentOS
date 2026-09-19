@@ -50,8 +50,8 @@ import { RequirementPipelineWizard } from "./RequirementPipelineWizard";
 import { queryKeys } from "../../lib/queryKeys";
 
 /**
- * Agent 建议中心（13.1 节，T5.7）：建议列表 + 过滤 + 采纳/忽略反馈 +
- * 失败运行人工重新触发。全员可读，反馈操作仅负责人（后端同步强校验）。
+ * Agent 建议中心：建议列表 + 过滤 + 采纳/忽略反馈 +
+ * 失败运行人工重新触发。按任务可见范围读取，反馈操作仅负责人（后端同步强校验）。
  */
 export default function AgentAssistantPage() {
   const isLeader = useIsLeader();
@@ -62,7 +62,7 @@ export default function AgentAssistantPage() {
     null,
   );
 
-  // 16 节：使用云端模型时提示"数据将发送至外部服务"
+  // 使用云端模型时提示"数据将发送至外部服务"
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: () => api.get<AgentConfig>("/config"),
@@ -92,23 +92,24 @@ export default function AgentAssistantPage() {
       {config?.llm_is_external && (
         <p className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           当前使用云端模型服务（{config.llm_provider}
-          ），Agent 分析所需的数据将发送至外部服务，请勿在输入中包含敏感信息（16
-          节）。
+          ），Agent 分析所需的数据将发送至外部服务，请勿在输入中包含敏感信息。
         </p>
       )}
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
-            <CardTitle>AI 助手</CardTitle>
+            <CardTitle>AI 建议与运行</CardTitle>
             <CardDescription>
-              AI 把一句话需求拆成任务并推荐负责人，确认后才生效
+              查看分析建议、处理反馈与重试失败运行。任务初审意见也可在对应任务内查看。
             </CardDescription>
           </div>
           {isLeader && (
-            <Button variant="outline" onClick={() => setWizard({ resume: null })}>
-              <Sparkles className="size-4" />
-              需求拆解向导
+            <Button variant="outline" asChild>
+              <Link to="/project-requirements">
+                <Sparkles className="size-4" />
+                项目需求
+              </Link>
             </Button>
           )}
         </CardHeader>
@@ -160,10 +161,12 @@ export default function AgentAssistantPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setWizard({ resume: null })}
+                  asChild
                 >
-                  <Sparkles className="size-4" />
-                  去拆解需求
+                  <Link to="/project-requirements">
+                    <Sparkles className="size-4" />
+                    去拆解需求
+                  </Link>
                 </Button>
               )}
             </div>
@@ -218,9 +221,9 @@ function SuggestionCard({
       ),
     onSuccess: (_data, action) => {
       if (suggestion.suggestion_type === "memory_proposal") {
-        // 记忆提议确认即生效（M4.4）：刷新核心记忆缓存
+        // 记忆提议确认即生效：刷新核心记忆缓存
         toast.success(
-          action === "accepted" ? "已确认，核心记忆已生效" : "已拒绝该提议",
+          action === "accepted" ? "已确认，项目约定已生效" : "已拒绝该提议",
         );
         queryClient.invalidateQueries({ queryKey: queryKeys.coreMemory() });
       } else {
@@ -367,9 +370,10 @@ function SuggestionCard({
   );
 }
 
-/** 运行记录：展示状态/耗时/错误，failed 运行可人工重新触发（T5.6 入口）。 */
+/** 运行记录：展示状态/耗时/错误，failed 运行可人工重新触发。 */
 function AgentRunsCard() {
   const queryClient = useQueryClient();
+  const isLeader = useIsLeader();
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.agentRuns(),
@@ -442,7 +446,8 @@ function AgentRunsCard() {
                 </TableCell>
                 <TableCell>{formatDateTime(run.created_at)}</TableCell>
                 <TableCell className="text-right">
-                  {run.status === "failed" && (
+                  {run.status === "failed" && (isLeader || (run.work_item_id &&
+                    ["dev_doc_review", "deliverable_review"].includes(run.agent_type))) && (
                     <Button
                       size="sm"
                       variant="outline"

@@ -14,6 +14,9 @@ from alembic.operations import Operations
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import DBAPIError
 
+from app.agents import service as agent_service
+from app.agents.models import AgentRun
+from app.agents.specialists.pipeline import resolve_specified_assignees
 from app.domains.audit.models import AuditEvent
 from app.domains.files.models import StoredFile
 from app.domains.memory.models import MemoryChunk
@@ -97,6 +100,175 @@ async def generate(client, project, headers):
     assert response.status_code == 200, response.text
     assert len(response.json()) == 1
     return response.json()[0], material, job
+
+
+@pytest.fixture
+async def pipeline_requirement(client, project_a, leader, admin_headers, providers, monkeypatch):
+    req, _, _ = await generate(client, project_a, admin_headers)
+    base = f"/api/v1/admin/projects/{project_a.id}/requirements/{req['id']}"
+    for action in ("confirm", "dispatch"):
+        response = await client.post(f"{base}/{action}", headers=admin_headers, json={"version": req["version"]})
+        assert response.status_code == 200, response.text
+        req = response.json()
+    headers = await auth_headers(client, "leader", "Leader123!", project_id=str(project_a.id))
+    queue = AsyncMock(return_value={"id": "pipeline-task"})
+    router_module = importlib.import_module("app.domains.requirements.router")
+    monkeypatch.setattr(router_module, "create_redis_client", lambda: providers[2])
+    monkeypatch.setattr(agent_service, "enqueue", queue)
+    return req, headers, queue
+
+
+async def test_single_requirement_decomposition_after_acceptance(client, pipeline_requirement, project_a):
+    req, headers, queue = pipeline_requirement
+    path = f"/api/v1/project-requirements/{req['id']}"
+    response = await client.post(f"{path}/agent-analysis", headers=headers, json={"version": req["version"]})
+    assert response.status_code == 409
+    queue.assert_not_awaited()
+    accepted = await client.post(f"{path}/accept", headers=headers, json={"version": req["version"]})
+    assert accepted.status_code == 200, accepted.text
+    req = accepted.json()
+    async with async_session_factory() as session:
+        original = await session.get(Requirement, uuid.UUID(req["id"]))
+        session.add(Requirement(
+            project_id=project_a.id, analysis_id=original.analysis_id,
+            title="另一项需求", description="不能混入拆解的独立内容", acceptance_criteria="另一项验收",
+            clarification_questions="", sources=[], status="accepted", assignee_id=original.assignee_id,
+        ))
+        await session.commit()
+    headers = {**headers, "Idempotency-Key": str(uuid.uuid4())}
+    response = await client.post(f"{path}/agent-analysis", headers=headers, json={"version": req["version"]})
+    assert response.status_code == 202, response.text
+    repeated = await client.post(f"{path}/agent-analysis", headers=headers, json={"version": req["version"]})
+    assert repeated.status_code == 202 and repeated.json() == response.json()
+    queue.assert_awaited_once()
+    payload = queue.await_args.args[2]
+    assert payload["agent_type"] == "requirement_pipeline"
+    assert payload["project_id"] == str(project_a.id) and payload["work_item_id"] is None
+    assert payload["prompt"] == "\n\n".join((req["title"], req["description"], req["acceptance_criteria"]))
+    metadata_members = [{"member_id": str(uuid.uuid4()), "username": name, "display_name": name}
+                        for name in ("version", "requirement_id", "title", "description", "acceptance_criteria", req["id"])]
+    assert resolve_specified_assignees(payload["prompt"], metadata_members) == ([], [])
+    assert "不能混入拆解的独立内容" not in payload["prompt"]
+    assert TEXT not in payload["prompt"]
+    async with async_session_factory() as session:
+        run = await session.get(AgentRun, uuid.UUID(response.json()["id"]))
+        assert run.prompt == payload["prompt"] and run.status == "pending"
+        item = await session.get(Requirement, uuid.UUID(req["id"]))
+        assert item.status == "accepted" and item.version == req["version"]
+        assert await session.scalar(select(func.count()).select_from(AgentRun)) == 1
+        assert await session.scalar(select(func.count()).select_from(WorkItem)) == 0
+        assert await session.scalar(select(func.count()).select_from(AuditEvent).where(
+            AuditEvent.action == "requirements.decomposition_requested")) == 1
+
+
+@pytest.mark.parametrize("status", ["draft", "confirmed", "excluded", "dispatched", "clarification_requested"])
+async def test_requirement_decomposition_rejects_unaccepted_status(client, pipeline_requirement, status):
+    req, headers, queue = pipeline_requirement
+    async with async_session_factory() as session:
+        await session.execute(update(Requirement).where(Requirement.id == uuid.UUID(req["id"])).values(status=status))
+        await session.commit()
+    response = await client.post(f"/api/v1/project-requirements/{req['id']}/agent-analysis",
+                                 headers=headers, json={"version": req["version"]})
+    assert response.status_code == 409
+    queue.assert_not_awaited()
+    async with async_session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(AgentRun)) == 0
+
+
+async def test_requirement_decomposition_version_and_input_validation(client, pipeline_requirement):
+    req, headers, queue = pipeline_requirement
+    path = f"/api/v1/project-requirements/{req['id']}"
+    accepted = await client.post(f"{path}/accept", headers=headers, json={"version": req["version"]})
+    assert accepted.status_code == 200
+    response = await client.post(f"{path}/agent-analysis", headers=headers, json={"version": req["version"]})
+    assert response.status_code == 409 and response.json()["code"] == "REQUIREMENT_VERSION_CONFLICT"
+    for extra in ({"prompt": "伪造需求"}, {"requirement_ids": [req["id"]]}, {"agent_type": "summary_agent"}):
+        response = await client.post(f"{path}/agent-analysis", headers=headers,
+                                     json={"version": accepted.json()["version"], **extra})
+        assert response.status_code == 422
+    queue.assert_not_awaited()
+
+
+async def test_requirement_decomposition_permissions(client, pipeline_requirement, project_a, project_b, admin_headers):
+    req, headers, queue = pipeline_requirement
+    path = f"/api/v1/project-requirements/{req['id']}"
+    accepted = await client.post(f"{path}/accept", headers=headers, json={"version": req["version"]})
+    assert accepted.status_code == 200
+    body = {"version": accepted.json()["version"]}
+    _, member = await add_member(project_a, "pipeline-member", "Member123!")
+    await add_member(project_b, "pipeline-other-leader", "Leader123!", role="leader")
+    member_headers = await auth_headers(client, "pipeline-member", "Member123!", project_id=str(project_a.id))
+    other_headers = await auth_headers(client, "pipeline-other-leader", "Leader123!", project_id=str(project_b.id))
+    for rejected, status in ((member_headers, 403), ({**admin_headers, "X-Project-Id": str(project_a.id)}, 403),
+                             (other_headers, 404), ({}, 401)):
+        response = await client.post(f"{path}/agent-analysis", headers=rejected, json=body)
+        assert response.status_code == status, response.text
+    assert (await client.post(f"/api/v1/project-requirements/{uuid.uuid4()}/agent-analysis",
+                              headers=headers, json=body)).status_code == 404
+    async with async_session_factory() as session:
+        await session.execute(update(Requirement).where(Requirement.id == uuid.UUID(req["id"])).values(assignee_id=member.id))
+        await session.commit()
+    assert (await client.post(f"{path}/agent-analysis", headers=headers, json=body)).status_code == 404
+    queue.assert_not_awaited()
+
+
+async def test_material_download_uses_persisted_backend(
+    client, project_a, project_b, admin_headers, providers, monkeypatch, tmp_path,
+):
+    router_module = importlib.import_module("app.domains.requirements.router")
+    material = await upload(client, project_a, admin_headers)
+    original = providers[1]
+    default = LocalStorageProvider(tmp_path / "new-default")
+    default.backend_name = "minio"
+    app.dependency_overrides[get_storage_provider] = lambda: default
+    resolve = Mock(return_value=original)
+    monkeypatch.setattr(router_module, "storage_for", resolve)
+    path = f"/api/v1/admin/projects/{project_a.id}/materials/{material['id']}/download"
+    response = await client.get(path, headers=admin_headers)
+    assert response.status_code == 200
+    assert response.text == TEXT
+    resolve.assert_called_once_with("local")
+    resolve.reset_mock()
+    response = await client.get(path.replace(str(project_a.id), str(project_b.id)), headers=admin_headers)
+    assert response.status_code == 404
+    resolve.assert_not_called()
+
+
+@pytest.mark.parametrize("failure,retain", [("audit", False), ("commit", True), ("ack", True), ("cleanup", True)])
+async def test_material_upload_compensation(
+    project_a, admin_user, providers, monkeypatch, failure, retain, caplog,
+):
+    from fastapi import UploadFile
+    from starlette.datastructures import Headers
+
+    storage = providers[1]
+    monkeypatch.setattr(service, "extract_material_text", AsyncMock(return_value=TEXT))
+    original_error = "private-token-in-failure"
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError(original_error)
+
+    async with async_session_factory() as session:
+        if failure in ("audit", "cleanup"):
+            monkeypatch.setattr(service, "audit", fail)
+        if failure == "commit":
+            monkeypatch.setattr(session, "commit", fail)
+        if failure == "ack":
+            commit = session.commit
+
+            async def lost_ack():
+                await commit()
+                raise RuntimeError(original_error)
+
+            monkeypatch.setattr(session, "commit", lost_ack)
+        if failure == "cleanup":
+            monkeypatch.setattr(storage, "delete", fail)
+        uploaded = UploadFile(io.BytesIO(TEXT.encode()), filename="material.txt",
+                              headers=Headers({"content-type": "text/plain"}))
+        with pytest.raises(RuntimeError, match=original_error):
+            await service.upload_material(session, project_a.id, admin_user, uploaded, storage)
+    assert any(path.is_file() for path in storage._root.rglob("*")) is retain
+    assert original_error not in caplog.text
 
 
 @pytest.mark.parametrize("prefix,suffix", [
@@ -401,7 +573,7 @@ async def test_discussion_migration_retains_legacy_question(client, project_a, l
         assert discussion[0]["author_id"] == str(leader.user_id)
         assert discussion[0]["author_role"] == "leader"
         assert discussion[0]["created_at"] is None and discussion[0]["version"] is None
-        # Transaction rollback restores the test schema and data.
+        # 事务回滚会恢复测试数据库结构和数据。
 
 
 @pytest.mark.parametrize("field,value,expected", [

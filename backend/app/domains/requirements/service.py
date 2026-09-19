@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
@@ -23,6 +24,7 @@ from app.infrastructure.queue.queue import enqueue
 from app.infrastructure.storage.provider import StorageProvider
 
 TASK_TYPE = "requirements.analyze"
+logger = logging.getLogger(__name__)
 
 
 async def project_exists(session: AsyncSession, project_id: uuid.UUID) -> None:
@@ -31,7 +33,7 @@ async def project_exists(session: AsyncSession, project_id: uuid.UUID) -> None:
 
 
 async def audit(session, action, actor_id, resource):
-    # Content and citations remain outside the project-visible audit stream.
+    # 正文与引用不写入项目可见的审计流。
     await record_event(session, action=f"requirements.{action}", actor_id=actor_id,
                        target_type=resource.__tablename__, target_id=resource.id,
                        project_id=resource.project_id)
@@ -61,14 +63,25 @@ async def upload_material(session: AsyncSession, project_id: uuid.UUID, actor: U
                         storage_backend=provider.backend_name,
                         chunks=[{"id": str(uuid.uuid4()), "text": text[i:i + 4000]}
                                 for i in range(0, len(text), 4000)])
+    commit_attempted = False
     try:
         await provider.save(key, bytes(data))
         session.add(material)
         await audit(session, "material_uploaded", actor.id, material)
+        commit_attempted = True
         await session.commit()
-    except BaseException:
-        await session.rollback()
-        await provider.delete(key)
+    except BaseException as exc:
+        try:
+            await session.rollback()
+        except BaseException as cleanup_error:
+            logger.warning("material rollback failed: id=%s error=%s", material_id, type(cleanup_error).__name__)
+        if commit_attempted:
+            logger.warning("material commit outcome uncertain; retaining id=%s error=%s", material_id, type(exc).__name__)
+        else:
+            try:
+                await provider.delete(key)
+            except BaseException as cleanup_error:
+                logger.warning("material cleanup failed: id=%s error=%s", material_id, type(cleanup_error).__name__)
         raise
     return material
 
@@ -104,7 +117,7 @@ async def start_analysis(session: AsyncSession, project_id: uuid.UUID, actor: Us
     try:
         await enqueue(client, TASK_TYPE, {"analysis_id": str(job.id)})
     except Exception:
-        # Persisted pending jobs are recovered by the worker if enqueue fails.
+        # 入队失败时，由 worker 恢复已持久化的待处理任务。
         job.next_delivery_at = datetime.now(UTC)
         await session.commit()
     finally:

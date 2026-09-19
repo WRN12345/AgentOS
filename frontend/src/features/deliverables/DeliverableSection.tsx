@@ -55,14 +55,15 @@ import { queryKeys } from "../../lib/queryKeys";
 
 interface Props {
   workItem: WorkItem;
+  handoffPending?: boolean;
 }
 
 /**
- * 工作项详情页交付区（13.2 节）：版本历史（含哈希/提交人/时间）、
+ * 工作项详情页交付区：版本历史（含哈希/提交人/时间）、
  * 三类交付物提交 Dialog、审核反馈区（仅负责人与主执行人可见）。
  * 交付物列表对工作项无关成员 403，整体静默不渲染。
  */
-export function DeliverableSection({ workItem }: Props) {
+export function DeliverableSection({ workItem, handoffPending = false }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -74,7 +75,7 @@ export function DeliverableSection({ workItem }: Props) {
     retry: false,
   });
 
-  // 审核反馈仅负责人与主执行人可见（16 节），其余 403 时静默不渲染
+  // 审核反馈仅负责人与主执行人可见，其余 403 时静默不渲染
   const { data: reviews } = useQuery({
     queryKey: queryKeys.reviews(workItem.id),
     queryFn: () => api.get<Review[]>(`/work-items/${workItem.id}/reviews`),
@@ -88,7 +89,7 @@ export function DeliverableSection({ workItem }: Props) {
   const isAssignee = selfMember?.id === workItem.assignee.id;
   const terminal =
     workItem.status === "COMPLETED" || workItem.status === "CANCELLED";
-  const canSubmit = isAssignee && !terminal;
+  const canSubmit = isAssignee && !terminal && !handoffPending && workItem.status !== "WAITING_ACCEPTANCE";
   const latest = deliverables?.[0];
 
   return (
@@ -132,7 +133,7 @@ export function DeliverableSection({ workItem }: Props) {
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">
-            暂无交付记录。提交审核前需先提交交付物。
+            暂无交付记录。移交前需先提交交付物。
           </p>
         )}
 
@@ -272,7 +273,7 @@ function SubmitDeliverableDialog({
         <DialogHeader>
           <DialogTitle>提交交付</DialogTitle>
           <DialogDescription>
-            每次提交生成一个新版本，旧版本保留可查（7.5 节）。
+            每次提交生成一个新版本，旧版本保留可查。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

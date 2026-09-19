@@ -78,7 +78,7 @@ AgentOS 采用"模块化单体 + 后台进程分离"架构（设计文档 4.1、
 - `cache/redis.py`：`create_redis_client()` 工厂，基于 `redis.asyncio`，`decode_responses=True`。每次新建客户端而非全局单例，用完 `aclose()`，避免跨事件循环复用连接。
 - `queue/queue.py`：Redis List 即时队列（`enqueue`/`dequeue`，LPUSH + BRPOP 构成 FIFO）+ ZSET 延迟队列（`enqueue_delayed`/`promote_due_delayed`，用于 Agent run 指数退避重试）。
 - `events/`：SSE 事件通道（与 queue 同级的 Redis 技术机制，生产方横跨四个领域 + worker，故不放领域内）。按成员频道 `agentos:events:{member_id}` 发布，**不在客户端侧过滤他人事件**（16 节最小暴露）。
-- `storage/`（第 14 章）：`provider.py` 的 `StorageProvider` 抽象接口（`save/load/delete/exists/iter_chunks` + `stage/commit/discard` 暂存流程）；`local.py` 的 `LocalStorageProvider` 写入配置根目录，`_validate_key` 拒绝绝对路径与 `..`，数据库只保存相对 `storage_key`，不落宿主机绝对路径。`S3StorageProvider` 接口已预留，多后端由 `stored_files.storage_backend` 列承载。`get_storage_provider()` 单例工厂作为 FastAPI 依赖项，测试用 `dependency_overrides` 注入。
+- `storage/`（第 14 章）：`StorageProvider` 提供异步 `open(key, "rb"|"wb")`、`save/load/delete/exists/iter_chunks` 和 `stage/commit/discard` 暂存流程。`local.py` 与 `minio.py` 实现本地和 MinIO；数据库保存相对 key，不保存宿主机路径。`get_storage_provider()` 选择新文件默认后端并作为 FastAPI 依赖，`storage_for(backend)` 按历史记录后端读取。`open` 只支持顺序二进制读写，不提供 seek/append 或数据库事务语义。
 - `models/`（第 15 章）：`provider.py` 的 `ModelProvider` ABC（`name`/`model`/`is_external` + `generate(prompt, *, system=None, json_output=False) -> str`）；`ollama.py`（默认）+ `openai_compatible.py`；`errors.py` 的 `ModelError`/`ModelUnavailableError`/`ModelTimeoutError`——httpx 异常一律封装，不外漏。`get_model_provider()` 单例工厂，业务代码不得直接实例化具体模型客户端。**不引入 langchain**——两个 Provider 均用 httpx 直连。
 - `models/base.py`：ORM 基类与 Mixin（第 11 章）：`Base`（`DeclarativeBase`）；`UUIDPrimaryKeyMixin`（主键 PostgreSQL UUID，`server_default=gen_random_uuid()`，依赖基线迁移启用的 `pgcrypto` 扩展）；`TimestampMixin`（`created_at`/`updated_at`，`server_default=now()`，`onupdate=now()`）；`VersionMixin`（整型 `version` 字段，用于乐观锁——`work_items`/`collaboration_requests`/`transfer_requests`/`deadline_change_requests`/`deliverables` 继承）；`CoreModel`（`Base + UUID + Timestamp` 抽象基类，需乐观锁再叠加 `VersionMixin`）。
 
@@ -329,17 +329,20 @@ scheduler 是后续定时任务的**调度挂点**——在循环里按"enqueue 
 
 - `docker-compose.yml` 编排六服务（见 1.2 节）。数据通过 bind mount 持久化到 `./data/`（不提交 Git）：`data/postgres/`（`PGDATA` 设为 `/var/lib/postgresql/data/pgdata` 子目录）、`data/redis/`（AOF 持久化）、`data/uploads/`、`data/backups/`、`data/logs/`（backend / worker / scheduler 三个进程各自的 `<进程名>.log`）。`docker compose down` 不删 `data/`，数据安全；要重置环境需手动清空 `data/postgres/` 等目录（谨慎操作）。
 
-### 8.2 本地文件存储（第 14 章）
+### 8.2 文件存储（第 14 章）
 
 - 配置项进 `core/config.py`（compose 与 `.env.example` 已接）：`STORAGE_BACKEND=local`、`STORAGE_ROOT=/app/data/uploads`、`UPLOAD_MAX_BYTES=20971520`（20MB）、`UPLOAD_ALLOWED_EXTENSIONS`（.txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.zip）、`UPLOAD_ALLOWED_MIME_TYPES`（对应逗号列表，config 以 property 解析为集合）。
+- `STORAGE_BACKEND=minio` 时配置 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET`、`MINIO_SECURE`。bucket 预先创建且私有，应用账号受限。backend、worker、scheduler 共享存储配置；历史本地文件保留上传卷。
 - **禁止直接暴露上传目录**：`frontend/nginx.conf` 无 `data/uploads` 映射，API 是唯一入口。业务层只依赖 `StorageProvider` 接口——grep 验证 `app/domains/`、`app/api/` 无文件系统路径 / `LocalStorageProvider` / `os.replace` 引用。
-- 暂存区与正式目录同文件系统，保证 `os.replace` 原子落位；按哈希前两位分桶 `63/63ed…_<rand>`。**补偿清理**（17.2 节）：落库失败时删除已落盘文件，磁盘无残留。上传大小校验在流式暂存期间进行，超限即断流删暂存；客户端前置校验只是体验优化，后端白名单为准。
+- 本地暂存区与正式目录同文件系统，通过 `os.replace` 发布；MinIO 使用临时文件缓冲，完整上传后发布，SDK 操作在线程池中执行。新 key 为 `projects/<project_id>/files/<file_version_id>`，历史 key 保持可读。
+- 数据库 `directory_path` 为逻辑目录，根为 `/`；版本按项目、目录和原始文件名归组。业务目录与物理 key 分离，文件 ID 继续供交付物和记忆块引用；目录筛选不改变 RAG 检索范围。
+- 上传暂存时校验大小并计算 SHA-256。存储完成后提交文件、版本和审计事务；提交数据库之前失败时补偿清理，已尝试提交但结果不确定时保留对象供对账，避免删除尚未可见的已提交文件。存储与数据库不构成分布式事务，进程被强制终止可能留下孤儿文件。
 
 ### 8.3 备份恢复脚本（19.4 节）
 
-- `deploy/scripts/backup.sh`：pg_dump 自定义格式 → `data/backups/postgres/`；`tar --listed-incremental` 增量 → `data/backups/uploads/`；14 天保留自动清理；日志写 `data/logs/backup.log`。
-- `deploy/scripts/restore.sh`：恢复到**指定目标库**（覆盖主库必须 `--confirm`，已实测拒绝）；恢复后自动校验库可连、核心表存在、`stored_files` 随机抽查 SHA-256 与实际文件比对。定时触发靠宿主机 crontab（`deploy/scripts/README.md` 有配置方法）。恢复演练记录见 `docs/quality-baseline-2026-07-29.md` 第 3 节。
-- 遗留说明：增量包只含当次变更，精确恢复到某天需按序解包"全量基线 + 增量包"。
+- `deploy/scripts/backup.sh`：pg_dump 自定义格式写入 `data/backups/postgres/`；`storage_snapshot export` 校验并导出全部登记文件（含历史版本、local/MinIO），归档到 `data/backups/storage/`；14 天保留自动清理。
+- `deploy/scripts/restore.sh`：恢复到指定目标库，通过 `--storage-archive` 恢复文件并逐个校验大小和 SHA-256；MinIO 目标 bucket 必须显式指定，线上目标需 `--confirm`。历史本地归档保留 `--uploads-archive` 入口。详见 `deploy/scripts/README.md`。
+- `migrate_file_storage` 默认预览，显式 `--yes` 才复制和校验全部版本并更新记录；保留源文件、ID 和 key。迁移与备份分开维护窗口，备份不能代替独立故障域的异地副本。
 
 ### 8.4 健康检查与编排联动
 

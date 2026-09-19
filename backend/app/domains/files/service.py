@@ -25,8 +25,10 @@ from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
 from app.domains.collaboration.models import CollaborationRequest
+from app.domains.deliverables.models import Deliverable
 from app.domains.files.models import StoredFile
-from app.domains.files.schemas import StoredFileOut
+from app.domains.files.schemas import StoredFileOut, normalize_directory_path
+from app.domains.handoffs.models import DeliverableHandoff
 from app.domains.memory.extractors import SUPPORTED_EXTENSIONS
 from app.domains.memory.indexer import MEMORY_INDEX_TASK_TYPE, MemoryIndexService
 from app.domains.project.models import ROLE_LEADER, ProjectMember
@@ -34,7 +36,7 @@ from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.service import get_work_item
 from app.infrastructure.cache.redis import create_redis_client
 from app.infrastructure.queue.queue import enqueue
-from app.infrastructure.storage.provider import StorageProvider
+from app.infrastructure.storage.provider import StorageProvider, storage_for
 
 logger = setup_logging("backend")
 
@@ -74,6 +76,7 @@ def _to_out(stored: StoredFile) -> StoredFileOut:
         id=stored.id,
         project_id=stored.project_id,
         original_filename=stored.original_filename,
+        directory_path=stored.directory_path,
         size_bytes=stored.size_bytes,
         mime_type=stored.mime_type,
         sha256=stored.sha256,
@@ -125,8 +128,10 @@ async def upload_file(
     upload: UploadFile,
     work_item_id: uuid.UUID | None,
     provider: StorageProvider,
+    directory_path: str = "/",
 ) -> StoredFileOut:
     """上传文件并可选关联同项目工作项。"""
+    directory_path = normalize_directory_path(directory_path)
     if work_item_id is not None:
         # 不存在或跨项目的工作项统一按 `404` 处理，避免泄露存在性。
         await get_work_item(session, work_item_id, project_id=actor.project_id)
@@ -136,6 +141,10 @@ async def upload_file(
     staged = await provider.stage()
     hasher = hashlib.sha256()
     size = 0
+    new_id = uuid.uuid4()
+    storage_key = f"projects/{actor.project_id}/files/{new_id}"
+    storage_commit_attempted = False
+    db_commit_attempted = False
     try:
         while chunk := await upload.read(UPLOAD_CHUNK_SIZE):
             size += len(chunk)
@@ -148,44 +157,35 @@ async def upload_file(
                 )
             hasher.update(chunk)
             await staged.write(chunk)
-    except BaseException:
-        await provider.discard(staged)
-        raise
+        sha256 = hasher.hexdigest()
+        storage_commit_attempted = True
+        await provider.commit(staged, storage_key)
 
-    # 原子移入正式存储；随机后缀确保不同上传不会相互覆盖。
-    sha256 = hasher.hexdigest()
-    storage_key = f"{sha256[:2]}/{sha256}_{uuid.uuid4().hex[:12]}"
-    await provider.commit(staged, storage_key)
-
-    # 同项目同名文件形成新版本；旧版本保留并通过 `superseded_by` 指向新版本。
-    current = (
-        await session.execute(
-            select(StoredFile).where(
-                StoredFile.project_id == actor.project_id,
-                StoredFile.original_filename == filename,
-                StoredFile.superseded_by.is_(None),
+        current = (
+            await session.execute(
+                select(StoredFile).where(
+                    StoredFile.project_id == actor.project_id,
+                    StoredFile.directory_path == directory_path,
+                    StoredFile.original_filename == filename,
+                    StoredFile.superseded_by.is_(None),
+                )
             )
+        ).scalar_one_or_none()
+        version = (current.version + 1) if current is not None else 1
+        stored = StoredFile(
+            id=new_id,
+            project_id=actor.project_id,
+            storage_backend=provider.backend_name,
+            storage_key=storage_key,
+            original_filename=filename,
+            directory_path=directory_path,
+            size_bytes=size,
+            mime_type=upload.content_type or "",
+            sha256=sha256,
+            uploaded_by=actor.id,
+            work_item_id=work_item_id,
+            version=version,
         )
-    ).scalar_one_or_none()
-    version = (current.version + 1) if current is not None else 1
-
-    # 文件记录与审计同事务写入；数据库失败时补偿删除已落盘文件。部分唯一索引要求
-    # 同名文件至多一个当前版本，因此先标记旧版本并 `flush`，再插入新版本。
-    new_id = uuid.uuid4()
-    stored = StoredFile(
-        id=new_id,
-        project_id=actor.project_id,
-        storage_backend=provider.backend_name,
-        storage_key=storage_key,
-        original_filename=filename,
-        size_bytes=size,
-        mime_type=upload.content_type or "",
-        sha256=sha256,
-        uploaded_by=actor.id,
-        work_item_id=work_item_id,
-        version=version,
-    )
-    try:
         if current is not None:
             current.superseded_by = new_id
             await session.flush()
@@ -204,6 +204,7 @@ async def upload_file(
             before=None,
             after={
                 "original_filename": filename,
+                "directory_path": directory_path,
                 "size_bytes": size,
                 "mime_type": stored.mime_type,
                 "sha256": sha256,
@@ -213,23 +214,33 @@ async def upload_file(
                 "supersedes": str(current.id) if current is not None else None,
             },
         )
+        db_commit_attempted = True
         await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        await provider.delete(storage_key)  # 补偿清理
-        if "ux_stored_files_current_name" in str(exc):
+    except BaseException as exc:
+        try:
+            await session.rollback()
+        except BaseException as cleanup_error:
+            logger.warning("upload rollback failed: key=%s error=%s", storage_key, type(cleanup_error).__name__)
+        delete_object = storage_commit_attempted and not db_commit_attempted
+        if db_commit_attempted:
+            # 提交确认丢失时，提交结果可能尚未对其他连接可见。
+            logger.warning("upload commit outcome uncertain; retaining key=%s error=%s", storage_key, type(exc).__name__)
+        try:
+            await provider.discard(staged)
+        except BaseException as cleanup_error:
+            logger.warning("upload stage cleanup failed: key=%s error=%s", storage_key, type(cleanup_error).__name__)
+        if delete_object:
+            try:
+                await provider.delete(storage_key)
+            except BaseException as cleanup_error:
+                logger.warning("upload object cleanup failed: key=%s error=%s", storage_key, type(cleanup_error).__name__)
+        if isinstance(exc, IntegrityError) and "ux_stored_files_current_name" in str(exc):
             # 唯一索引阻止并发同名上传产生两个当前版本。
             raise ApiException(
                 409,
                 ErrorCodes.FILE_VERSION_CONFLICT,
                 "同名文件正在并发上传，请稍后重试",
             ) from exc
-        logger.warning("stored_files 落库失败，已补偿删除文件: storage_key=%s", storage_key)
-        raise
-    except BaseException:
-        await session.rollback()
-        await provider.delete(storage_key)  # 补偿清理
-        logger.warning("stored_files 落库失败，已补偿删除文件: storage_key=%s", storage_key)
         raise
 
     await session.refresh(stored)  # created_at/updated_at 由数据库生成，刷新取回
@@ -250,18 +261,17 @@ async def upload_file(
 
 
 
-async def list_current_files(session: AsyncSession, actor: ProjectMember) -> list[StoredFileOut]:
+async def list_current_files(
+    session: AsyncSession, actor: ProjectMember, directory_path: str | None = None
+) -> list[StoredFileOut]:
     """返回项目成员可见的当前文件版本。"""
-    rows = (
-        await session.execute(
-            select(StoredFile)
-            .where(
-                StoredFile.project_id == actor.project_id,
-                StoredFile.superseded_by.is_(None),
-            )
-            .order_by(StoredFile.created_at.desc())
-        )
-    ).scalars()
+    query = select(StoredFile).where(
+        StoredFile.project_id == actor.project_id,
+        StoredFile.superseded_by.is_(None),
+    )
+    if directory_path is not None:
+        query = query.where(StoredFile.directory_path == normalize_directory_path(directory_path))
+    rows = (await session.execute(query.order_by(StoredFile.created_at.desc()))).scalars()
     return [_to_out(row) for row in rows]
 
 
@@ -276,6 +286,7 @@ async def list_file_versions(
             .where(
                 StoredFile.project_id == actor.project_id,
                 StoredFile.original_filename == stored.original_filename,
+                StoredFile.directory_path == stored.directory_path,
             )
             .order_by(StoredFile.version.desc())
         )
@@ -360,13 +371,36 @@ async def can_download_file(
 ) -> bool:
     """负责人和上传人可下载；未关联工作项的知识库文档对项目成员开放；
     关联工作项的交付文件仅上传人或与工作项有关的成员可下。"""
+    if stored.project_id != actor.project_id:
+        return False
     if actor.role in (ROLE_LEADER):
         return True
     if stored.uploaded_by == actor.id:
         return True
     if stored.work_item_id is None:
         return True
-    return await is_work_item_related(session, stored.work_item_id, actor.id)
+    if await is_work_item_related(session, stored.work_item_id, actor.id):
+        return True
+    # 移交只授权被选定的文件版本，不扩大为整个来源任务的访问权。
+    handoffs = (
+        await session.execute(
+            select(DeliverableHandoff)
+            .join(Deliverable, Deliverable.id == DeliverableHandoff.deliverable_id)
+            .where(
+                DeliverableHandoff.project_id == actor.project_id,
+                Deliverable.project_id == actor.project_id,
+                Deliverable.stored_file_id == stored.id,
+            )
+        )
+    ).scalars().all()
+    for handoff in handoffs:
+        if actor.id in (handoff.sender_id, handoff.recipient_id):
+            return True
+        if handoff.status == "accepted" and await is_work_item_related(
+            session, handoff.target_work_item_id, actor.id
+        ):
+            return True
+    return False
 
 
 async def authorize_download(
@@ -374,7 +408,7 @@ async def authorize_download(
     actor: ProjectMember,
     file_id: uuid.UUID,
     provider: StorageProvider,
-) -> StoredFile:
+) -> tuple[StoredFile, StorageProvider]:
     """下载前依次校验文件存在性、成员权限并写审计。
 
     记录或物理文件不存在时返回 `404`，无关成员返回 `403`。审计事件包含操作者、
@@ -383,9 +417,9 @@ async def authorize_download(
     stored = await get_stored_file(session, file_id, project_id=actor.project_id)
     if not await can_download_file(session, actor, stored):
         raise ApiException(403, ErrorCodes.FORBIDDEN, "无权下载该文件")
-    if stored.storage_backend != provider.backend_name or not await provider.exists(
-        stored.storage_key
-    ):
+    if stored.storage_backend != provider.backend_name:
+        provider = storage_for(stored.storage_backend)
+    if not await provider.exists(stored.storage_key):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "文件不存在或已清理")
     await record_event(
         session,
@@ -401,4 +435,4 @@ async def authorize_download(
         },
     )
     await session.commit()
-    return stored
+    return stored, provider

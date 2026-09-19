@@ -65,7 +65,7 @@ const deadlineItem: ApprovalItem = {
   new_due_at: "2026-08-10T00:00:00Z",
 };
 
-/** 审批卡片组件测试（18.2 节）：渲染、通过/驳回调用 API、成员权限差异。 */
+/** 审批卡片组件测试：渲染、通过/驳回调用 API、成员权限差异。 */
 describe("ApprovalsPage 审批卡片", () => {
   beforeEach(() => {
     vi.clearAllMocks();

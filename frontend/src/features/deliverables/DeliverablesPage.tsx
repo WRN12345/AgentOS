@@ -25,8 +25,8 @@ import { queryKeys } from "../../lib/queryKeys";
 
 /**
  * 交付物聚合页：负责人/管理员见全部交付物，普通成员见相关工作项
- * （主执行人/协作者/协作请求任一方，16 节）的交付物及审核结论。
- * 提交新版本在任务详情页进行，最终审核在审批中心「交付审核」页签进行。
+ * （主执行人/协作者/协作请求任一方）的交付物及审核结论。
+ * 提交、移交及接收状态在任务详情页查看；保留既有审核结论。
  */
 export default function DeliverablesPage() {
   const { data: deliveries, isLoading } = useQuery({
@@ -39,7 +39,7 @@ export default function DeliverablesPage() {
       <div>
         <h1 className="text-xl font-semibold">交付物</h1>
         <p className="text-sm text-muted-foreground">
-          提交新版本在任务详情页进行；负责人最终审核在审批中心「交付审核」页签进行
+          在任务详情页提交并移交成果，由接收人确认；负责人可查看交付内容与移交记录
         </p>
       </div>
 
@@ -47,7 +47,7 @@ export default function DeliverablesPage() {
         <CardHeader>
           <CardTitle>交付记录</CardTitle>
           <CardDescription>
-            按提交时间倒序；审核反馈仅负责人与任务主执行人可见
+            按提交时间倒序；点击任务查看移交接收状态，既有审核反馈保留
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -65,7 +65,7 @@ export default function DeliverablesPage() {
                   <TableHead>工作项</TableHead>
                   <TableHead>版本</TableHead>
                   <TableHead>提交人</TableHead>
-                  <TableHead>审核结论</TableHead>
+                  <TableHead>历史审核结论</TableHead>
                   <TableHead>提交时间</TableHead>
                 </TableRow>
               </TableHeader>
@@ -109,7 +109,7 @@ export default function DeliverablesPage() {
                         </div>
                       ) : (
                         <span className="text-sm text-muted-foreground">
-                          待审核
+                          无历史审核
                         </span>
                       )}
                     </TableCell>

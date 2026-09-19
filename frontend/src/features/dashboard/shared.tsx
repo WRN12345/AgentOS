@@ -14,6 +14,7 @@ export const ACTIVE_STATUSES: WorkItemStatus[] = [
   "IN_PROGRESS",
   "BLOCKED",
   "IN_REVIEW",
+  "WAITING_ACCEPTANCE",
 ];
 
 /** 距今天数（按截止时间计）。 */

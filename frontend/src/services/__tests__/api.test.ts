@@ -86,6 +86,29 @@ describe("X-Project-Id 请求头", () => {
     expect(init.headers).not.toHaveProperty("X-Project-Id");
   });
 
+  it("全部已读在刷新令牌期间切换项目，重试仍绑定原项目", async () => {
+    useAuthStore.getState().setTokens(tokens);
+    useAuthStore.getState().setCurrentProject(makeProject());
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockImplementationOnce(async () => {
+        useAuthStore.getState().setCurrentProject(makeProject({ id: "project-2" }));
+        return new Response(JSON.stringify({ ...tokens, access_token: "new-token" }));
+      })
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.post<void>("/notifications/read-all");
+
+    expect(fetchMock.mock.calls[2]).toEqual([
+      "/api/v1/notifications/read-all",
+      expect.objectContaining({ headers: expect.objectContaining({
+        "X-Project-Id": "project-1",
+        Authorization: "Bearer new-token",
+      }) }),
+    ]);
+  });
+
   it("下载请求：选定项目时自动携带 X-Project-Id", async () => {
     const fetchMock = stubFetch();
     useAuthStore.getState().setTokens(tokens);

@@ -13,10 +13,12 @@ export function RequirementCard({
   requirement,
   adminPath,
   onChanged,
+  onDecompose,
 }: {
   requirement: Requirement;
   adminPath?: string;
   onChanged: (updated: Requirement) => void;
+  onDecompose?: () => void;
 }) {
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
   const editing = editingVersion !== null;
@@ -293,6 +295,9 @@ export function RequirementCard({
             >
               接收需求
             </Button>
+          )}
+          {!adminPath && requirement.status === "accepted" && onDecompose && (
+            <Button onClick={onDecompose}>AI 需求拆解</Button>
           )}
         </div>
         {!adminPath && ["dispatched", "clarification_requested"].includes(requirement.status) && (

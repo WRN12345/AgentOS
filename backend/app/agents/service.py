@@ -17,18 +17,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.agents.models import AgentRun, AgentSuggestion
 from app.core.config import settings
 from app.core.errors import ApiException, ErrorCodes
 from app.core.logging import setup_logging
 from app.domains.audit.service import record_event
+from app.domains.collaboration.models import CollaborationRequest
 from app.domains.memory.history import HISTORY_RUN_AGENT_TYPES, enqueue_run_history_index
 from app.domains.memory.core_memory import enqueue_core_memory_index, enqueue_core_memory_index_id
 from app.domains.memory.proposals import MEMORY_PROPOSAL_TYPE, MemoryProposalPayload, apply_memory_proposal
-from app.domains.project.models import ProjectMember
+from app.domains.project.models import ROLE_LEADER, ProjectMember
+from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.infrastructure.queue.queue import enqueue
 
 logger = setup_logging("backend")
@@ -123,10 +126,34 @@ async def retry_agent_run(
     return run
 
 
+def agent_run_visibility(actor: ProjectMember) -> ColumnElement[bool]:
+    """负责人可读项目全部运行；成员关系与 is_work_item_related 保持一致。"""
+    project_scope = AgentRun.project_id == actor.project_id
+    if actor.role == ROLE_LEADER:
+        return project_scope
+    visible_items = select(WorkItem.id).where(
+        WorkItem.project_id == actor.project_id,
+        or_(
+            WorkItem.assignee_id == actor.id,
+            WorkItem.collaborators.any(WorkItemCollaborator.member_id == actor.id),
+            select(CollaborationRequest.id)
+            .where(
+                CollaborationRequest.work_item_id == WorkItem.id,
+                or_(
+                    CollaborationRequest.requester_id == actor.id,
+                    CollaborationRequest.assignee_id == actor.id,
+                ),
+            )
+            .exists(),
+        ),
+    )
+    return and_(project_scope, AgentRun.work_item_id.in_(visible_items))
+
+
 async def list_suggestions(
     session: AsyncSession,
     *,
-    project_id: uuid.UUID | None = None,
+    actor: ProjectMember,
     suggestion_type: str | None = None,
     review_status: str | None = None,
     work_item_id: uuid.UUID | None = None,
@@ -141,12 +168,11 @@ async def list_suggestions(
     stmt = (
         select(AgentSuggestion, AgentRun)
         .join(AgentRun, AgentSuggestion.run_id == AgentRun.id)
+        .where(agent_run_visibility(actor))
         .order_by(AgentSuggestion.created_at.desc(), AgentSuggestion.id.desc())
         .limit(limit)
         .offset(offset)
     )
-    if project_id is not None:
-        stmt = stmt.where(AgentRun.project_id == project_id)
     if suggestion_type:
         stmt = stmt.where(AgentSuggestion.suggestion_type == suggestion_type)
     if review_status:

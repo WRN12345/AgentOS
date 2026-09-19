@@ -5,6 +5,7 @@ from app.infrastructure.storage.provider import (
     StagedUpload,
     StorageProvider,
     get_storage_provider,
+    storage_for,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "StagedUpload",
     "StorageProvider",
     "get_storage_provider",
+    "storage_for",
 ]

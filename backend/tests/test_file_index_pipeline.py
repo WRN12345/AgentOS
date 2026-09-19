@@ -311,3 +311,26 @@ async def test_concurrent_rebuild_chunks_same_source_serialized() -> None:
         )
     assert len(rows) == written[0]  # 只有一套块，而非两套
     _chunk_rows_sync_check(rows)
+
+
+async def test_worker_routes_to_record_backend(client, project, storage, monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(indexer_module, "get_embedding_provider", lambda: FakeEmbeddingProvider())
+    await add_member(project, "alice", ALICE_PW)
+    headers = await auth_headers(client, "alice", ALICE_PW, project_id=str(project.id))
+    out = await _upload(client, headers, "guide.md", b"# Guide\n\nSome content.", "text/markdown")
+    alternate = LocalStorageProvider(tmp_path / "alternate")
+    alternate.backend_name = "minio"
+    async with async_session_factory() as session:
+        stored = await session.get(StoredFile, uuid.UUID(out["id"]))
+        await alternate.save(stored.storage_key, await storage.load(stored.storage_key))
+        await storage.delete(stored.storage_key)
+        stored.storage_backend = "minio"
+        await session.commit()
+    resolve = Mock(return_value=alternate)
+    monkeypatch.setattr(memory_index_module, "storage_for", resolve)
+    monkeypatch.setattr(memory_index_module, "get_storage_provider", lambda: storage)
+    assert await memory_index_module._index_stored_file(uuid.UUID(out["id"])) > 0
+    assert await _file_status(out["id"]) == "indexed"
+    resolve.assert_called_once_with("minio")

@@ -29,12 +29,12 @@ export function pickRememberedProject(
 
 /**
  * 加载当前用户参与的项目列表（GET /auth/me/projects，免项目头）。
- * 返回列表供调用方决定是否自动选中（ticket 09 用项目选择器替代）。
+ * 返回列表供调用方决定是否自动选中。
  */
 export async function loadProjects(): Promise<MyProject[]> {
   // 先清掉上次登录持久化的 currentProject（含其 member）：
   // 重新登录即重建立项目上下文，避免残留旧项目头打到错误项目；
-  // 选定项目由调用方（selectProject / ticket 09 选择器）重新设置。
+  // 选定项目由调用方（selectProject / 项目选择器）重新设置。
   useAuthStore.getState().setCurrentProject(null);
   const projects = await api.get<MyProject[]>("/auth/me/projects");
   useAuthStore.getState().setProjects(projects);

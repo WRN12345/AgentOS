@@ -21,11 +21,14 @@ class StoredFile(CoreModel):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=False
     )
-    # 存储后端使用稳定名称，当前实现为 `local`。
+    # 存储后端使用稳定名称，由文件记录决定读取位置。
     storage_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     # 后端内相对键必须唯一；Provider 层拒绝绝对路径和 `..`。
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    directory_path: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="/", server_default="/"
+    )
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -36,7 +39,7 @@ class StoredFile(CoreModel):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_items.id"), index=True, nullable=True
     )
-    # 同项目同名文件的 `version` 递增；`superseded_by` 指向替代版本，`NULL` 表示当前版本。
+    # 同项目同目录同名文件的 `version` 递增；`superseded_by` 指向替代版本，`NULL` 表示当前版本。
     version: Mapped[int] = mapped_column(nullable=False, default=1)
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stored_files.id", deferrable=True, initially="DEFERRED"), nullable=True

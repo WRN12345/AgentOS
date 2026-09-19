@@ -3,7 +3,7 @@
 权限规则由各用例显式校验：
 - 创建、修改、发布、取消：仅项目负责人；
 - start / block / unblock / submit：仅当前主执行人；
-- 查询：任何项目成员。
+- 查询：负责人可看全部，普通成员可看自己主执行或协作的任务。
 状态迁移由 domains/work_items/state_machine.py 裁决；状态或字段变更与审计事件
 在同一事务写入，assignee 变化必须留痕。
 """
@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +24,8 @@ from app.domains.audit.service import record_event
 from app.domains.deliverables.models import Deliverable
 from app.domains.dev_docs.models import DevDoc
 from app.domains.dev_docs.state_machine import DevDocStatus
+from app.domains.handoffs.models import DeliverableHandoff
+from app.domains.handoffs.policy import ensure_no_pending_handoff
 from app.domains.project.models import ROLE_LEADER, ProjectMember
 from app.domains.work_items.models import WorkItem, WorkItemCollaborator
 from app.domains.work_items.schemas import (
@@ -76,11 +78,13 @@ async def get_work_item(
     *,
     for_update: bool = False,
     project_id: uuid.UUID | None = None,
+    viewer: ProjectMember | None = None,
 ) -> WorkItem:
-    """按 id 获取工作项，可选校验项目边界。
+    """按 id 获取工作项，可选校验项目边界及查看者权限。
 
     传入 project_id 时，跨项目对象按不存在处理；不传则供派生域通过
     work_item_id 查询父对象。
+    传入 viewer 时，校验其项目归属及主执行人、协作者或负责人身份。
     """
     stmt = (
         select(WorkItem)
@@ -89,10 +93,19 @@ async def get_work_item(
     )
     if for_update:
         # 行锁让并发写请求基于最新已提交数据执行版本检查
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None or (project_id is not None and item.project_id != project_id):
         # 跨项目对象按不存在处理，避免泄露其存在性
+        raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
+    if viewer is not None and (
+        item.project_id != viewer.project_id
+        or (
+            viewer.role != ROLE_LEADER
+            and item.assignee_id != viewer.id
+            and not any(c.member_id == viewer.id for c in item.collaborators)
+        )
+    ):
         raise ApiException(404, ErrorCodes.NOT_FOUND, "工作项不存在")
     return item
 
@@ -114,14 +127,21 @@ async def get_work_item_project_id(
 async def list_work_items(
     session: AsyncSession,
     *,
-    project_id: uuid.UUID,
+    actor: ProjectMember,
     assignee_id: uuid.UUID | None = None,
     status: str | None = None,
     due_from: datetime | None = None,
     due_to: datetime | None = None,
 ) -> list[WorkItemSummaryOut]:
-    """返回当前项目工作项，支持按负责人、状态和 DDL 区间过滤。"""
-    stmt = select(WorkItem).where(WorkItem.project_id == project_id)
+    """返回成员可见的项目工作项，支持按主执行人、状态和 DDL 区间过滤。"""
+    stmt = select(WorkItem).where(WorkItem.project_id == actor.project_id)
+    if actor.role != ROLE_LEADER:
+        stmt = stmt.where(
+            or_(
+                WorkItem.assignee_id == actor.id,
+                WorkItem.collaborators.any(WorkItemCollaborator.member_id == actor.id),
+            )
+        )
     stmt = stmt.order_by(WorkItem.created_at.desc())
     if assignee_id is not None:
         stmt = stmt.where(WorkItem.assignee_id == assignee_id)
@@ -354,6 +374,8 @@ async def update_work_item(
     item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     _check_version(item, payload.version)
 
+    await ensure_no_pending_handoff(session, item.id)
+
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     for field in ("title", "description", "acceptance_criteria", "priority", "due_at"):
@@ -414,8 +436,20 @@ async def run_command(
     elif item.assignee_id != actor.id:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅当前主执行人可执行该操作")
     _check_version(item, version)
+    await ensure_no_pending_handoff(session, item.id)
 
     if command == "submit":
+        prior_handoff = await session.scalar(
+            select(DeliverableHandoff.id)
+            .where(DeliverableHandoff.source_work_item_id == item.id)
+            .limit(1)
+        )
+        if prior_handoff is not None:
+            raise ApiException(
+                409,
+                ErrorCodes.WORK_ITEM_INVALID_TRANSITION,
+                "该任务通过成果移交完成，请重新移交并由接收人确认",
+            )
         # 没有交付物时禁止进入审核，避免产生无审核对象的 IN_REVIEW 工作项
         deliverable_exists = (
             await session.execute(

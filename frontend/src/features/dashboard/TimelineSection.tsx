@@ -14,7 +14,7 @@ import { formatDateTime } from "../work-items/constants";
 import { queryKeys } from "../../lib/queryKeys";
 import { ACTION_LABELS, TARGET_TYPE_LABELS } from "../../lib/auditLabels";
 
-/** 项目时间线（13.1 节，仅负责人）：GET /audit-events 关键事件流。 */
+/** 项目时间线（仅负责人）：GET /audit-events 关键事件流。 */
 export function TimelineSection() {
   const { data: events } = useQuery({
     queryKey: queryKeys.auditEvents(),

@@ -370,7 +370,7 @@ async def _notify_leaders(
 async def _apply_to_target(session: AsyncSession, request: DeadlineChangeRequest) -> None:
     """在当前事务中更新目标 DDL 并递增 `version`。"""
     if request.target_type == DeadlineTargetType.WORK_ITEM:
-        target = await get_work_item(session, request.target_id)
+        target = await get_work_item(session, request.target_id, for_update=True)
     else:
         target = await session.get(CollaborationRequest, request.target_id)
         if target is None:

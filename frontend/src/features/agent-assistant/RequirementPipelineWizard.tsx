@@ -42,6 +42,7 @@ import type {
   WorkItemPriority,
 } from "../../types";
 import { queryKeys } from "../../lib/queryKeys";
+import type { Requirement } from "../project-requirements/types";
 
 type Step = "input" | "waiting" | "confirm" | "creating";
 
@@ -52,7 +53,7 @@ interface DraftItem {
   description: string;
   acceptanceCriteria: string;
   priority: WorkItemPriority;
-  /** date input 值（yyyy-mm-dd），空串表示无 DDL。 */
+  /** 日期输入框的值（yyyy-mm-dd），空串表示无 DDL。 */
   dueAt: string;
   assigneeId: string;
   recommended: PipelineAssigneeCandidate | null;
@@ -70,13 +71,15 @@ interface RequirementPipelineWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   members: Member[];
-  /** 16 节：外部模型服务时在向导内同步提示。 */
+  /** 外部模型服务时在向导内同步提示。 */
   llmIsExternal: boolean;
   /**
    * 从既有 pipeline 建议恢复（建议中心"采纳并创建工作项"入口）：
    * 跳过输入需求与等待分析，直接用该建议的拆解结果进入确认步骤。
    */
   resumeSuggestion?: AgentSuggestion | null;
+  /** 已接收的单项项目需求；后端按 ID 和版本读取内容。 */
+  projectRequirement?: Pick<Requirement, "id" | "version" | "title" | "description" | "acceptance_criteria">;
 }
 
 /** Agent 输出 P0–P3，映射为工作项优先级；兼容直接输出枚举值的情况。 */
@@ -124,7 +127,7 @@ function draftsFromContent(content: RequirementPipelineContent): DraftItem[] {
 }
 
 /**
- * 需求拆解流水线向导（2026-07-30 设计文档 §5），取代原 RequirementGuidedCreateDialog。
+ * 需求拆解流水线向导。
  *
  * 链路：输入自然语言需求（可指定人选）→ POST /agent-analysis
  * （agent_type=requirement_pipeline，仅负责人）→ 2s 轮询运行状态 →
@@ -132,7 +135,7 @@ function draftsFromContent(content: RequirementPipelineContent): DraftItem[] {
  * 全部成功后写 accepted 反馈；忽略只写 ignored 反馈，不产生业务写入
  * （原则 2：人类决定，Agent 建议）。
  *
- * 两种入口：新建模式（工作项页/建议中心顶部按钮，走完整四步）；
+ * 项目需求入口直接使用已接收的单项需求；新建模式使用手动输入；
  * 恢复模式（建议中心对 pending 的 pipeline 建议点"采纳并创建工作项"，
  * 传入 resumeSuggestion，跳过输入与等待，直接确认其拆解结果）。
  */
@@ -142,6 +145,7 @@ export function RequirementPipelineWizard({
   members,
   llmIsExternal,
   resumeSuggestion = null,
+  projectRequirement,
 }: RequirementPipelineWizardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -175,8 +179,12 @@ export function RequirementPipelineWizard({
   const trigger = useMutation({
     mutationFn: (prompt: string) =>
       api.post<AgentRun>(
-        "/agent-analysis",
-        { agent_type: "requirement_pipeline", prompt },
+        projectRequirement
+          ? `/project-requirements/${projectRequirement.id}/agent-analysis`
+          : "/agent-analysis",
+        projectRequirement
+          ? { version: projectRequirement.version }
+          : { agent_type: "requirement_pipeline", prompt },
         newIdempotencyKey(),
       ),
     onSuccess: (run) => {
@@ -225,7 +233,7 @@ export function RequirementPipelineWizard({
     setStep("confirm");
   }, [open, resumeSuggestion]);
 
-  // 反馈（best-effort）：采纳/忽略只写 agent_suggestions，不产生业务写入
+  // 尽力提交反馈：采纳/忽略只写 agent_suggestions，不产生业务写入
   const sendFeedback = async (action: "accepted" | "ignored") => {
     if (!suggestion) return;
     try {
@@ -370,7 +378,7 @@ export function RequirementPipelineWizard({
         <DialogHeader>
           <DialogTitle>需求拆解向导</DialogTitle>
           <DialogDescription>
-            自然语言需求 → Agent 拆解与分配建议 → 人工确认 →
+            {projectRequirement ? "已接收需求" : "自然语言需求"} → Agent 拆解与分配建议 → 人工确认 →
             批量创建。Agent 只产出建议，确认后才创建正式任务。
           </DialogDescription>
         </DialogHeader>
@@ -383,7 +391,21 @@ export function RequirementPipelineWizard({
 
         {step === "input" && (
           <div className="space-y-4">
-            <div className="space-y-1">
+            {projectRequirement ? (
+              <section aria-label="本次拆解需求" className="space-y-3 text-sm">
+                <h3 className="font-semibold">{projectRequirement.title}</h3>
+                <dl className="space-y-3">
+                  <div>
+                    <dt className="font-medium">需求描述</dt>
+                    <dd className="whitespace-pre-wrap break-words">{projectRequirement.description}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium">验收标准</dt>
+                    <dd className="whitespace-pre-wrap break-words">{projectRequirement.acceptance_criteria}</dd>
+                  </div>
+                </dl>
+              </section>
+            ) : <div className="space-y-1">
               <Label>自然语言需求</Label>
               <Textarea
                 rows={8}
@@ -394,10 +416,10 @@ export function RequirementPipelineWizard({
               <p className="text-xs text-muted-foreground">
                 可在文中直接指定人选，如：接口部分给张三。Agent 会尊重指定并做合理性校验。
               </p>
-            </div>
+            </div>}
             <DialogFooter>
               <Button
-                disabled={!requirement.trim() || trigger.isPending}
+                disabled={(!projectRequirement && !requirement.trim()) || trigger.isPending}
                 onClick={() => trigger.mutate(requirement.trim())}
               >
                 <Sparkles className="size-4" />
@@ -416,7 +438,7 @@ export function RequirementPipelineWizard({
                 </p>
                 <DialogFooter className="gap-2">
                   <Button variant="outline" onClick={() => setStep("input")}>
-                    返回修改需求
+                    {projectRequirement ? "返回需求" : "返回修改需求"}
                   </Button>
                   <Button
                     disabled={trigger.isPending}
@@ -646,7 +668,7 @@ export function RequirementPipelineWizard({
             </ul>
             {hasFailed && (
               <p className="text-muted-foreground">
-                已成功创建的任务不受影响；失败项可重试，或关闭后在 AI 助手页重新处理该建议。
+                已成功创建的任务不受影响；失败项可重试，或关闭后在 AI 建议与运行页重新处理该建议。
               </p>
             )}
             <DialogFooter className="gap-2">

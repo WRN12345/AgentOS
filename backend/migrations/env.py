@@ -16,6 +16,7 @@ from app.domains.collaboration import models as _collaboration_models  # noqa: F
 from app.domains.deadlines import models as _deadline_models  # noqa: F401
 from app.domains.deliverables import models as _deliverable_models  # noqa: F401
 from app.domains.files import models as _file_models  # noqa: F401
+from app.domains.handoffs import models as _handoff_models  # noqa: F401
 from app.domains.identity import models as _identity_models  # noqa: F401
 from app.domains.memory import models as _memory_models  # noqa: F401
 from app.domains.notifications import models as _notification_models  # noqa: F401

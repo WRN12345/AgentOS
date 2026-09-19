@@ -4,7 +4,7 @@ import type {
   TransferStatus,
 } from "../../types";
 
-/** 协作请求状态中文文案与徽标样式（8.2 节）。 */
+/** 协作请求状态中文文案与徽标样式。 */
 export const COLLAB_STATUS_META: Record<
   CollaborationStatus,
   { label: string; className: string }
@@ -25,7 +25,7 @@ export const COLLAB_STATUS_META: Record<
   },
 };
 
-/** 转派申请状态中文文案与徽标样式（8.3 节）。 */
+/** 转派申请状态中文文案与徽标样式。 */
 export const TRANSFER_STATUS_META: Record<
   TransferStatus,
   { label: string; className: string }
@@ -39,7 +39,7 @@ export const TRANSFER_STATUS_META: Record<
   },
 };
 
-/** DDL 变更申请状态中文文案与徽标样式（8.4 节）。 */
+/** DDL 变更申请状态中文文案与徽标样式。 */
 export const DEADLINE_CHANGE_STATUS_META: Record<
   DeadlineChangeStatus,
   { label: string; className: string }

@@ -44,6 +44,7 @@ const STATUS_ORDER: WorkItemStatus[] = [
   "IN_PROGRESS",
   "BLOCKED",
   "IN_REVIEW",
+  "WAITING_ACCEPTANCE",
   "COMPLETED",
   "CANCELLED",
 ];
@@ -55,6 +56,7 @@ const STATUS_CHART_COLORS: Record<WorkItemStatus, string> = {
   IN_PROGRESS: "#f59e0b", // amber-500
   BLOCKED: "#ef4444", // red-500
   IN_REVIEW: "#a855f7", // purple-500
+  WAITING_ACCEPTANCE: "#06b6d4", // cyan-500
   COMPLETED: "#22c55e", // green-500
   CANCELLED: "#d1d5db", // gray-300
 };
@@ -84,7 +86,7 @@ export default function TeamOverviewPage() {
 
   const all = items ?? [];
 
-  // 状态分布（donut 图数据，只保留有数量的状态）
+  // 状态分布（环形图数据，只保留有数量的状态）
   const statusCount = new Map<WorkItemStatus, number>();
   for (const item of all) {
     statusCount.set(item.status, (statusCount.get(item.status) ?? 0) + 1);
@@ -126,7 +128,7 @@ export default function TeamOverviewPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* 任务状态分布（donut，中心为总数） */}
+        {/* 任务状态分布（环形图，中心为总数） */}
         <Card>
           <CardHeader>
             <CardTitle>任务状态分布</CardTitle>
@@ -307,7 +309,7 @@ export default function TeamOverviewPage() {
         </Card>
       </div>
 
-      {/* 项目时间线：审计事件流（13.1 节，负责人与管理员只读可见） */}
+      {/* 项目时间线：审计事件流（负责人与管理员只读可见） */}
       {(isLeader || isAdmin) && <TimelineSection />}
     </div>
   );

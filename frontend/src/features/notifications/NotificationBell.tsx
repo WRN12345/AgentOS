@@ -1,16 +1,17 @@
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SimpleMenu, simpleMenuItemClass } from "@/components/SimpleMenu";
 import { cn } from "@/lib/utils";
-import { api } from "../../services/api";
+import { api, errorMessage } from "../../services/api";
 import type { AppNotification, NotificationList } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { queryKeys } from "../../lib/queryKeys";
 
-/** 顶栏通知入口（12.6 节）：未读数徽标 + 下拉列表，点击已读并跳转关联页面。 */
+/** 顶栏通知入口：未读数徽标 + 下拉列表，点击已读并跳转关联页面。 */
 export function NotificationBell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -30,11 +31,22 @@ export function NotificationBell() {
   });
 
   const unreadCount = data?.unread_count ?? 0;
+  const markAllRead = useMutation({
+    mutationFn: (_queryKey: unknown[]) => api.post<void>("/notifications/read-all"),
+    onSuccess: async (_data, queryKey) => {
+      try {
+        await queryClient.invalidateQueries({ queryKey }, { throwOnError: true });
+      } catch {
+        toast.error("已标记全部已读，通知刷新失败，请稍后重试");
+      }
+    },
+    onError: (error) => toast.error(errorMessage(error, "全部已读失败，请稍后重试")),
+  });
 
   return (
     // 轻量下拉（不用 Radix）：部分环境下 Radix 触发器无响应，见 SimpleMenu 注释
     <SimpleMenu
-      contentClassName="w-96"
+      contentClassName="w-96 max-w-[calc(100vw-2rem)]"
       trigger={(toggle, open) => (
         <Button
           variant="ghost"
@@ -60,11 +72,23 @@ export function NotificationBell() {
         <>
           <div className="flex items-center justify-between px-1.5 py-1.5 text-sm font-medium">
             <span>通知</span>
-            {unreadCount > 0 && (
-              <span className="text-xs font-normal text-muted-foreground">
-                {unreadCount} 条未读
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  {unreadCount} 条未读
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={unreadCount === 0 || markAllRead.isPending}
+                onClick={() => markAllRead.mutate(queryKeys.notifications())}
+              >
+                {markAllRead.isPending ? "处理中..." : "全部已读"}
+              </Button>
+            </div>
           </div>
           <div className="-mx-1 my-1 h-px bg-border" />
           <div className="max-h-96 overflow-y-auto">

@@ -168,7 +168,7 @@ async def test_leader_cancels_work_item(client: httpx.AsyncClient, project: Proj
 
 
 async def test_list_work_items_full_and_filtered(client: httpx.AsyncClient, project: Project) -> None:
-    """任何成员可查全量列表；支持 assignee_id / status / due 区间过滤；返回摘要字段。"""
+    """负责人可查全量列表；支持 assignee_id / status / due 区间过滤；返回摘要字段。"""
     ctx = await _setup(client, project)
     alice = ctx["alice"]
     bob = ctx["bob"]
@@ -178,7 +178,7 @@ async def test_list_work_items_full_and_filtered(client: httpx.AsyncClient, proj
         client, lh, str(bob.id), title="任务B", due_at="2026-09-01T00:00:00Z"  # type: ignore[union-attr]
     )
 
-    resp = await client.get("/api/v1/work-items", headers=ctx["alice_headers"])
+    resp = await client.get("/api/v1/work-items", headers=lh)
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 2
@@ -198,9 +198,72 @@ async def test_list_work_items_full_and_filtered(client: httpx.AsyncClient, proj
 
     by_due = await client.get(
         "/api/v1/work-items?due_from=2026-08-15T00:00:00Z&due_to=2026-10-01T00:00:00Z",
-        headers=ctx["alice_headers"],
+        headers=lh,
     )
     assert [i["title"] for i in by_due.json()] == ["任务B"]
+
+
+async def test_member_sees_only_assigned_or_collaborating_items(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    bob = ctx["bob"]
+    assert isinstance(alice, ProjectMember)
+    assert isinstance(bob, ProjectMember)
+    alice_id = str(alice.id)
+    bob_id = str(bob.id)
+    lh = ctx["leader_headers"]
+    ah = ctx["alice_headers"]
+    assigned = (await _create_item(
+        client, lh, alice_id, title="主执行任务", collaborator_ids=[alice_id, bob_id]
+    )).json()
+    collaborating = (await _create_item(
+        client, lh, bob_id, title="协助任务", collaborator_ids=[alice_id],
+        due_at="2026-09-01T00:00:00Z",
+    )).json()
+    unrelated = (await _create_item(
+        client, lh, bob_id, title="其他任务", due_at="2026-09-01T00:00:00Z"
+    )).json()
+
+    visible = await client.get("/api/v1/work-items", headers=ah)
+    assert visible.status_code == 200
+    assert len(visible.json()) == 2
+    assert {i["id"] for i in visible.json()} == {assigned["id"], collaborating["id"]}
+    for query in (
+        f"assignee_id={bob_id}",
+        "due_from=2026-08-15T00:00:00Z&due_to=2026-10-01T00:00:00Z",
+    ):
+        filtered = await client.get(f"/api/v1/work-items?{query}", headers=ah)
+        assert [i["id"] for i in filtered.json()] == [collaborating["id"]]
+    by_status = await client.get("/api/v1/work-items?status=DRAFT", headers=ah)
+    assert {i["id"] for i in by_status.json()} == {assigned["id"], collaborating["id"]}
+
+    all_items = await client.get("/api/v1/work-items", headers=lh)
+    assert len(all_items.json()) == 3
+    for item in (assigned, collaborating):
+        detail = await client.get(f"/api/v1/work-items/{item['id']}", headers=ah)
+        assert detail.status_code == 200
+    hidden = await client.get(f"/api/v1/work-items/{unrelated['id']}", headers=ah)
+    assert hidden.status_code == 404
+    leader_detail = await client.get(f"/api/v1/work-items/{unrelated['id']}", headers=lh)
+    assert leader_detail.status_code == 200
+
+    removed = await client.patch(
+        f"/api/v1/work-items/{collaborating['id']}",
+        json={"version": 1, "collaborator_ids": []}, headers=lh,
+    )
+    assert removed.status_code == 200
+    reassigned = await client.patch(
+        f"/api/v1/work-items/{assigned['id']}",
+        json={"version": 1, "assignee_id": bob_id, "collaborator_ids": []}, headers=lh,
+    )
+    assert reassigned.status_code == 200
+    empty = await client.get("/api/v1/work-items", headers=ah)
+    assert empty.json() == []
+    for item in (assigned, collaborating):
+        detail = await client.get(f"/api/v1/work-items/{item['id']}", headers=ah)
+        assert detail.status_code == 404
 
 
 async def test_stale_version_returns_409(client: httpx.AsyncClient, project: Project) -> None:
@@ -315,12 +378,12 @@ async def test_patch_updates_fields_and_reassigns_with_audit(
 
 
 async def test_get_work_item_detail(client: httpx.AsyncClient, project: Project) -> None:
-    """任何成员可看详情；序列化含完整字段。"""
+    """主执行人可看详情；序列化含完整字段。"""
     ctx = await _setup(client, project)
     alice = ctx["alice"]
     item = (await _create_item(client, ctx["leader_headers"], str(alice.id))).json()  # type: ignore[union-attr]
 
-    resp = await client.get(f"/api/v1/work-items/{item['id']}", headers=ctx["bob_headers"])
+    resp = await client.get(f"/api/v1/work-items/{item['id']}", headers=ctx["alice_headers"])
     assert resp.status_code == 200
     body = resp.json()
     assert set(body) == {

@@ -36,7 +36,7 @@ async function pickSelectOption(
   await user.click(within(listbox).getByText(optionName));
 }
 
-/** 创建工作项表单组件测试（18.2 节）：渲染、必填校验、提交调用 API、错误展示。 */
+/** 创建工作项表单组件测试：渲染、必填校验、提交调用 API、错误展示。 */
 describe("WorkItemFormDialog 创建工作项表单", () => {
   beforeEach(() => {
     vi.clearAllMocks();

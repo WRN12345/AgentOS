@@ -17,6 +17,7 @@ import type { StoredFile } from "../../../types";
 const storedFile: StoredFile = {
   id: "file-1",
   original_filename: "说明文档.md",
+  directory_path: "/",
   size_bytes: 2048,
   mime_type: "text/markdown",
   sha256: "a".repeat(64),
@@ -55,7 +56,7 @@ function injectFile(input: HTMLElement, file: File) {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
-/** 文件上传组件测试（18.2 节）：前置校验、上传调用、成功/失败展示与重试。 */
+/** 文件上传组件测试：前置校验、上传调用、成功/失败展示与重试。 */
 describe("FileUploadField 文件上传", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,12 +114,32 @@ describe("FileUploadField 文件上传", () => {
     // FormData 携带文件与关联工作项
     const formData = mockApi.upload.mock.calls[0][1] as FormData;
     expect(formData.get("work_item_id")).toBe("wi-1");
+    expect(formData.get("directory_path")).toBe("/");
     expect((formData.get("file") as File).name).toBe("说明文档.md");
 
     expect(await screen.findByText(/已上传/)).toBeInTheDocument();
     await waitFor(() => {
       expect(props.onUploaded).toHaveBeenCalledWith(storedFile);
     });
+  });
+
+  it.each(["/资料/设计", ""])("上传目录 %s 随文件提交", async (directory) => {
+    renderField();
+    mockApi.upload.mockResolvedValue({ ...storedFile, directory_path: directory || "/" });
+    const user = userEvent.setup();
+    const directoryInput = screen.getByLabelText("上传目录（可选）");
+    expect(directoryInput).toHaveValue("/");
+    await user.clear(directoryInput);
+    if (directory) await user.type(directoryInput, directory);
+    await pickFile(
+      document.querySelector('input[type="file"]') as HTMLInputElement,
+      new File(["内容"], "说明文档.md", { type: "text/markdown" }),
+    );
+    const formData = mockApi.upload.mock.calls[0][1] as FormData;
+    expect(formData.get("directory_path")).toBe(directory || "/");
+    await waitFor(() => expect(directoryInput).toBeDisabled());
+    await user.click(screen.getByRole("button", { name: "重新选择" }));
+    expect(directoryInput).toBeEnabled();
   });
 
   it("上传失败：展示错误信息与重试按钮，点击重试重新上传", async () => {

@@ -1,7 +1,7 @@
 """验证 Agent 建议、运行记录、反馈和模型配置接口。
 
 建议列表应支持项目内过滤和分页；仅负责人可以反馈，且反馈必须持久化审计信息。
-运行详情按项目成员身份授权；模型配置向所有已登录用户开放。
+运行详情按任务可见范围授权；模型配置向所有已登录用户开放。
 """
 
 import uuid
@@ -119,6 +119,90 @@ async def test_project_level_suggestion_has_null_work_item(
     )
     assert resp.status_code == 200
     assert resp.json()[0]["work_item_id"] is None
+
+
+async def test_member_ai_visibility_and_pagination(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    """建议、运行列表和详情仅向主执行人、协助者及负责人开放。"""
+    ctx = await _setup(client, project)
+    alice = ctx["alice"]
+    leader = ctx["leader"]
+    assert isinstance(alice, ProjectMember)
+    assert isinstance(leader, ProjectMember)
+    lh = ctx["leader_headers"]
+    ah = ctx["alice_headers"]
+    assigned = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=ctx["item_id"]
+    )
+    collaborative_item = await client.post(
+        "/api/v1/work-items",
+        json={
+            "title": "协助任务", "assignee_id": str(leader.id),
+            "collaborator_ids": [str(alice.id)],
+        },
+        headers=lh,
+    )
+    assert collaborative_item.status_code == 201
+    collaborative_id = collaborative_item.json()["id"]
+    collaborating = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=collaborative_id
+    )
+    unrelated_item = await client.post(
+        "/api/v1/work-items",
+        json={"title": "其他任务", "assignee_id": str(leader.id)}, headers=lh,
+    )
+    assert unrelated_item.status_code == 201
+    unrelated_id = unrelated_item.json()["id"]
+    unrelated = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=unrelated_id
+    )
+    project_level = await _make_suggestion(project_id=project.id, suggestion_type="review")
+
+    for path, expected in (
+        ("agent-suggestions", [str(collaborating.id), str(assigned.id)]),
+        ("agent-runs", [str(collaborating.run_id), str(assigned.run_id)]),
+    ):
+        response = await client.get(f"/api/v1/{path}", headers=ah)
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == expected
+        for offset, expected_id in enumerate(expected):
+            page = await client.get(f"/api/v1/{path}?limit=1&offset={offset}", headers=ah)
+            assert [row["id"] for row in page.json()] == [expected_id]
+        all_rows = await client.get(f"/api/v1/{path}", headers=lh)
+        assert len(all_rows.json()) == 4
+
+    filtered = await client.get(
+        "/api/v1/agent-suggestions?suggestion_type=review&review_status=pending", headers=ah
+    )
+    assert len(filtered.json()) == 2
+    for item_id, expected in ((unrelated_id, []), (collaborative_id, [str(collaborating.id)])):
+        response = await client.get(
+            f"/api/v1/agent-suggestions?work_item_id={item_id}", headers=ah
+        )
+        assert [row["id"] for row in response.json()] == expected
+    runs = await client.get("/api/v1/agent-runs?status=succeeded", headers=ah)
+    assert len(runs.json()) == 2
+
+    for suggestion, status in (
+        (assigned, 200), (collaborating, 200), (unrelated, 404), (project_level, 404)
+    ):
+        path = f"/api/v1/agent-runs/{suggestion.run_id}"
+        assert (await client.get(path, headers=ah)).status_code == status
+        assert (await client.get(path, headers=lh)).status_code == 200
+
+    for item_id in (ctx["item_id"], collaborative_id):
+        response = await client.patch(
+            f"/api/v1/work-items/{item_id}",
+            json={"version": 1, "assignee_id": str(leader.id), "collaborator_ids": []},
+            headers=lh,
+        )
+        assert response.status_code == 200
+    for path in ("agent-suggestions", "agent-runs"):
+        assert (await client.get(f"/api/v1/{path}", headers=ah)).json() == []
+    for suggestion in (assigned, collaborating):
+        response = await client.get(f"/api/v1/agent-runs/{suggestion.run_id}", headers=ah)
+        assert response.status_code == 404
 
 
 async def test_list_suggestions_filters(
@@ -304,6 +388,7 @@ async def test_list_and_get_agent_runs(
             agent_type="workflow_risk",
             trigger_source="scheduler",
             project_id=project.id,  # 运行列表必须按项目归属过滤。
+            work_item_id=uuid.UUID(ctx["item_id"]),
             error="ModelUnavailableError: timeout",
             duration_ms=1200,
             retry_count=3,
@@ -327,6 +412,49 @@ async def test_list_and_get_agent_runs(
 
     missing = await client.get(f"/api/v1/agent-runs/{uuid.uuid4()}", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_run_filters_respect_visibility_and_pagination(
+    client: httpx.AsyncClient, project: Project
+) -> None:
+    ctx = await _setup(client, project)
+    first = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=ctx["item_id"]
+    )
+    second = await _make_suggestion(
+        project_id=project.id, suggestion_type="review", work_item_id=ctx["item_id"]
+    )
+    await _make_suggestion(
+        project_id=project.id, suggestion_type="risk", work_item_id=ctx["item_id"]
+    )
+    await _make_suggestion(project_id=project.id, suggestion_type="review")
+    for headers_key in ("alice_headers", "leader_headers"):
+        headers = ctx[headers_key]
+        params = {
+            "work_item_id": ctx["item_id"], "agent_type": "review_agent", "status": "succeeded"
+        }
+        response = await client.get("/api/v1/agent-runs", params=params, headers=headers)
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == [str(second.run_id), str(first.run_id)]
+        page = await client.get(
+            "/api/v1/agent-runs", params={**params, "limit": 1, "offset": 1}, headers=headers
+        )
+        assert [row["id"] for row in page.json()] == [str(first.run_id)]
+        for override in (
+            {"agent_type": "unknown"}, {"status": "failed"}, {"work_item_id": str(uuid.uuid4())}
+        ):
+            response = await client.get(
+                "/api/v1/agent-runs", params={**params, **override}, headers=headers
+            )
+            assert response.json() == []
+    by_type = await client.get(
+        "/api/v1/agent-runs?agent_type=review_agent", headers=ctx["alice_headers"]
+    )
+    assert [row["id"] for row in by_type.json()] == [str(second.run_id), str(first.run_id)]
+    invalid = await client.get(
+        "/api/v1/agent-runs?work_item_id=invalid", headers=ctx["alice_headers"]
+    )
+    assert invalid.status_code == 422
 
 
 async def test_config_exposes_llm_external_flag(

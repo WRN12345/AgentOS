@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "../../services/api";
 import type { DeliverableType, ReviewDecision } from "../../types";
 
-/** 交付物类型中文文案（7.5 节三类）。 */
+/** 交付物类型中文文案（三类）。 */
 export const DELIVERABLE_TYPE_META: Record<
   DeliverableType,
   { label: string; className: string }
@@ -12,7 +12,7 @@ export const DELIVERABLE_TYPE_META: Record<
   file: { label: "文件", className: "bg-green-100 text-green-700" },
 };
 
-/** 审核结论文案（7.5 节三种结论）。 */
+/** 审核结论文案（三种结论）。 */
 export const REVIEW_DECISION_META: Record<
   ReviewDecision,
   { label: string; className: string }
@@ -112,7 +112,7 @@ export function normalizeGitDeliveryUrl(value: string): string | null {
   }
 }
 
-/* ---------- 文件上传前置校验（与后端白名单一致，14 章） ---------- */
+/* ---------- 文件上传前置校验（与后端白名单一致） ---------- */
 
 /** 上传大小上限：20MB（与后端配置一致）。 */
 export const FILE_MAX_BYTES = 20 * 1024 * 1024;
@@ -157,7 +157,7 @@ export function shortSha(sha256: string): string {
 
 /**
  * 触发浏览器下载：fetch blob → ObjectURL → a[download]。
- * 403（无关成员）时 toast 明确提示无权限（16 节）。
+ * 403（无关成员）时 toast 明确提示无权限。
  */
 export async function downloadStoredFile(
   fileId: string,

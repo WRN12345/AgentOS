@@ -15,7 +15,7 @@ import { mockApi } from "../../../test/mock-api";
 import { renderWithProviders, signInAs } from "../../../test/render";
 import { makeMember, makeProject, makeUser } from "../../../test/fixtures";
 
-/** 项目选择页（ticket 09）：列出我参与的项目 + 角色徽章，点选进入工作台。 */
+/** 项目选择页：列出我参与的项目 + 角色徽章，点选进入工作台。 */
 describe("ProjectPickerPage 项目选择页", () => {
   beforeEach(() => {
     vi.clearAllMocks();

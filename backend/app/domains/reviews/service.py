@@ -108,7 +108,7 @@ async def create_review(
     """由项目负责人审核，并在同一事务中记录状态、审核、审计和通知。"""
     if actor.role != ROLE_LEADER:
         raise ApiException(403, ErrorCodes.FORBIDDEN, "仅项目负责人可审核")
-    item = await get_work_item(session, item_id, project_id=actor.project_id)  # 越权按不存在处理
+    item = await get_work_item(session, item_id, for_update=True, project_id=actor.project_id)
     if item.status != WorkItemStatus.IN_REVIEW.value:
         raise ApiException(
             409,
