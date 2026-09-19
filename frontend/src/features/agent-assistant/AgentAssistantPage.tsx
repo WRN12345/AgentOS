@@ -50,7 +50,7 @@ import { RequirementPipelineWizard } from "./RequirementPipelineWizard";
 import { queryKeys } from "../../lib/queryKeys";
 
 /**
- * Agent 建议中心（13.1 节，T5.7）：建议列表 + 过滤 + 采纳/忽略反馈 +
+ * Agent 建议中心：建议列表 + 过滤 + 采纳/忽略反馈 +
  * 失败运行人工重新触发。按任务可见范围读取，反馈操作仅负责人（后端同步强校验）。
  */
 export default function AgentAssistantPage() {
@@ -62,7 +62,7 @@ export default function AgentAssistantPage() {
     null,
   );
 
-  // 16 节：使用云端模型时提示"数据将发送至外部服务"
+  // 使用云端模型时提示"数据将发送至外部服务"
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: () => api.get<AgentConfig>("/config"),
@@ -92,8 +92,7 @@ export default function AgentAssistantPage() {
       {config?.llm_is_external && (
         <p className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           当前使用云端模型服务（{config.llm_provider}
-          ），Agent 分析所需的数据将发送至外部服务，请勿在输入中包含敏感信息（16
-          节）。
+          ），Agent 分析所需的数据将发送至外部服务，请勿在输入中包含敏感信息。
         </p>
       )}
 
@@ -218,7 +217,7 @@ function SuggestionCard({
       ),
     onSuccess: (_data, action) => {
       if (suggestion.suggestion_type === "memory_proposal") {
-        // 记忆提议确认即生效（M4.4）：刷新核心记忆缓存
+        // 记忆提议确认即生效：刷新核心记忆缓存
         toast.success(
           action === "accepted" ? "已确认，核心记忆已生效" : "已拒绝该提议",
         );
@@ -367,7 +366,7 @@ function SuggestionCard({
   );
 }
 
-/** 运行记录：展示状态/耗时/错误，failed 运行可人工重新触发（T5.6 入口）。 */
+/** 运行记录：展示状态/耗时/错误，failed 运行可人工重新触发。 */
 function AgentRunsCard() {
   const queryClient = useQueryClient();
 

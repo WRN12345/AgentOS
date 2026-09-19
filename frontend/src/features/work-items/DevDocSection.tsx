@@ -76,7 +76,7 @@ export function DevDocReviewPanel({ suggestionId }: { suggestionId: string }) {
 }
 
 /**
- * 开发文档区（2026-07-30 设计文档 §5）：先文档后开发。
+ * 开发文档区：先文档后开发。
  * 主执行人：撰写/编辑（textarea + 预览切换）、保存草稿、提交审核；被打回显示理由可重交。
  * 负责人：只读查看 + 确认/打回/豁免。无文档时 GET 返回 404，按"未创建"处理。
  */

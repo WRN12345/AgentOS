@@ -45,7 +45,7 @@ const entryList: CoreMemoryEntryList = {
   budget_chars: 4000,
 };
 
-describe("CoreMemoryPage（M4.7）", () => {
+describe("CoreMemoryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stubGet({ "/memory/core-entries": entryList });
@@ -111,7 +111,7 @@ describe("CoreMemoryPage（M4.7）", () => {
     );
   });
 
-  it("空列表时如实标注积累尚少（16.11）", async () => {
+  it("空列表时如实标注积累尚少", async () => {
     stubGet({
       "/memory/core-entries": { entries: [], used_chars: 0, budget_chars: 4000 },
     });

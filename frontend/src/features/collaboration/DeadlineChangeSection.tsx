@@ -84,7 +84,7 @@ interface Props {
   workItem: WorkItem;
 }
 
-/** 工作项详情页 DDL 变更区（7.4 节）：主任务级需负责人审批，协作级由双方协商。 */
+/** 工作项详情页 DDL 变更区：主任务级需负责人审批，协作级由双方协商。 */
 export function DeadlineChangeSection({ workItem }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
@@ -191,8 +191,7 @@ export function DeadlineChangeSection({ workItem }: Props) {
         <div>
           <CardTitle>DDL 变更</CardTitle>
           <CardDescription>
-            主任务 DDL 变更须负责人审批；协作 DDL 不影响主任务时双方确认即生效（7.4
-            节）
+            主任务 DDL 变更须负责人审批；协作 DDL 不影响主任务时双方确认即生效
           </CardDescription>
         </div>
         {targetOptions.length > 0 && (

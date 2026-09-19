@@ -72,7 +72,7 @@ interface Props {
   members: Member[];
 }
 
-/** 工作项详情页转派区（7.3 节）：主执行人申请转派，展示转派历史。 */
+/** 工作项详情页转派区：主执行人申请转派，展示转派历史。 */
 export function TransferSection({ workItem, members }: Props) {
   const queryClient = useQueryClient();
   const selfMember = useAuthStore((s) => s.member);
@@ -148,7 +148,7 @@ export function TransferSection({ workItem, members }: Props) {
         <div>
           <CardTitle>转派</CardTitle>
           <CardDescription>
-            审批通过后主执行人才会变更，全程留痕（8.3 节）
+            审批通过后主执行人才会变更，全程留痕
           </CardDescription>
         </div>
         {isAssignee && (
@@ -216,7 +216,7 @@ export function TransferSection({ workItem, members }: Props) {
           <DialogHeader>
             <DialogTitle>申请转派</DialogTitle>
             <DialogDescription>
-              负责人审批通过前主执行人不变；原因与影响说明必填（7.3 节）。
+              负责人审批通过前主执行人不变；原因与影响说明必填。
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>

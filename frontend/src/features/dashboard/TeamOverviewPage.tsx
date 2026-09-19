@@ -307,7 +307,7 @@ export default function TeamOverviewPage() {
         </Card>
       </div>
 
-      {/* 项目时间线：审计事件流（13.1 节，负责人与管理员只读可见） */}
+      {/* 项目时间线：审计事件流（负责人与管理员只读可见） */}
       {(isLeader || isAdmin) && <TimelineSection />}
     </div>
   );

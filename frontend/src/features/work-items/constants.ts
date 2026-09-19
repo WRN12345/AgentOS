@@ -24,7 +24,7 @@ export const PRIORITY_META: Record<
   urgent: { label: "紧急", className: "bg-red-100 text-red-700" },
 };
 
-/** 开发文档状态中文文案与徽标样式（2026-07-30 设计文档 §4.1）。 */
+/** 开发文档状态中文文案与徽标样式。 */
 export const DEV_DOC_STATUS_META: Record<
   DevDocStatus,
   { label: string; className: string }

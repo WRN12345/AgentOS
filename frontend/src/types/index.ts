@@ -1,4 +1,4 @@
-/** API 统一错误格式（设计文档 17.1 节）。 */
+/** API 统一错误格式。 */
 export interface ApiErrorBody {
   code: string;
   message: string;
@@ -11,7 +11,7 @@ export interface HealthResponse {
   checks: Record<string, string>;
 }
 
-/** 登录/刷新接口返回的令牌对（12.1 节）。 */
+/** 登录/刷新接口返回的令牌对。 */
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
@@ -39,7 +39,7 @@ export interface MyProject {
   role: MemberRole;
 }
 
-/** 成员能力标签（6.2 节）：熟练度 1-5，需负责人确认。 */
+/** 成员能力标签：熟练度 1-5，需负责人确认。 */
 export interface MemberCapability {
   id: string;
   tag: string;
@@ -118,7 +118,7 @@ export interface MemberBrief {
   display_name: string;
 }
 
-/* ---------- 记忆模块：核心记忆（设计文档第 8 节，M4.3） ---------- */
+/* ---------- 记忆模块：核心记忆 ---------- */
 
 /** 核心记忆条目；proposed_by 为 null 表示 Agent 提议（负责人确认后生效）。 */
 export interface CoreMemoryEntry {
@@ -139,7 +139,7 @@ export interface CoreMemoryEntryList {
   budget_chars: number;
 }
 
-/* ---------- 记忆模块：知识库问答（设计文档第 11 节②，M7.3） ---------- */
+/* ---------- 记忆模块：知识库问答 ---------- */
 
 /** 依据/线索：来源定位 + 片段内容。 */
 export interface QaSource {
@@ -151,7 +151,7 @@ export interface QaSource {
   history_kind?: "work_item" | "agent_run" | null;
 }
 
-/** POST /memory/qa 响应：answered 附依据；refused 附最接近的线索（16.13）。 */
+/** POST /memory/qa 响应：answered 附依据；refused 附最接近的线索。 */
 export interface QaResponse {
   status: "answered" | "refused";
   answer: string | null;
@@ -159,7 +159,7 @@ export interface QaResponse {
   clues: QaSource[];
 }
 
-/** GET /memory/qa/history 条目：本人问答历史（2026-08-24 决策修订）。 */
+/** GET /memory/qa/history 条目：本人问答历史。 */
 export interface QaHistoryItem {
   id: string;
   question: string;
@@ -169,7 +169,7 @@ export interface QaHistoryItem {
   created_at: string;
 }
 
-/** 协作请求状态（8.2 节）。 */
+/** 协作请求状态。 */
 export type CollaborationStatus =
   | "REQUESTED"
   | "ACCEPTED"
@@ -202,7 +202,7 @@ export interface CollaborationRequest extends CollaborationRequestSummary {
   result_text: string | null;
 }
 
-/** 转派申请状态（8.3 节）。 */
+/** 转派申请状态。 */
 export type TransferStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
 
 /** 转派申请摘要（列表接口返回；不含 reason/impact_note 正文）。 */
@@ -227,7 +227,7 @@ export interface TransferRequest extends TransferRequestSummary {
   approved_at: string | null;
 }
 
-/** DDL 变更申请状态（8.4 节）。 */
+/** DDL 变更申请状态。 */
 export type DeadlineChangeStatus =
   | "PENDING_IMPACT_ANALYSIS"
   | "PENDING_APPROVAL"
@@ -255,7 +255,7 @@ export interface DeadlineChangeSummary {
   updated_at: string;
 }
 
-/** 规则化影响分析内容（7.4、8.4 节，DDL 变更详情接口返回）。 */
+/** 规则化影响分析内容（DDL 变更详情接口返回）。 */
 export interface DeadlineImpactAnalysis {
   target: {
     type: DeadlineTargetType;
@@ -330,7 +330,7 @@ export interface DeliverableListItem {
   } | null;
 }
 
-/* ---------- 开发文档前置（2026-07-30 设计文档 §4） ---------- */
+/* ---------- 开发文档前置 ---------- */
 
 export type DevDocStatus = "DRAFT" | "SUBMITTED" | "CONFIRMED" | "RETURNED";
 
@@ -359,7 +359,7 @@ export interface DevDoc {
 
 /* ---------- 阶段 4：交付与审核 ---------- */
 
-/** POST /files 响应：服务端落库的文件记录（不含 storage_key，16 节最小暴露）。 */
+/** POST /files 响应：服务端落库的文件记录（不含 storage_key，最小暴露）。 */
 export interface StoredFile {
   id: string;
   original_filename: string;
@@ -373,13 +373,13 @@ export interface StoredFile {
   /** 版本链：同目录同名上传递增；superseded_by 非空表示已被新版本取代。 */
   version: number;
   superseded_by: string | null;
-  /** 索引状态（设计文档第 6 节）。 */
+  /** 索引状态。 */
   index_status: IndexStatus;
   created_at: string;
   updated_at: string;
 }
 
-/** 索引状态机（设计文档第 6 节）。 */
+/** 索引状态机。 */
 export type IndexStatus =
   "pending" | "indexing" | "indexed" | "failed" | "unindexed";
 
@@ -394,7 +394,7 @@ export interface FileBrief {
   sha256: string;
 }
 
-/** 交付物版本（7.5 节：每次提交生成新版本，旧版本保留可查）。 */
+/** 交付物版本：每次提交生成新版本，旧版本保留可查。 */
 export interface Deliverable {
   id: string;
   work_item_id: string;
@@ -409,7 +409,7 @@ export interface Deliverable {
 
 export type ReviewDecision = "approve" | "request_changes" | "reject";
 
-/** 最终审核记录（7.5 节）：反馈正文仅负责人与主执行人可见（16 节）。 */
+/** 最终审核记录：反馈正文仅负责人与主执行人可见。 */
 export interface Review {
   id: string;
   work_item_id: string;
@@ -424,7 +424,7 @@ export interface Review {
   updated_at: string;
 }
 
-/** 站内通知（12.6 节）。 */
+/** 站内通知。 */
 export interface AppNotification {
   id: string;
   type: string;
@@ -469,11 +469,11 @@ export type AgentSuggestionReviewStatus =
   | "pending"
   | "accepted"
   | "ignored"
-  /** 核心记忆提议挂起超 7 天自动过期（16.6，M4.5）：终态，不可再确认 */
+  /** 核心记忆提议挂起超 7 天自动过期：终态，不可再确认 */
   | "expired";
 
 /**
- * Agent 建议（GET /agent-suggestions，12.5 节，T5.7）。
+ * Agent 建议（GET /agent-suggestions）。
  * content 统一含 summary/rationale，其余字段随 suggestion_type 扩展
  * （见 features/agent-assistant/SuggestionContent.tsx 的结构化渲染）。
  */
@@ -495,7 +495,7 @@ export interface AgentSuggestion {
   created_at: string;
 }
 
-/* ---------- 需求拆解流水线（2026-07-30 设计文档 §4.2） ---------- */
+/* ---------- 需求拆解流水线 ---------- */
 
 /** requirement_pipeline 建议中的成员推荐（真实 member_id + 推荐理由）。 */
 export interface PipelineAssigneeCandidate {
@@ -535,7 +535,7 @@ export interface RequirementPipelineContent {
   risks?: string[];
 }
 
-/** Agent 运行记录（GET /agent-runs[/{id}]，T5.7 列表/详情带错误与耗时）。 */
+/** Agent 运行记录（GET /agent-runs[/{id}]，列表/详情带错误与耗时）。 */
 export interface AgentRun {
   id: string;
   agent_type: string;
@@ -550,13 +550,13 @@ export interface AgentRun {
   retry_count: number;
 }
 
-/** GET /config 返回的前端可用配置（16 节：外部数据提示）。 */
+/** GET /config 返回的前端可用配置（外部数据提示）。 */
 export interface AgentConfig {
   llm_provider: string;
   llm_is_external: boolean;
 }
 
-/* ---------- 管理控制台（ticket 10，仅全局管理员） ---------- */
+/* ---------- 管理控制台（仅全局管理员） ---------- */
 
 /** 项目负责人摘要（GET /projects 内嵌；管理员视角，非成员记录）。 */
 export interface LeaderBrief {

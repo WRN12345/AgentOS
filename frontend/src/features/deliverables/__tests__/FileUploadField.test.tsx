@@ -56,7 +56,7 @@ function injectFile(input: HTMLElement, file: File) {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
-/** 文件上传组件测试（18.2 节）：前置校验、上传调用、成功/失败展示与重试。 */
+/** 文件上传组件测试：前置校验、上传调用、成功/失败展示与重试。 */
 describe("FileUploadField 文件上传", () => {
   beforeEach(() => {
     vi.clearAllMocks();

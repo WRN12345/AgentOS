@@ -70,7 +70,7 @@ interface RequirementPipelineWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   members: Member[];
-  /** 16 节：外部模型服务时在向导内同步提示。 */
+  /** 外部模型服务时在向导内同步提示。 */
   llmIsExternal: boolean;
   /**
    * 从既有 pipeline 建议恢复（建议中心"采纳并创建工作项"入口）：
@@ -124,7 +124,7 @@ function draftsFromContent(content: RequirementPipelineContent): DraftItem[] {
 }
 
 /**
- * 需求拆解流水线向导（2026-07-30 设计文档 §5），取代原 RequirementGuidedCreateDialog。
+ * 需求拆解流水线向导。
  *
  * 链路：输入自然语言需求（可指定人选）→ POST /agent-analysis
  * （agent_type=requirement_pipeline，仅负责人）→ 2s 轮询运行状态 →

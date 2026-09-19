@@ -49,7 +49,7 @@ import { DeliverableBody } from "../deliverables/DeliverableBody";
 import { queryKeys } from "../../lib/queryKeys";
 
 /**
- * 审批中心"交付审核"区（13.1 节，仅负责人）：列出 IN_REVIEW 工作项，
+ * 审批中心"交付审核"区（仅负责人）：列出 IN_REVIEW 工作项，
  * 审核 Dialog 查看当前/历史版本交付物与 reviews 历史，
  * 三选一结论提交 POST /work-items/{id}/reviews。
  */
@@ -244,7 +244,7 @@ function ReviewDialog({
           <DialogTitle>交付审核：{item.title}</DialogTitle>
           <DialogDescription>
             主执行人：{item.assignee.display_name}。通过则工作项完成；
-            要求修改将退回进行中；拒绝保持审核中（7.5 节）。
+            要求修改将退回进行中；拒绝保持审核中。
           </DialogDescription>
         </DialogHeader>
 
@@ -341,7 +341,7 @@ function ReviewDialog({
             <Textarea
               id="review-feedback"
               rows={4}
-              placeholder="审核反馈仅负责人与该工作项主执行人可见（16 节）"
+              placeholder="审核反馈仅负责人与该工作项主执行人可见"
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
             />

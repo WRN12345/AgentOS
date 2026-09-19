@@ -32,7 +32,7 @@ import { TransferSection } from "../collaboration/TransferSection";
 import { DeadlineChangeSection } from "../collaboration/DeadlineChangeSection";
 import { queryKeys } from "../../lib/queryKeys";
 
-/** 命令定义：状态机迁移动作（8.1 节）。 */
+/** 命令定义：状态机迁移动作。 */
 interface Command {
   key: string;
   label: string;
@@ -135,7 +135,7 @@ export default function WorkItemDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.workItems() });
         return;
       }
-      // T4.4：无交付物时提交审核被 422 拒绝，引导先提交交付物
+      // 无交付物时提交审核被 422 拒绝，引导先提交交付物
       if (error instanceof ApiError && error.code === "DELIVERABLE_REQUIRED") {
         toast.error("请先提交交付物，再提交审核");
         return;

@@ -39,7 +39,7 @@ interface CreateAccountDialogProps {
 }
 
 /**
- * 管理控制台"新建账号"对话框（建号收敛到 admin，16 节）：
+ * 管理控制台"新建账号"对话框（由管理员创建账号）：
  * admin 创建全局账号，一次性初始密码仅此一次返回，之后不可再查。
  */
 export function CreateAccountDialog({

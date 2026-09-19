@@ -32,13 +32,13 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   core_memory: "核心记忆",
 };
 
-/** 冷启动标注（M7.6，16.11）：本次检索结果稀少时如实提示"本项目积累尚少"。 */
+/** 冷启动标注：本次检索结果稀少时如实提示"本项目积累尚少"。 */
 function isSparseResult(result: QaResponse): boolean {
   if (result.status === "answered") return result.sources.length <= 1;
   return result.clues.length <= 1;
 }
 
-/** 依据原文弹窗（M7.5，设计文档第 11 节）：片段原文 + 按来源类型的追溯入口。 */
+/** 依据原文弹窗：片段原文 + 按来源类型的追溯入口。 */
 function SourceDialog({
   source,
   onClose,
@@ -89,7 +89,7 @@ function SourceDialog({
   );
 }
 
-/** 依据列表（M7.5）：答案下方列出全部依据，点击查看原文。 */
+/** 依据列表：答案下方列出全部依据，点击查看原文。 */
 function SourcesList({
   sources,
   onOpen,
@@ -122,9 +122,9 @@ function SourcesList({
 }
 
 /**
- * 知识库问答页（M7.4，设计文档第 11 节②）：
+ * 知识库问答页：
  * 聊天式单轮提问（本期无多轮、无流式）；命中展示答案与依据，
- * 低于阈值明确拒答并列出最接近的线索（16.13 宁拒答不编造）。
+ * 低于阈值明确拒答并列出最接近的线索（宁拒答不编造）。
  */
 export default function QaPage() {
   const queryClient = useQueryClient();
@@ -132,7 +132,7 @@ export default function QaPage() {
   const [result, setResult] = useState<QaResponse | null>(null);
   const [activeSource, setActiveSource] = useState<QaSource | null>(null);
 
-  // 本人问答历史（2026-08-24 修订：按人落库，仅本人可见）
+  // 本人问答历史：按人落库，仅本人可见
   const { data: history } = useQuery({
     queryKey: queryKeys.qaHistory(),
     queryFn: () => api.get<QaHistoryItem[]>("/memory/qa/history"),

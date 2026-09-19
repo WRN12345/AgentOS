@@ -1,6 +1,6 @@
 import type { IndexStatus } from "../../types";
 
-/** 索引状态展示元信息（设计文档第 6 节）。 */
+/** 索引状态展示元信息。 */
 export const INDEX_STATUS_META: Record<
   IndexStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }

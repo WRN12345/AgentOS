@@ -25,7 +25,7 @@ export class ApiError extends Error {
 
 const BASE_URL = "/api/v1";
 
-/** 版本冲突提示文案（T2.7 验收要求）。 */
+/** 版本冲突提示文案。 */
 export const VERSION_CONFLICT_MESSAGE =
   "任务已被其他成员更新，请刷新后重试";
 

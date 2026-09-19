@@ -32,12 +32,12 @@ import {
 
 /**
  * ============================================================================
- * 端到端验收场景骨架（设计文档 18.2 节，T6.2 / T6.3 共用）
+ * 端到端验收场景骨架
  * ============================================================================
  *
- * 场景步骤（与后端 pytest 端到端场景 T6.3 一一对应，共用同一步骤编号）：
+ * 场景步骤（与后端 pytest 端到端场景一一对应，共用同一步骤编号）：
  *
- *   步骤 1  登录        POST /auth/login → GET /auth/me/projects（ticket 09：
+ *   步骤 1  登录        POST /auth/login → GET /auth/me/projects（
  *                      24h 记忆窗口内自动进入上次项目，否则进项目选择页）
  *                      → GET /auth/me → GET /members
  *   步骤 2  分配        POST /work-items（负责人创建并指派主执行人，创建后为 DRAFT）
@@ -62,7 +62,7 @@ import {
  *
  * 约定：本文件以页面级集成形式跑通「不依赖真实后端事务语义」的步骤
  * （API 层 mock）；依赖真实后端状态机/审计/通知/幂等语义的步骤以 it.todo
- * 占位，由后端 pytest 场景（T6.3）实现并断言，前端骨架只固定步骤与接口约定。
+ * 占位，由后端 pytest 场景实现并断言，前端骨架只固定步骤与接口约定。
  * ============================================================================
  */
 
@@ -158,12 +158,12 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     });
   });
 
-  // TODO(T6.3 后端 pytest)：发布后状态机流转 DRAFT → READY → IN_PROGRESS。
+  // TODO(后端 pytest)：发布后状态机流转 DRAFT → READY → IN_PROGRESS。
   // 接口约定：POST /work-items/{id}/publish、POST /work-items/{id}/start，
   // body 均为 { version }，携带 Idempotency-Key；断言状态迁移与审计事件。
   it.todo("步骤 2b：发布工作项并由主执行人开始（依赖真实后端状态机）");
 
-  // TODO(T6.3 后端 pytest)：转派全流程。
+  // TODO(后端 pytest)：转派全流程。
   // 接口约定：POST /work-items/{id}/transfer-requests { to_member_id, reason,
   // impact_note } → 负责人 POST /transfer-requests/{id}/approve { version,
   // decision_note }；断言工作项 assignee 变更、通知与审计事件。
@@ -200,7 +200,7 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     });
   });
 
-  // TODO(T6.3 后端 pytest)：协作状态机 accept → start → submit → complete。
+  // TODO(后端 pytest)：协作状态机 accept → start → submit → complete。
   // 接口约定：POST /collaboration-requests/{id}/{action}，body { version }
   // （submit 额外携带 result_text）；断言双方通知与版本号递增。
   it.todo("步骤 4b：协作请求接受、开始、回传、确认完成（依赖真实后端状态机）");
@@ -239,7 +239,7 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     });
   });
 
-  // TODO(T6.3 后端 pytest)：交付物重复提交版本号 +1 且旧版本保留可查；
+  // TODO(后端 pytest)：交付物重复提交版本号 +1 且旧版本保留可查；
   // POST /work-items/{id}/submit 使工作项进入 IN_REVIEW。
   it.todo("步骤 5b：再次提交生成第 2 版并送审（依赖真实后端版本语义）");
 
@@ -275,8 +275,8 @@ describe("端到端场景：登录 → 分配 → 转派 → 协作 → 提交 �
     });
   });
 
-  // TODO(T6.3 后端 pytest)：approve 后工作项状态 COMPLETED（归档为只读），
-  // 全流程审计事件可通过 GET /audit-events 按第 9 章时序完整回放；
-  // 通知（GET /notifications）与 Agent 建议不改变正式业务状态（18.3 节）。
+  // TODO(后端 pytest)：approve 后工作项状态 COMPLETED（归档为只读），
+  // 全流程审计事件可通过 GET /audit-events 按时序完整回放；
+  // 通知（GET /notifications）与 Agent 建议不改变正式业务状态。
   it.todo("步骤 7：工作项归档（COMPLETED）与审计链回放（依赖真实后端）");
 });

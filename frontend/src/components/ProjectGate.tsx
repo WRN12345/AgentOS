@@ -8,7 +8,7 @@ import { api } from "../services/api";
 import type { MyProject } from "../types";
 
 /**
- * 工作台守卫：进入项目工作台前的分流（ticket 09）。
+ * 工作台守卫：进入项目工作台前的分流。
  * 管理员 → 管理控制台；普通用户未选项目、或上次选择已过 24h 记忆窗口 → 项目选择页；
  * 已选且仍在窗口内 → 放行工作台。
  */

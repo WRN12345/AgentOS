@@ -58,7 +58,7 @@ interface Props {
 }
 
 /**
- * 工作项详情页交付区（13.2 节）：版本历史（含哈希/提交人/时间）、
+ * 工作项详情页交付区：版本历史（含哈希/提交人/时间）、
  * 三类交付物提交 Dialog、审核反馈区（仅负责人与主执行人可见）。
  * 交付物列表对工作项无关成员 403，整体静默不渲染。
  */
@@ -74,7 +74,7 @@ export function DeliverableSection({ workItem }: Props) {
     retry: false,
   });
 
-  // 审核反馈仅负责人与主执行人可见（16 节），其余 403 时静默不渲染
+  // 审核反馈仅负责人与主执行人可见，其余 403 时静默不渲染
   const { data: reviews } = useQuery({
     queryKey: queryKeys.reviews(workItem.id),
     queryFn: () => api.get<Review[]>(`/work-items/${workItem.id}/reviews`),
@@ -272,7 +272,7 @@ function SubmitDeliverableDialog({
         <DialogHeader>
           <DialogTitle>提交交付</DialogTitle>
           <DialogDescription>
-            每次提交生成一个新版本，旧版本保留可查（7.5 节）。
+            每次提交生成一个新版本，旧版本保留可查。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

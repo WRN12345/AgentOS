@@ -21,7 +21,7 @@ beforeEach(() => {
   );
 });
 
-/** 路由守卫测试：登录后按身份与项目上下文分流（ticket 09）。 */
+/** 路由守卫测试：登录后按身份与项目上下文分流。 */
 describe("ProjectGate 工作台守卫", () => {
   function renderGate() {
     return renderWithProviders(

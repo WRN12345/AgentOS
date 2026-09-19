@@ -13,7 +13,7 @@ interface Props {
 }
 
 /**
- * 交付物内容渲染（13.2 节）：git 链接 / 文本 / 文件条目（文件名 + 大小 +
+ * 交付物内容渲染：git 链接 / 文本 / 文件条目（文件名 + 大小 +
  * sha256 截断 + 下载按钮）。下载走鉴权 blob 流程，403 时提示无权限。
  */
 export function DeliverableBody({ deliverable }: Props) {

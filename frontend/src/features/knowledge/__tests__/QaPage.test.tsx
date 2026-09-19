@@ -45,7 +45,7 @@ const refused: QaResponse = {
   ],
 };
 
-describe("QaPage（M7.4）", () => {
+describe("QaPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeMember());
@@ -67,7 +67,7 @@ describe("QaPage（M7.4）", () => {
     });
   });
 
-  it("拒答态：明确告知未找到并列出最接近的线索（16.13）", async () => {
+  it("拒答态：明确告知未找到并列出最接近的线索", async () => {
     mockApi.post.mockResolvedValue(refused);
     renderWithProviders(<QaPage />);
 
@@ -98,7 +98,7 @@ describe("QaPage（M7.4）", () => {
 });
 
 
-describe("QaPage 依据列表与原文查看（M7.5）", () => {
+describe("QaPage 依据列表与原文查看", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeMember());
@@ -156,7 +156,7 @@ describe("QaPage 依据列表与原文查看（M7.5）", () => {
 });
 
 
-describe("QaPage 冷启动标注（M7.6，16.11）", () => {
+describe("QaPage 冷启动标注", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeMember());
@@ -212,7 +212,7 @@ describe("QaPage 冷启动标注（M7.6，16.11）", () => {
 });
 
 
-describe("QaPage 历史记录（2026-08-24 修订）", () => {
+describe("QaPage 历史记录", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeMember());

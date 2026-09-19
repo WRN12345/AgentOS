@@ -1,4 +1,4 @@
-/** Agent 建议中心的类型/状态展示元数据（10.1 节六个 Agent + echo 占位能力 + requirement_pipeline 组合能力）。 */
+/** Agent 建议中心的类型/状态展示元数据（六个 Agent + echo 占位能力 + requirement_pipeline 组合能力）。 */
 
 /** suggestion_type → 中文标签与 Badge 样式。 */
 export const SUGGESTION_TYPE_META: Record<
@@ -31,11 +31,11 @@ export const REVIEW_STATUS_META: Record<
   pending: { label: "待反馈", className: "bg-gray-100 text-gray-700" },
   accepted: { label: "已采纳", className: "bg-green-100 text-green-700" },
   ignored: { label: "已忽略", className: "bg-gray-200 text-gray-500" },
-  // 核心记忆提议挂起超 7 天自动过期（16.6）：终态，不可再确认
+  // 核心记忆提议挂起超 7 天自动过期：终态，不可再确认
   expired: { label: "已过期", className: "bg-gray-200 text-gray-500" },
 };
 
-/** 核心记忆提议动作（M4.4/M4.6，设计文档第 8 节）。 */
+/** 核心记忆提议动作。 */
 export const MEMORY_PROPOSAL_ACTION_LABELS: Record<string, string> = {
   create: "新增条目",
   update: "修改条目",

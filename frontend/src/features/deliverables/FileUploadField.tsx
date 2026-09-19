@@ -28,7 +28,7 @@ type UploadState =
   | { phase: "error"; message: string; file: File };
 
 /**
- * 文件上传控件（13.2 节）：选择即上传，XHR onprogress 进度条，
+ * 文件上传控件：选择即上传，XHR onprogress 进度条，
  * 大小/扩展名前置校验（与后端白名单一致），失败后可重试。
  */
 export function FileUploadField({ workItemId, onUploaded, onClear }: Props) {

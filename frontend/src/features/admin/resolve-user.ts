@@ -17,7 +17,7 @@ export interface UserResolveResult {
 
 /**
  * 按完整用户名解析可担任负责人的账号（无搜索端点，输入完整用户名）。
- * 建号收敛到 admin 后，负责人只能是普通启用用户（全局管理员不参与项目业务，16 节）。
+ * 负责人只能是普通启用用户（全局管理员不参与项目业务）。
  * 项目创建、变更负责人两处共用。
  */
 export function resolveUser(

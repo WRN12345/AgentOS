@@ -29,7 +29,7 @@ import { formatDateTime } from "../work-items/constants";
 import { queryKeys } from "../../lib/queryKeys";
 
 /**
- * 核心记忆页（M4.7，设计文档第 8 节）：
+ * 核心记忆页：
  * 项目成员可读条目列表（含来源：谁提的、谁确认的、何时生效）与容量占用；
  * 负责人可手写条目（种子记忆，立即生效）与作废条目。
  */

@@ -27,7 +27,7 @@ interface TodoEntry {
   workItemId: string;
 }
 
-/** 待处理中心（13.2 节"待处理"）：由既有列表接口前端聚合当前用户需要动作的事项。 */
+/** 待处理中心：由既有列表接口前端聚合当前用户需要动作的事项。 */
 export function TodoSection() {
   const selfMember = useAuthStore((s) => s.member);
 

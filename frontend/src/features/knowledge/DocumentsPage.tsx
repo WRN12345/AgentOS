@@ -141,8 +141,8 @@ function VersionsDialog({
 }
 
 /**
- * 知识库文档页（M2.11/M2.12）：项目内文件列表 + 索引状态 + 失败重试 + 版本历史。
- * 上传沿用现有入口（工作项/交付物），本页只管"看得见的索引进度"（设计文档第 6 节）。
+ * 知识库文档页：项目内文件列表 + 索引状态 + 失败重试 + 版本历史。
+ * 上传沿用现有入口（工作项/交付物），本页只管"看得见的索引进度"。
  */
 export default function DocumentsPage() {
   const queryClient = useQueryClient();

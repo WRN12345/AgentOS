@@ -42,7 +42,7 @@ function makeProposal(overrides: Partial<AgentSuggestion> = {}): AgentSuggestion
   };
 }
 
-describe("核心记忆提议确认入口（M4.8）", () => {
+describe("核心记忆提议确认入口", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     signInAs(makeLeader());
@@ -98,7 +98,7 @@ describe("核心记忆提议确认入口（M4.8）", () => {
     );
   });
 
-  it("过期提议展示已过期样式且不可再确认（16.6）", async () => {
+  it("过期提议展示已过期样式且不可再确认", async () => {
     stubGet({
       "/agent-suggestions": [makeProposal({ review_status: "expired" })],
     });

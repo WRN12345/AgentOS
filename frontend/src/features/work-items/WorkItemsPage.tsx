@@ -69,7 +69,7 @@ export default function WorkItemsPage() {
     queryFn: () => api.get<Member[]>("/members"),
   });
 
-  // 16 节：外部模型服务时引导对话框内提示"数据将发送至外部服务"
+  // 外部模型服务时引导对话框内提示"数据将发送至外部服务"
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: () => api.get<AgentConfig>("/config"),

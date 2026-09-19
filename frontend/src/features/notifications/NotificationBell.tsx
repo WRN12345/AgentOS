@@ -10,7 +10,7 @@ import type { AppNotification, NotificationList } from "../../types";
 import { formatDateTime } from "../work-items/constants";
 import { queryKeys } from "../../lib/queryKeys";
 
-/** 顶栏通知入口（12.6 节）：未读数徽标 + 下拉列表，点击已读并跳转关联页面。 */
+/** 顶栏通知入口：未读数徽标 + 下拉列表，点击已读并跳转关联页面。 */
 export function NotificationBell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();

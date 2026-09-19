@@ -149,7 +149,7 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          {/* 待处理中心：需要当前用户动作的事项聚合（13.2 节） */}
+          {/* 待处理中心：需要当前用户动作的事项聚合 */}
           <TodoSection />
 
           {/* 我的待办：我作为主执行人的未完成任务，按 DDL 升序；超长内部滚动 */}

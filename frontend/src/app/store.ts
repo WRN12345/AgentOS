@@ -13,7 +13,7 @@ interface AuthState {
   currentProject: MyProject | null;
   /** 当前用户在 currentProject 下的成员记录（角色、能力等）。 */
   member: Member | null;
-  /** 上次选定项目的时间戳（ms）；ticket 09 用其判断 24h 记忆窗口是否过期。 */
+  /** 上次选定项目的时间戳（ms）；用于判断 24h 记忆窗口是否过期。 */
   projectSelectedAt: number | null;
   setTokens: (tokens: TokenPair) => void;
   setIdentity: (user: UserMe, member: Member | null) => void;

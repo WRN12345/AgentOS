@@ -46,7 +46,7 @@ const activeCollab: CollaborationRequestSummary = {
   updated_at: "2026-01-01T00:00:00Z",
 };
 
-/** DDL 变更区组件测试（18.2 节）：目标可见性（权限）、必填校验、提交调用 API。 */
+/** DDL 变更区组件测试：目标可见性（权限）、必填校验、提交调用 API。 */
 describe("DeadlineChangeSection DDL 变更", () => {
   beforeEach(() => {
     vi.clearAllMocks();

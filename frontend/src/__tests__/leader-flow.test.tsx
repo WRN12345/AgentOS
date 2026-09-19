@@ -27,7 +27,7 @@ import {
 import type { ApprovalItem } from "../types";
 
 /**
- * 负责人核心路径页面集成测试（18.2 节 / T6.2）：
+ * 负责人核心路径页面集成测试：
  * 创建成员 → 创建工作项（分配）→ 审批 DDL 变更 → 审核交付物。
  * API 层整体 mock（src/services/api 的 api 对象），页面按真实 Provider 组合挂载。
  */

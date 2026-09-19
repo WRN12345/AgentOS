@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import type { RequirementPipelineContent } from "../../types";
 import { MEMORY_PROPOSAL_ACTION_LABELS } from "./constants";
 
-/** 各 suggestion_type 的结构化 content 渲染（10.1 节六个 Agent + requirement_pipeline 的输出结构，见 backend/app/agents/prompts）。 */
+/** 各 suggestion_type 的结构化 content 渲染（六个 Agent + requirement_pipeline 的输出结构，见 backend/app/agents/prompts）。 */
 
 interface ContentProps {
   suggestionType: string;
@@ -137,7 +137,7 @@ function PlanningContent({ content }: { content: Record<string, unknown> }) {
   );
 }
 
-/** requirement_pipeline 组合建议（2026-07-30 设计文档 §4.2）：方面 + 需求要素 + 拆解/分配 + 协作点。 */
+/** requirement_pipeline 组合建议：方面 + 需求要素 + 拆解/分配 + 协作点。 */
 function PipelineContent({ content }: { content: Record<string, unknown> }) {
   const pipeline = content as RequirementPipelineContent;
   const aspects = pipeline.involved_aspects ?? [];
@@ -225,7 +225,7 @@ export const DEV_DOC_VERDICT_META: Record<
   needs_work: { label: "建议补充", className: "bg-amber-100 text-amber-700" },
 };
 
-/** dev_doc_review 初审建议（2026-07-30 设计文档 §4.4）：结论 + 完整性检查 + 对齐度 + 风险。 */
+/** dev_doc_review 初审建议：结论 + 完整性检查 + 对齐度 + 风险。 */
 function DevDocReviewContent({ content }: { content: Record<string, unknown> }) {
   const checklist = (content.checklist ?? []) as {
     aspect?: string;
@@ -371,7 +371,7 @@ function SummaryContent({ content }: { content: Record<string, unknown> }) {
   );
 }
 
-/** 核心记忆提议（M4.4/M4.6，设计文档第 8 节）：动作 + 内容预览 + 目标条目 + 理由。 */
+/** 核心记忆提议：动作 + 内容预览 + 目标条目 + 理由。 */
 function MemoryProposalContent({ content }: { content: Record<string, unknown> }) {
   const action = typeof content.action === "string" ? content.action : "";
   const actionLabel = MEMORY_PROPOSAL_ACTION_LABELS[action] ?? action;

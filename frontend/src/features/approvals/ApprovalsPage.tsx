@@ -73,7 +73,7 @@ import { DeliveryReviewSection } from "./DeliveryReviewSection";
 import { DevDocReviewPanel } from "../work-items/DevDocSection";
 import { queryKeys } from "../../lib/queryKeys";
 
-/** 审批中心（13.1 节）：负责人审批转派与主任务 DDL 变更并可查已处理记录；管理员只读待审批列表与审批记录；成员查看并撤销自己的申请。 */
+/** 审批中心：负责人审批转派与主任务 DDL 变更并可查已处理记录；管理员只读待审批列表与审批记录；成员查看并撤销自己的申请。 */
 export default function ApprovalsPage() {
   const isLeader = useIsLeader();
   const isAdmin = useIsAdmin();
@@ -324,7 +324,7 @@ function PendingApprovals() {
             {item.kind === "deadline_change" &&
               (item.impact_analysis_status === "unavailable" ? (
                 <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                  未生成 AI 影响分析，请基于业务信息人工决策（8.4 节）。
+                  未生成 AI 影响分析，请基于业务信息人工决策。
                 </p>
               ) : (
                 <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
