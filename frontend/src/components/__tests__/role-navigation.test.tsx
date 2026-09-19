@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 
 vi.mock("../../services/events", () => ({ useEventStream: vi.fn() }));
 vi.mock("../../features/notifications/NotificationBell", () => ({
@@ -32,5 +32,31 @@ describe("角色导航", () => {
     expect(screen.getByRole("link", { name: "项目需求" })).toHaveAttribute("href", "/project-requirements");
     expect(screen.getByRole("link", { name: "AI 建议与运行" })).toHaveAttribute("href", "/agent-assistant");
     expect(screen.getByRole("link", { name: "项目约定" })).toBeInTheDocument();
+  });
+
+  it.each([
+    { role: "负责人", member: makeLeader(), collaboration: ["项目需求", "任务", "交付物", "审批中心"], team: ["成员与能力", "AI 建议与运行"] },
+    { role: "成员", member: makeMember(), collaboration: ["任务", "交付物", "审批中心"], team: ["成员与能力"] },
+  ])("$role 按四组展示菜单并保留权限和顺序", ({ member, collaboration, team }) => {
+    signInAs(member);
+    renderWithProviders(<AppLayout />, { route: "/work-items/task-1" });
+    const nav = within(screen.getByRole("navigation"));
+    expect(nav.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(["概览", "项目协作", "团队与 AI", "知识库"]);
+
+    for (const [name, labels] of [
+      ["概览", ["工作台", "团队概览"]],
+      ["项目协作", collaboration],
+      ["团队与 AI", team],
+      ["知识库", ["知识库文档", "项目约定", "知识库问答"]],
+    ] as const) {
+      const group = within(nav.getByRole("region", { name }));
+      expect(group.getAllByRole("link").map((link) => link.textContent)).toEqual(labels);
+    }
+
+    expect(nav.getByRole("link", { name: "任务" })).toHaveAttribute("aria-current", "page");
+    expect(nav.getAllByRole("link").filter((link) => link.hasAttribute("aria-current"))).toHaveLength(1);
+    expect(nav.getByRole("link", { name: "任务" })).toHaveClass("bg-sidebar-accent");
+    expect(nav.getByRole("link", { name: "工作台" })).toHaveClass("hover:bg-sidebar-accent/40");
   });
 });
