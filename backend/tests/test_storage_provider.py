@@ -13,6 +13,16 @@ from app.infrastructure.storage.local import LocalStorageProvider
 from app.infrastructure.storage.provider import StorageProvider
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _prepare_test_database():
+    pass
+
+
+@pytest.fixture(autouse=True)
+def _clean_tables():
+    pass
+
+
 @pytest.fixture
 def provider(tmp_path: Path) -> StorageProvider:
     """注入 LocalStorageProvider，业务视角只持有接口类型。"""

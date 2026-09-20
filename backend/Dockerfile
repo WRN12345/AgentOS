@@ -3,7 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_RETRIES=5
+    PIP_RETRIES=5 \
+    LOG_DIR=/app/data/logs \
+    STORAGE_ROOT=/app/data/uploads
 
 # 默认官方源；国内网络可在 compose build args 中覆盖为镜像站
 ARG PIP_INDEX_URL=https://pypi.org/simple

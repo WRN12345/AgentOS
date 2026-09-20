@@ -1,11 +1,17 @@
 """使用独立数据库和 Redis DB 的测试基础设施，保证用例间隔离。"""
 
+import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit, urlunsplit
 
 # 必须在导入任何 app 模块前改写环境，避免连接到开发服务。
+_test_data = TemporaryDirectory(prefix="agentos-tests-")
+os.environ["LOG_DIR"] = os.path.join(_test_data.name, "logs")
+os.environ["STORAGE_ROOT"] = os.path.join(_test_data.name, "uploads")
+
 _db_url = os.environ.get(
     "DATABASE_URL", "postgresql+asyncpg://agentos:agentos-dev-password@postgres:5432/agentos"
 )
@@ -41,6 +47,11 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+def pytest_unconfigure() -> None:
+    logging.shutdown()
+    _test_data.cleanup()
 
 
 def _test_db_name() -> str:
